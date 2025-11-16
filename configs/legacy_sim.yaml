@@ -79,12 +79,21 @@ pnl:
   mark_to: "side"   # "side" = для лонга bid, для шорта ask; также поддерживаются "mid", "bid", "ask"
 
 leakguard:
-  # WARNING: decision_delay_ms=0 creates FORWARD-LOOKING BIAS in training!
-  # This config is LEGACY ONLY for backward compatibility with old experiments.
-  # DO NOT USE FOR NEW EXPERIMENTS!
-  # Recommended: decision_delay_ms >= 8000 (see configs/timing.yaml)
+  # DEPRECATED: This legacy config has been updated to use safe defaults.
+  # The previous setting (decision_delay_ms=0) created FORWARD-LOOKING BIAS!
+  #
+  # SAFE DEFAULT NOW ENFORCED: decision_delay_ms >= 8000
   # Reference: de Prado (2018) "Advances in Financial Machine Learning" Ch. 7
-  decision_delay_ms: 0  # DANGER: ZERO DELAY - FORWARD-LOOKING BIAS!
+  #
+  # For new experiments, use configs/timing.yaml profiles instead:
+  # - MKT_OPEN_NEXT_4H: 8000ms (recommended for 4h bars)
+  # - VWAP_CURRENT_4H: 30000ms (for VWAP strategies)
+  # - LIMIT_MID_BPS: 60000ms (for limit order strategies)
+  #
+  # IF YOU ABSOLUTELY NEED zero delay for testing (NOT RECOMMENDED):
+  # You must explicitly create LeakConfig(decision_delay_ms=0) in code.
+  # This will trigger warnings unless you set STRICT_LEAK_GUARD=false.
+  decision_delay_ms: 8000  # FIXED: Changed from 0 to safe default 8000ms
   min_lookback_ms: 0
 
 labels:
