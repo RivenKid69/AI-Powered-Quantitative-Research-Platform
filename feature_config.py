@@ -39,10 +39,15 @@ def make_layout(obs_params=None):
         "bias": 0.0,
         "source": "derived"
     })
-    # Technical indicators block (includes 6 validity flags for rsi, macd, macd_signal, momentum, cci, obv)
+    # Technical indicators block
+    # Includes: MA features (4) + Indicators with validity flags (13) + Bollinger Bands (2)
+    # Size 19 = MA5 (2) + MA20 (2) + [rsi14, is_rsi_valid, macd, is_macd_valid,
+    #            macd_signal, is_macd_signal_valid, momentum, is_momentum_valid,
+    #            atr, cci, is_cci_valid, obv, is_obv_valid] (13) + BB (2)
+    # Changed from 13 to 19: added 6 validity flags for rsi, macd, macd_signal, momentum, cci, obv
     layout.append({
         "name": "indicators",
-        "size": 19,  # was 13, added 6 validity flags (rsi, macd, macd_signal, momentum, cci, obv)
+        "size": 19,  # was 13, now 19 (added 6 validity flags)
         "dtype": "float32",
         "clip": None,
         "scale": 1.0,
