@@ -39,10 +39,10 @@ def make_layout(obs_params=None):
         "bias": 0.0,
         "source": "derived"
     })
-    # Technical indicators block
+    # Technical indicators block (includes 6 validity flags for rsi, macd, macd_signal, momentum, cci, obv)
     layout.append({
         "name": "indicators",
-        "size": 13,
+        "size": 19,  # was 13, added 6 validity flags (rsi, macd, macd_signal, momentum, cci, obv)
         "dtype": "float32",
         "clip": None,
         "scale": 1.0,

@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-This document describes the **fail-fast validation system** for `prev_price` parameter to prevent NaN/Inf propagation into the `ret_bar` feature (observation vector index 14).
+This document describes the **fail-fast validation system** for `prev_price` parameter to prevent NaN/Inf propagation into the `ret_bar` feature (observation vector index 20, was 14 pre-v62).
 
 **Status**: ✅ **VULNERABILITY CLOSED (Fail-Fast Approach)**
 

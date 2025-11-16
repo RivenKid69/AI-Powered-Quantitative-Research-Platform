@@ -221,6 +221,12 @@ cdef void build_observation_vector_c(
     cdef double bb_width
     cdef bint ma5_valid
     cdef bint ma20_valid
+    cdef bint rsi_valid
+    cdef bint macd_valid
+    cdef bint macd_signal_valid
+    cdef bint momentum_valid
+    cdef bint cci_valid
+    cdef bint obv_valid
     cdef bint bb_valid
     cdef double min_bb_width
     cdef int padded_tokens
@@ -247,34 +253,72 @@ cdef void build_observation_vector_c(
     feature_idx += 1
 
     # Technical indicators with NaN handling (early bars may not have enough history)
-    # RSI: 50.0 = neutral (no trend signal)
-    out_features[feature_idx] = rsi14 if not isnan(rsi14) else 50.0
+    # RSI with validity flag
+    # CRITICAL: RSI requires ~14 bars for first valid value
+    # Fallback 50.0 creates AMBIGUITY: neutral RSI (50) vs insufficient data (50)
+    # Validity flag eliminates this: model can distinguish valid neutral from missing data
+    rsi_valid = not isnan(rsi14)
+    out_features[feature_idx] = rsi14 if rsi_valid else 50.0
+    feature_idx += 1
+    out_features[feature_idx] = 1.0 if rsi_valid else 0.0
     feature_idx += 1
 
-    # MACD: 0.0 = no divergence signal
-    out_features[feature_idx] = macd if not isnan(macd) else 0.0
+    # MACD with validity flag
+    # CRITICAL: MACD requires ~26 bars for first valid value (12+26 EMA periods)
+    # Fallback 0.0 creates AMBIGUITY: no divergence (0) vs insufficient data (0)
+    # Validity flag eliminates this: model can distinguish valid zero from missing data
+    macd_valid = not isnan(macd)
+    out_features[feature_idx] = macd if macd_valid else 0.0
     feature_idx += 1
-    out_features[feature_idx] = macd_signal if not isnan(macd_signal) else 0.0
+    out_features[feature_idx] = 1.0 if macd_valid else 0.0
     feature_idx += 1
 
-    # Momentum: 0.0 = no price movement
-    out_features[feature_idx] = momentum if not isnan(momentum) else 0.0
+    # MACD Signal with validity flag
+    # CRITICAL: MACD Signal requires ~35 bars (26 for MACD + 9 for signal line)
+    # Fallback 0.0 creates AMBIGUITY: no signal (0) vs insufficient data (0)
+    # Validity flag eliminates this: model can distinguish valid zero from missing data
+    macd_signal_valid = not isnan(macd_signal)
+    out_features[feature_idx] = macd_signal if macd_signal_valid else 0.0
+    feature_idx += 1
+    out_features[feature_idx] = 1.0 if macd_signal_valid else 0.0
+    feature_idx += 1
+
+    # Momentum with validity flag
+    # CRITICAL: Momentum requires ~10 bars for first valid value
+    # Fallback 0.0 creates AMBIGUITY: no price movement (0) vs insufficient data (0)
+    # Validity flag eliminates this: model can distinguish valid zero from missing data
+    momentum_valid = not isnan(momentum)
+    out_features[feature_idx] = momentum if momentum_valid else 0.0
+    feature_idx += 1
+    out_features[feature_idx] = 1.0 if momentum_valid else 0.0
     feature_idx += 1
 
     # ATR: default to 1% of price (small volatility estimate)
     out_features[feature_idx] = atr if not isnan(atr) else <float>(price_d * 0.01)
     feature_idx += 1
 
-    # CCI: 0.0 = at average level
-    out_features[feature_idx] = cci if not isnan(cci) else 0.0
+    # CCI with validity flag
+    # CRITICAL: CCI requires ~20 bars for first valid value
+    # Fallback 0.0 creates AMBIGUITY: at average level (0) vs insufficient data (0)
+    # Validity flag eliminates this: model can distinguish valid zero from missing data
+    cci_valid = not isnan(cci)
+    out_features[feature_idx] = cci if cci_valid else 0.0
+    feature_idx += 1
+    out_features[feature_idx] = 1.0 if cci_valid else 0.0
     feature_idx += 1
 
-    # OBV: always valid, but handle NaN defensively
-    out_features[feature_idx] = obv if not isnan(obv) else 0.0
+    # OBV with validity flag
+    # CRITICAL: OBV requires only 1 bar for first valid value
+    # Fallback 0.0 creates AMBIGUITY: volume balance (0) vs insufficient data (0)
+    # Validity flag eliminates this: model can distinguish valid zero from missing data
+    obv_valid = not isnan(obv)
+    out_features[feature_idx] = obv if obv_valid else 0.0
+    feature_idx += 1
+    out_features[feature_idx] = 1.0 if obv_valid else 0.0
     feature_idx += 1
 
     # CRITICAL: Derived price/volatility signals (bar-to-bar return for current timeframe)
-    # ret_bar calculation (feature index 14):
+    # ret_bar calculation (feature index 20, was 14 before adding validity flags):
     # - Formula: tanh((price_d - prev_price_d) / (prev_price_d + 1e-8))
     # - Numerator: price_d - prev_price_d (price change)
     # - Denominator: prev_price_d + 1e-8 (epsilon prevents division by zero)

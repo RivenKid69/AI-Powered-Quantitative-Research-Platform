@@ -4,7 +4,7 @@
 Проверяет полный цикл прохождения данных:
 1. Создание 24 технических признаков в transformers.py
 2. Загрузка 21 признака в mediator.py через _extract_norm_cols
-3. Построение 56 признаков в obs_builder.pyx
+3. Построение 62 признаков в obs_builder.pyx
 4. Правильная нормализация и отсутствие NaN/Inf
 """
 
@@ -20,21 +20,21 @@ def test_ext_norm_dim_is_21():
     assert EXT_NORM_DIM == 21, f"Expected EXT_NORM_DIM=21, got {EXT_NORM_DIM}"
 
 
-def test_n_features_is_56():
-    """Проверка что N_FEATURES = 56 (было 51, добавили 5)"""
+def test_n_features_is_62():
+    """Проверка что N_FEATURES = 62 (было 56, добавили 6 validity flags)"""
     # make_layout должен был вызваться при импорте
     from feature_config import N_FEATURES as computed_features
-    assert computed_features == 56, f"Expected N_FEATURES=56, got {computed_features}"
+    assert computed_features == 62, f"Expected N_FEATURES=62, got {computed_features}"
 
 
 def test_feature_layout_sum():
-    """Проверка что сумма всех блоков = 56"""
+    """Проверка что сумма всех блоков = 62"""
     from feature_config import FEATURES_LAYOUT
 
     expected_sizes = {
         "bar": 3,
         "derived": 2,
-        "indicators": 13,
+        "indicators": 19,  # было 13, добавили 6 validity flags
         "microstructure": 3,
         "agent": 6,
         "metadata": 5,
@@ -52,7 +52,7 @@ def test_feature_layout_sum():
                 f"Block '{name}' has size {size}, expected {expected_sizes[name]}"
         total += size
 
-    assert total == 56, f"Total features = {total}, expected 56"
+    assert total == 62, f"Total features = {total}, expected 62"
 
 
 def test_mediator_extract_norm_cols_size():
@@ -148,7 +148,7 @@ def test_obs_builder_applies_tanh():
     norm_cols = np.array([1000.0] * 21, dtype=np.float32)
 
     # Создаем output array
-    out = np.zeros(56, dtype=np.float32)
+    out = np.zeros(62, dtype=np.float32)
 
     # Вызываем build_observation_vector с минимальными параметрами
     build_observation_vector(
@@ -185,9 +185,10 @@ def test_obs_builder_applies_tanh():
         out_features=out,
     )
 
-    # External features начинаются с индекса 32
-    # (3 bar + 13 indicators + 2 derived + 3 micro + 6 agent + 5 metadata = 32)
-    external_start = 32
+    # External features начинаются с индекса 38
+    # (20 bar_level + 2 derived + 6 agent + 3 micro + 2 bollinger + 3 event + 2 fear_greed = 38)
+    # где bar_level = 3 bar + 4 ma_with_flags + 13 tech_indicators
+    external_start = 38
     external_end = external_start + 21
 
     external_features = out[external_start:external_end]
@@ -270,7 +271,7 @@ def test_full_pipeline_integration():
     mock_env.last_mtm_price = 50200.0
     mock_env.last_mid = 50200.0
     mock_env._last_reward_price = 50100.0
-    mock_env.observation_space = Mock(shape=(56,))
+    mock_env.observation_space = Mock(shape=(62,))
 
     # Создаем mock sim
     mock_sim = Mock()
@@ -294,7 +295,7 @@ def test_full_pipeline_integration():
     obs = mediator._build_observation(row=row, state=mock_env.state, mark_price=50200.0)
 
     # Проверки
-    assert obs.shape == (56,), f"Expected shape (56,), got {obs.shape}"
+    assert obs.shape == (62,), f"Expected shape (62,), got {obs.shape}"
     assert obs.dtype == np.float32, f"Expected float32, got {obs.dtype}"
     assert np.all(np.isfinite(obs)), f"Observation contains NaN or Inf: {obs[~np.isfinite(obs)]}"
 
@@ -302,8 +303,8 @@ def test_full_pipeline_integration():
     assert np.all(obs >= -1e6), f"Some features too negative: {obs.min()}"
     assert np.all(obs <= 1e6), f"Some features too positive: {obs.max()}"
 
-    # Проверка что external features (индексы 32-52) находятся в разумном диапазоне
-    external = obs[32:53]
+    # Проверка что external features (индексы 38-58) находятся в разумном диапазоне
+    external = obs[38:59]
     assert np.all(external >= -3.0), f"External features below -3: {external[external < -3.0]}"
     assert np.all(external <= 3.0), f"External features above 3: {external[external > 3.0]}"
 
