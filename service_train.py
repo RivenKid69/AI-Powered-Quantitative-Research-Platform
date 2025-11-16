@@ -175,6 +175,43 @@ class ServiceTrain:
         # корректного значения целевой переменной.
         # См. детали в AUDIT_MISSING_TARGET_ROWS.md
         if y is not None:
+            # Проверка 1: Убедимся, что X и y имеют одинаковый размер ДО фильтрации NaN
+            # Если размеры не совпадают, это означает, что transform_df() удалил некоторые строки
+            # (вероятно, из-за NaN в обязательных полях: ts, symbol, price)
+            if len(X) != len(y):
+                logger.warning(
+                    f"X and y have different sizes BEFORE NaN filtering: "
+                    f"len(X)={len(X)}, len(y)={len(y)}. "
+                    f"This suggests that transform_df() removed some rows (likely NaN in required fields). "
+                    f"Will attempt to align datasets by index."
+                )
+
+                # Попытка выравнивания по индексам
+                common_idx = X.index.intersection(y.index)
+                if len(common_idx) == 0:
+                    raise ValueError(
+                        "X and y have no common indices! Cannot align datasets. "
+                        "This likely indicates a data preparation error in the input data."
+                    )
+
+                n_removed_by_alignment = max(len(X), len(y)) - len(common_idx)
+                logger.info(
+                    f"Aligning X and y by common indices. "
+                    f"Removing {n_removed_by_alignment} misaligned rows. "
+                    f"Retained {len(common_idx)} rows."
+                )
+                X = X.loc[common_idx]
+                y = y.loc[common_idx]
+
+            # Проверка 2: Убедимся, что индексы идентичны для корректного выравнивания
+            if not X.index.equals(y.index):
+                logger.warning(
+                    "X and y indices are not identical. Resetting indices to ensure proper alignment."
+                )
+                X = X.reset_index(drop=True)
+                y = y.reset_index(drop=True)
+
+            # Теперь фильтруем строки с NaN в таргетах
             valid_mask = y.notna()
             n_before = len(y)
             n_invalid = (~valid_mask).sum()
@@ -188,7 +225,7 @@ class ServiceTrain:
                 X = X[valid_mask].reset_index(drop=True)
                 y = y[valid_mask].reset_index(drop=True)
 
-                # Проверка согласованности после фильтрации
+                # Финальная проверка согласованности
                 if len(X) != len(y):
                     logger.error(
                         f"Shape mismatch after NaN filtering: X={len(X)}, y={len(y)}"
