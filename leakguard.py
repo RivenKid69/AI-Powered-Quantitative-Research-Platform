@@ -17,9 +17,14 @@ class LeakConfig:
     Настройки защиты от утечки:
       - decision_delay_ms: задержка между ts фичей и фактическим моментом принятия решения
                            (включает расчёт индикаторов, агрегации, сериализацию и пр.)
+                           DEFAULT: 8000ms (8 секунд) - минимальная рекомендуемая задержка
+                           для предотвращения forward-looking bias
       - min_lookback_ms: требуемая минимальная глубина истории источников для ffill (если gap больше — NaN)
+
+    IMPORTANT: decision_delay_ms должен быть >= 8000 для продакшена!
+    Reference: de Prado (2018) "Advances in Financial Machine Learning", Chapter 7
     """
-    decision_delay_ms: int = 0
+    decision_delay_ms: int = 8000  # Changed from 0 to 8000 to prevent forward-looking bias by default
     min_lookback_ms: int = 0
 
 
@@ -38,32 +43,47 @@ class LeakGuard:
     def __init__(self, cfg: Optional[LeakConfig] = None):
         self.cfg = cfg or LeakConfig()
 
-        # CRITICAL VALIDATION: Warn if decision_delay_ms == 0
-        # Zero delay creates forward-looking bias in training:
+        # CRITICAL VALIDATION: Warn if decision_delay_ms is too low
+        # Insufficient delay creates forward-looking bias in training:
         # - Features computed at ts_ms
-        # - Decisions at decision_ts = ts_ms + 0 = ts_ms
-        # - Target from ts_ms → model sees immediate future!
-        if self.cfg.decision_delay_ms == 0:
+        # - Decisions at decision_ts = ts_ms + delay
+        # - If delay is too small, target overlaps with feature computation
+        RECOMMENDED_MIN_DELAY_MS = 8000  # 8 seconds minimum recommended
+
+        if self.cfg.decision_delay_ms < RECOMMENDED_MIN_DELAY_MS:
             # STRICT MODE: Environment variable can enforce hard error
             if os.getenv("STRICT_LEAK_GUARD", "").lower() == "true":
                 raise ValueError(
-                    "CRITICAL: decision_delay_ms=0 not allowed in STRICT mode! "
-                    "Features and targets are computed at the same timestamp, creating "
-                    "forward-looking bias. Recommended: decision_delay_ms >= 8000. "
+                    f"CRITICAL: decision_delay_ms={self.cfg.decision_delay_ms} is below recommended minimum of {RECOMMENDED_MIN_DELAY_MS}ms! "
+                    "Insufficient delay creates forward-looking bias. "
+                    f"Recommended: decision_delay_ms >= {RECOMMENDED_MIN_DELAY_MS}. "
                     "To override: unset STRICT_LEAK_GUARD or set to 'false'. "
                     "Reference: de Prado (2018) 'Advances in Financial Machine Learning', Ch. 7"
                 )
-            # Default: warning (backward compatible)
-            warnings.warn(
-                "CRITICAL: decision_delay_ms=0 creates FORWARD-LOOKING BIAS! "
-                "Features and targets are computed at the same timestamp, allowing "
-                "the model to 'see the future' during training. This leads to "
-                "overfitting and poor live performance. "
-                "Recommended: decision_delay_ms >= 8000 (8 seconds). "
-                "Reference: de Prado (2018) 'Advances in Financial Machine Learning', Ch. 7",
-                UserWarning,
-                stacklevel=2
-            )
+
+            # Special error message for zero delay (most severe case)
+            if self.cfg.decision_delay_ms == 0:
+                warnings.warn(
+                    "CRITICAL: decision_delay_ms=0 creates SEVERE FORWARD-LOOKING BIAS! "
+                    "Features and targets are computed at the SAME timestamp, allowing "
+                    "the model to 'see the future' during training. This leads to "
+                    "overfitting and poor live performance. "
+                    f"Recommended: decision_delay_ms >= {RECOMMENDED_MIN_DELAY_MS} (8 seconds). "
+                    "Reference: de Prado (2018) 'Advances in Financial Machine Learning', Ch. 7",
+                    UserWarning,
+                    stacklevel=2
+                )
+            else:
+                # Warning for delays below recommended minimum
+                warnings.warn(
+                    f"WARNING: decision_delay_ms={self.cfg.decision_delay_ms} is below recommended minimum of {RECOMMENDED_MIN_DELAY_MS}ms! "
+                    "Insufficient delay may create forward-looking bias in training. "
+                    "Consider using at least 8 seconds to account for data latency, "
+                    "feature computation, and signal transmission. "
+                    "Reference: de Prado (2018) 'Advances in Financial Machine Learning', Ch. 7",
+                    UserWarning,
+                    stacklevel=2
+                )
 
         # Validate decision_delay_ms is non-negative
         if self.cfg.decision_delay_ms < 0:
