@@ -168,6 +168,39 @@ class ServiceTrain:
             cols = [c for c in self.cfg.columns_keep if c in X.columns]
             X = X[cols]
 
+        # КРИТИЧНОЕ ИСПРАВЛЕНИЕ: удаление строк с NaN таргетами
+        # Проблема: make_targets() использует shift(-1) для расчета будущей доходности,
+        # что приводит к NaN в последней строке каждого символа (нет следующей цены).
+        # Эти строки необходимо удалить перед обучением, так как они не имеют
+        # корректного значения целевой переменной.
+        # См. детали в AUDIT_MISSING_TARGET_ROWS.md
+        if y is not None:
+            valid_mask = y.notna()
+            n_before = len(y)
+            n_invalid = (~valid_mask).sum()
+
+            if n_invalid > 0:
+                logger.info(
+                    f"Removing {n_invalid} samples with NaN targets "
+                    f"({n_invalid / n_before * 100:.2f}% of total). "
+                    f"These are typically the last row of each symbol's time series."
+                )
+                X = X[valid_mask].reset_index(drop=True)
+                y = y[valid_mask].reset_index(drop=True)
+
+                # Проверка согласованности после фильтрации
+                if len(X) != len(y):
+                    logger.error(
+                        f"Shape mismatch after NaN filtering: X={len(X)}, y={len(y)}"
+                    )
+                    raise ValueError(
+                        f"X and y have different lengths after filtering: {len(X)} != {len(y)}"
+                    )
+
+                logger.info(f"Retained {len(y)} valid samples for training.")
+            else:
+                logger.info("No NaN targets found - all samples are valid.")
+
         # Логирование информации о признаках перед обучением
         self._log_feature_statistics(X)
 
