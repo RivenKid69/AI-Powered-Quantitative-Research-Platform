@@ -4874,39 +4874,12 @@ def main():
     if inferred_test_any and not time_splits.get("test"):
         print("💡 Test split был автоматически создан из оставшихся строк\n")
 
-    print("Calculating per-asset normalization stats from the training set...")
-    norm_stats = {}
-
-    # Итерируем по каждому активу в ТРЕНИРОВОЧНОМ наборе данных
-    for asset_key, train_df in train_data_by_token.items():
-        
-        # 1. Находим признаки для нормализации в ДАННОМ конкретном активе
-        features_to_normalize = [
-            col for col in train_df.columns 
-            if '_norm' in col and col not in ['log_volume_norm', 'fear_greed_value_norm']
-        ]
-        
-        if not features_to_normalize:
-            continue # Пропускаем, если у этого ассета нет таких признаков
-            
-        # 2. Рассчитываем статистики ТОЛЬКО по данным этого ассета
-        mean_stats = train_df[features_to_normalize].mean().to_dict()
-        std_stats = train_df[features_to_normalize].std().to_dict()
-        
-        # 3. Находим ID токена, связанный с этим ассетом
-        # (Предполагаем, что один файл = один основной токен)
-        if 'token_id' in train_df.columns:
-            # Убедимся, что в датафрейме есть данные
-            if not train_df.empty:
-                token_id = train_df['token_id'].iloc[0]
-                
-                # 4. Сохраняем индивидуальные статистики для этого токена
-                norm_stats[str(token_id)] = {'mean': mean_stats, 'std': std_stats}
-
-    norm_stats_path = artifacts_root / "norm_stats.json"
-    with open(norm_stats_path, "w") as f:
-        json.dump(norm_stats, f, indent=4)
-    print(f"Per-asset normalization stats for {len(norm_stats)} tokens calculated and saved.")
+    # Note: Per-asset normalization stats (norm_stats.json) were previously calculated here
+    # but were never used by the RL environment. The actual normalization happens via
+    # deterministic tanh() transformation in obs_builder.pyx, which requires no training
+    # statistics and is inherently consistent between training and inference.
+    # See NORMALIZATION_ANALYSIS.md for details.
+    norm_stats = {}  # Empty dict maintained for backward compatibility with test fixtures
 
     HPO_TRIALS = 20 # Общее количество испытаний
     HPO_BUDGET_PER_TRIAL = 1_000_000 # Таймстепы для каждого испытания
@@ -4986,13 +4959,11 @@ def main():
             ensemble_meta.append({"ensemble_index": model_idx, "trial_number": trial.number, "value": trial.value, "params": trial.params})
         else:
             print(f"⚠️ WARNING: Could not find model for trial {trial.number}. Skipping.")
-    # Копируем единый файл со статистиками нормализации наблюдений,
-    # так как он является неотъемлемой частью всех моделей в ансамбле.
-    src_norm_stats = artifacts_root / "norm_stats.json"
-    if os.path.exists(src_norm_stats):
-        shutil.copyfile(src_norm_stats, ensemble_dir / "norm_stats.json")
-    else:
-        print(f"⚠️ CRITICAL WARNING: Could not find the global 'norm_stats.json' file. The saved ensemble will not be usable for inference.")
+
+    # Note: norm_stats.json copy removed - it was never used by the RL environment.
+    # Normalization happens via deterministic tanh() in obs_builder.pyx.
+    # See NORMALIZATION_ANALYSIS.md for details.
+
     with open(ensemble_dir / "ensemble_meta.json", "w") as f:
         json.dump(ensemble_meta, f, indent=4)
     print(f"\n✅ Ensemble of {len(ensemble_meta)} models saved to '{ensemble_dir}'. HPO complete.")
