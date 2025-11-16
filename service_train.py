@@ -168,6 +168,76 @@ class ServiceTrain:
             cols = [c for c in self.cfg.columns_keep if c in X.columns]
             X = X[cols]
 
+        # КРИТИЧНОЕ ИСПРАВЛЕНИЕ: удаление строк с NaN таргетами
+        # Проблема: make_targets() использует shift(-1) для расчета будущей доходности,
+        # что приводит к NaN в последней строке каждого символа (нет следующей цены).
+        # Эти строки необходимо удалить перед обучением, так как они не имеют
+        # корректного значения целевой переменной.
+        # См. детали в AUDIT_MISSING_TARGET_ROWS.md
+        if y is not None:
+            # Проверка 1: Убедимся, что X и y имеют одинаковый размер ДО фильтрации NaN
+            # Если размеры не совпадают, это означает, что transform_df() удалил некоторые строки
+            # (вероятно, из-за NaN в обязательных полях: ts, symbol, price)
+            if len(X) != len(y):
+                logger.warning(
+                    f"X and y have different sizes BEFORE NaN filtering: "
+                    f"len(X)={len(X)}, len(y)={len(y)}. "
+                    f"This suggests that transform_df() removed some rows (likely NaN in required fields). "
+                    f"Will attempt to align datasets by index."
+                )
+
+                # Попытка выравнивания по индексам
+                common_idx = X.index.intersection(y.index)
+                if len(common_idx) == 0:
+                    raise ValueError(
+                        "X and y have no common indices! Cannot align datasets. "
+                        "This likely indicates a data preparation error in the input data."
+                    )
+
+                n_removed_by_alignment = max(len(X), len(y)) - len(common_idx)
+                logger.info(
+                    f"Aligning X and y by common indices. "
+                    f"Removing {n_removed_by_alignment} misaligned rows. "
+                    f"Retained {len(common_idx)} rows."
+                )
+                X = X.loc[common_idx]
+                y = y.loc[common_idx]
+
+            # Проверка 2: Убедимся, что индексы идентичны для корректного выравнивания
+            if not X.index.equals(y.index):
+                logger.warning(
+                    "X and y indices are not identical. Resetting indices to ensure proper alignment."
+                )
+                X = X.reset_index(drop=True)
+                y = y.reset_index(drop=True)
+
+            # Теперь фильтруем строки с NaN в таргетах
+            valid_mask = y.notna()
+            n_before = len(y)
+            n_invalid = (~valid_mask).sum()
+
+            if n_invalid > 0:
+                logger.info(
+                    f"Removing {n_invalid} samples with NaN targets "
+                    f"({n_invalid / n_before * 100:.2f}% of total). "
+                    f"These are typically the last row of each symbol's time series."
+                )
+                X = X[valid_mask].reset_index(drop=True)
+                y = y[valid_mask].reset_index(drop=True)
+
+                # Финальная проверка согласованности
+                if len(X) != len(y):
+                    logger.error(
+                        f"Shape mismatch after NaN filtering: X={len(X)}, y={len(y)}"
+                    )
+                    raise ValueError(
+                        f"X and y have different lengths after filtering: {len(X)} != {len(y)}"
+                    )
+
+                logger.info(f"Retained {len(y)} valid samples for training.")
+            else:
+                logger.info("No NaN targets found - all samples are valid.")
+
         # Логирование информации о признаках перед обучением
         self._log_feature_statistics(X)
 
