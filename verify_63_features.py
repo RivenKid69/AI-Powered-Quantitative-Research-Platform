@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Простой проверочный скрипт для системы 56 признаков.
+Простой проверочный скрипт для системы 63 признаков.
 Не требует pytest, запускается напрямую.
 """
 
@@ -21,8 +21,8 @@ def test_feature_config():
     print("✓ EXT_NORM_DIM = 21")
 
     print(f"\nN_FEATURES = {N_FEATURES}")
-    assert N_FEATURES == 56, f"❌ Expected N_FEATURES=56, got {N_FEATURES}"
-    print("✓ N_FEATURES = 56")
+    assert N_FEATURES == 63, f"❌ Expected N_FEATURES=63, got {N_FEATURES}"
+    print("✓ N_FEATURES = 63")
 
     print(f"\nБлоки признаков:")
     total = 0
@@ -33,8 +33,8 @@ def test_feature_config():
         total += size
 
     print(f"  {'ИТОГО':15s}: {total:2d}")
-    assert total == 56, f"❌ Total features = {total}, expected 56"
-    print("✓ Сумма всех блоков = 56")
+    assert total == 63, f"❌ Total features = {total}, expected 63"
+    print("✓ Сумма всех блоков = 63")
 
     print("\n✅ Конфигурация корректна!\n")
     return True
@@ -124,7 +124,7 @@ def test_obs_builder():
 
     # Создаем norm_cols с большими значениями для проверки tanh
     norm_cols = np.array([1000.0] * 21, dtype=np.float32)
-    out = np.zeros(56, dtype=np.float32)
+    out = np.zeros(63, dtype=np.float32)
 
     build_observation_vector(
         price=50000.0,
@@ -161,8 +161,8 @@ def test_obs_builder():
     )
 
     print(f"out.shape = {out.shape}")
-    assert out.shape[0] == 56, f"❌ Expected 56, got {out.shape[0]}"
-    print("✓ observation имеет размер 56")
+    assert out.shape[0] == 63, f"❌ Expected 63, got {out.shape[0]}"
+    print("✓ observation имеет размер 63")
 
     assert np.all(np.isfinite(out)), "❌ observation содержит NaN или Inf"
     print("✓ Все значения конечные (no NaN/Inf)")
@@ -239,7 +239,7 @@ def test_column_names():
 def main():
     """Запуск всех проверок"""
     print("\n" + "="*70)
-    print(" ВЕРИФИКАЦИЯ СИСТЕМЫ 56 ПРИЗНАКОВ")
+    print(" ВЕРИФИКАЦИЯ СИСТЕМЫ 63 ПРИЗНАКОВ")
     print("="*70 + "\n")
 
     tests = [
@@ -278,7 +278,7 @@ def main():
         print(f"❌ Провалено: {failed}/{len(tests)}")
 
     if failed == 0:
-        print("\n🎉 ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ! Система 56 признаков работает корректно.")
+        print("\n🎉 ВСЕ ПРОВЕРКИ ПРОЙДЕНЫ! Система 63 признаков работает корректно.")
         return 0
     else:
         print("\n⚠️  Есть ошибки. Проверьте вывод выше.")

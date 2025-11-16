@@ -21,7 +21,7 @@ def test_ext_norm_dim_is_21():
 
 
 def test_n_features_is_62():
-    """Проверка что N_FEATURES = 62 (было 56, добавили 6 validity flags)"""
+    """Проверка что N_FEATURES = 62 (было 63, добавили 6 validity flags)"""
     # make_layout должен был вызваться при импорте
     from feature_config import N_FEATURES as computed_features
     assert computed_features == 62, f"Expected N_FEATURES=62, got {computed_features}"
@@ -86,7 +86,7 @@ def test_mediator_extract_norm_cols_size():
         "garch_30d": 0.025,  # было garch_500m
         "taker_buy_ratio": 0.52,
         "taker_buy_ratio_sma_24h": 0.51,
-        # Additional 5 (51->56) - НОВЫЕ (обновлено для 4h)
+        # Additional 5 (51->63) - НОВЫЕ (обновлено для 4h)
         "taker_buy_ratio_sma_8h": 0.53,  # было 6h
         "taker_buy_ratio_sma_16h": 0.52,  # было 12h
         "taker_buy_ratio_momentum_4h": 0.01,  # было 1h

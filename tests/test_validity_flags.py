@@ -47,7 +47,7 @@ def create_base_params():
         "max_num_tokens": 1,
         "num_tokens": 1,
         "norm_cols_values": np.zeros(21, dtype=np.float32),
-        "out_features": np.zeros(62, dtype=np.float32),
+        "out_features": np.zeros(63, dtype=np.float32),
     }
 
 

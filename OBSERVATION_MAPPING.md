@@ -2,13 +2,13 @@
 
 ## Overview
 
-This document describes the complete structure of the observation vector (62 features) used by the trading agent. The observation vector is constructed by `obs_builder.build_observation_vector()` and populated with technical indicators from `prepare_and_run.py` and market microstructure data.
+This document describes the complete structure of the observation vector (63 features) used by the trading agent. The observation vector is constructed by `obs_builder.build_observation_vector()` and populated with technical indicators from `prepare_and_run.py` and market microstructure data.
 
-**Total Features**: 62 (with max_num_tokens=1 and EXT_NORM_DIM=21)
+**Total Features**: 63 (with max_num_tokens=1 and EXT_NORM_DIM=21)
 
 **Note**: This document reflects the current implementation with validity flags for all technical indicators. The actual feature count is calculated dynamically in `feature_config.py` based on block sizes.
 
-**Validity Flags (NEW)**: Added 6 explicit validity flags for indicators (rsi, macd, macd_signal, momentum, cci, obv) to eliminate ambiguity between "no data yet" (warmup period) and "meaningful zero value". This increased the observation size from 56 to 62 features.
+**Validity Flags (NEW)**: Added 7 explicit validity flags for indicators (rsi, macd, macd_signal, momentum, atr, cci, obv) to eliminate ambiguity between "no data yet" (warmup period) and "meaningful zero value". This increased the observation size from 56 to 62 features (6 flags), then to 63 features (7 flags, added ATR).
 
 ## Feature Layout
 
@@ -34,9 +34,9 @@ This document describes the complete structure of the observation vector (62 fea
 | 5 | `ma20` | `df['sma_15']` | 15-period SMA (mapped to ma20 slot) |
 | 6 | `ma20_valid` | Computed | 1.0 if ma20 is not NaN, 0.0 otherwise |
 
-### Positions 7-19: Technical Indicators (13 features)
+### Positions 7-20: Technical Indicators (14 features)
 
-**Note**: This section now includes 6 NEW validity flags to distinguish "no data yet" from "meaningful zero value".
+**Note**: This section now includes 7 validity flags to distinguish "no data yet" from "meaningful zero value".
 
 | Position | Feature | Source | Description |
 |----------|---------|--------|-------------|
@@ -49,10 +49,11 @@ This document describes the complete structure of the observation vector (62 fea
 | 13 | `momentum` | Simulator (`get_momentum`) | Price momentum, fallback: 0.0 |
 | 14 | `momentum_valid` | Computed | **NEW**: 1.0 if momentum valid, 0.0 if no data yet (warmup < 10 bars) |
 | 15 | `atr` | Simulator (`get_atr`) | Average True Range (volatility), fallback: price*0.01 |
-| 16 | `cci` | Simulator (`get_cci`) | Commodity Channel Index, fallback: 0.0 |
-| 17 | `cci_valid` | Computed | **NEW**: 1.0 if cci valid, 0.0 if no data yet (warmup < 20 bars) |
-| 18 | `obv` | Simulator (`get_obv`) | On-Balance Volume, fallback: 0.0 |
-| 19 | `obv_valid` | Computed | **NEW**: 1.0 if obv valid, 0.0 if no data yet (warmup < 1 bar) |
+| 16 | `atr_valid` | Computed | **NEW v63**: 1.0 if atr valid, 0.0 if no data yet (warmup < 14 bars). **CRITICAL**: Prevents NaN in vol_proxy |
+| 17 | `cci` | Simulator (`get_cci`) | Commodity Channel Index, fallback: 0.0 |
+| 18 | `cci_valid` | Computed | 1.0 if cci valid, 0.0 if no data yet (warmup < 20 bars) |
+| 19 | `obv` | Simulator (`get_obv`) | On-Balance Volume, fallback: 0.0 |
+| 20 | `obv_valid` | Computed | 1.0 if obv valid, 0.0 if no data yet (warmup < 1 bar) |
 
 **Why validity flags?** Indicators like RSI (neutral = 50) and MACD (no divergence = 0) create ambiguity: does value=50 or value=0 mean "no data yet" or "meaningful signal"? Validity flags eliminate this confusion for the neural network.
 
@@ -176,7 +177,7 @@ mediator.py
     ↓
     Calls obs_builder.build_observation_vector()
     ↓
-    Returns observation vector (62 features)
+    Returns observation vector (63 features)
     ↓
  RL Agent (DistributionalPPO)
 ```

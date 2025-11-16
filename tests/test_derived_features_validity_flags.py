@@ -41,7 +41,7 @@ def test_price_momentum_uses_validity_flag_when_valid():
     obv = 1000.0
 
     # Observation buffer
-    obs = np.zeros(62, dtype=np.float32)
+    obs = np.zeros(63, dtype=np.float32)
     norm_cols = np.zeros(21, dtype=np.float32)
 
     # Call observation builder
@@ -114,7 +114,7 @@ def test_price_momentum_uses_validity_flag_when_invalid():
     obv = 1000.0
 
     # Observation buffer
-    obs = np.zeros(62, dtype=np.float32)
+    obs = np.zeros(63, dtype=np.float32)
     norm_cols = np.zeros(21, dtype=np.float32)
 
     # Call observation builder
@@ -180,7 +180,7 @@ def test_trend_strength_uses_validity_flags_when_both_valid():
     obv = 1000.0
 
     # Observation buffer
-    obs = np.zeros(62, dtype=np.float32)
+    obs = np.zeros(63, dtype=np.float32)
     norm_cols = np.zeros(21, dtype=np.float32)
 
     # Call observation builder
@@ -253,7 +253,7 @@ def test_trend_strength_zero_when_macd_invalid():
     obv = 1000.0
 
     # Observation buffer
-    obs = np.zeros(62, dtype=np.float32)
+    obs = np.zeros(63, dtype=np.float32)
     norm_cols = np.zeros(21, dtype=np.float32)
 
     # Call observation builder
@@ -319,7 +319,7 @@ def test_trend_strength_zero_when_macd_signal_invalid():
     obv = 1000.0
 
     # Observation buffer
-    obs = np.zeros(62, dtype=np.float32)
+    obs = np.zeros(63, dtype=np.float32)
     norm_cols = np.zeros(21, dtype=np.float32)
 
     # Call observation builder
@@ -385,7 +385,7 @@ def test_trend_strength_zero_when_both_invalid():
     obv = 1000.0
 
     # Observation buffer
-    obs = np.zeros(62, dtype=np.float32)
+    obs = np.zeros(63, dtype=np.float32)
     norm_cols = np.zeros(21, dtype=np.float32)
 
     # Call observation builder
@@ -440,7 +440,7 @@ def test_validity_flags_indices():
     prev_price = 1000.0
 
     # Observation buffer
-    obs = np.zeros(62, dtype=np.float32)
+    obs = np.zeros(63, dtype=np.float32)
     norm_cols = np.zeros(21, dtype=np.float32)
 
     # Call observation builder with all valid indicators
@@ -485,8 +485,9 @@ def test_validity_flags_indices():
     assert obs[10] == 1.0, f"macd_valid (index 10) should be 1.0, got {obs[10]}"
     assert obs[12] == 1.0, f"macd_signal_valid (index 12) should be 1.0, got {obs[12]}"
     assert obs[14] == 1.0, f"momentum_valid (index 14) should be 1.0, got {obs[14]}"
-    assert obs[17] == 1.0, f"cci_valid (index 17) should be 1.0, got {obs[17]}"
-    assert obs[19] == 1.0, f"obv_valid (index 19) should be 1.0, got {obs[19]}"
+    assert obs[16] == 1.0, f"atr_valid (index 16) should be 1.0, got {obs[16]}"
+    assert obs[18] == 1.0, f"cci_valid (index 18) should be 1.0, got {obs[18]}"
+    assert obs[20] == 1.0, f"obv_valid (index 20) should be 1.0, got {obs[20]}"
 
     print("✅ All validity flags are at correct indices and set to 1.0 for valid indicators")
 
