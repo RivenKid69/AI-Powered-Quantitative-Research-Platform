@@ -638,7 +638,7 @@ class FeatureSpec:
         # АРХИТЕКТУРНОЕ РЕШЕНИЕ: Генерируется 4 окна, используется 3 в observation
         # - Генерируем ВСЕ 4 окна для гибкости (бэктесты, анализ, будущие эксперименты)
         # - mediator.py использует только 3 первых в norm_cols[18,19,20] для компактности
-        # - observation vector = 56 признаков (21 external из них)
+        # - observation vector = 62 признаков (21 external из них) [updated in v62]
         # - Это стандартная практика (аналогично sklearn, XGBoost: fit на всех, predict на подмножестве)
         if self.taker_buy_ratio_momentum is None:
             self.taker_buy_ratio_momentum = [4 * 60, 8 * 60, 12 * 60, 24 * 60]  # 240, 480, 720, 1440 минут

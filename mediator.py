@@ -1171,7 +1171,8 @@ class Mediator:
         norm_cols[14] = self._get_safe_float(row, "taker_buy_ratio", 0.0)
         norm_cols[15] = self._get_safe_float(row, "taker_buy_ratio_sma_24h", 0.0)  # 6 bars
 
-        # Additional 5 features for complete taker_buy_ratio coverage (51 -> 56) - adapted for 4h
+        # Additional 5 features for complete taker_buy_ratio coverage
+        # Note: This brings norm_cols from 16 to 21 (not related to observation size 56->62)
         norm_cols[16] = self._get_safe_float(row, "taker_buy_ratio_sma_8h", 0.0)  # 2 bars
         norm_cols[17] = self._get_safe_float(row, "taker_buy_ratio_sma_16h", 0.0)  # 4 bars
         norm_cols[18] = self._get_safe_float(row, "taker_buy_ratio_momentum_4h", 0.0)  # 1 bar
