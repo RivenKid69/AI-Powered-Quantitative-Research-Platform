@@ -221,6 +221,8 @@ cdef void build_observation_vector_c(
     cdef double bb_width
     cdef bint ma5_valid
     cdef bint ma20_valid
+    cdef bint macd_valid
+    cdef bint macd_signal_valid
     cdef bint bb_valid
     cdef double min_bb_width
     cdef int padded_tokens
@@ -251,10 +253,17 @@ cdef void build_observation_vector_c(
     out_features[feature_idx] = rsi14 if not isnan(rsi14) else 50.0
     feature_idx += 1
 
-    # MACD: 0.0 = no divergence signal
-    out_features[feature_idx] = macd if not isnan(macd) else 0.0
+    # MACD: 0.0 = no divergence signal (with validity flags like ma5/ma20)
+    macd_valid = not isnan(macd)
+    out_features[feature_idx] = macd if macd_valid else 0.0
     feature_idx += 1
-    out_features[feature_idx] = macd_signal if not isnan(macd_signal) else 0.0
+    out_features[feature_idx] = 1.0 if macd_valid else 0.0
+    feature_idx += 1
+
+    macd_signal_valid = not isnan(macd_signal)
+    out_features[feature_idx] = macd_signal if macd_signal_valid else 0.0
+    feature_idx += 1
+    out_features[feature_idx] = 1.0 if macd_signal_valid else 0.0
     feature_idx += 1
 
     # Momentum: 0.0 = no price movement

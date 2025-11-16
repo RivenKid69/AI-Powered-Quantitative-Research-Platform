@@ -1115,8 +1115,13 @@ class Mediator:
                     bb_lower = float(sim.get_bb_lower(row_idx))
                 if hasattr(sim, "get_bb_upper"):
                     bb_upper = float(sim.get_bb_upper(row_idx))
-            except Exception:
-                pass
+            except Exception as e:
+                # Log fallback for debugging (indicators will use default values)
+                import logging
+                logging.getLogger(__name__).debug(
+                    f"MarketSimulator indicator fetch failed at row_idx={row_idx}: {e}. "
+                    f"Using fallback values (macd=0.0, macd_signal=0.0, etc.)"
+                )
 
         return {
             "ma5": ma5,
