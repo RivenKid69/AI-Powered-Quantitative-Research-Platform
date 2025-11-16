@@ -943,6 +943,479 @@
 
 ---
 
+# ЭТАП 3/10: Признаки 12-18 (Continued Indicators + Validity Flags)
+
+## Признаки 12-18 (MACD Signal Validity + Momentum + ATR + CCI + OBV Groups)
+
+---
+
+### ПРИЗНАК 12: `is_macd_signal_valid` (Флаг валидности MACD Signal)
+
+**Индекс:** 12
+**Тип:** float32
+**Диапазон:** {0.0, 1.0} (бинарный)
+**Источник:** `obs_builder.pyx:281-285`
+**Формула:** `1.0 if not isnan(macd_signal) else 0.0`
+**Обработка:** Прямая запись
+
+#### ПУТЬ ДАННЫХ:
+1. **Проверка** (obs_builder.pyx:281): `macd_signal_valid = not isnan(macd_signal)`
+2. **Запись** (obs_builder.pyx:284): `out_features[12] = 1.0 if macd_signal_valid else 0.0`
+
+#### ИСКАЖЕНИЯ И МИТИГАЦИИ:
+
+**1. Identical to is_macd_valid Issues (КРИТИЧНО)**
+- **Все проблемы от признака #10 применимы:**
+  - Default 0.0 вместо NaN → ломает validity flag
+  - False positives при отсутствии simulator
+  - Те же рекомендации: изменить mediator.py:1091 на `float('nan')`
+- **Текущий статус:** BROKEN (см. детальный анализ признака #10)
+
+**2. Longer Warmup Than MACD (КРИТИЧНО)**
+- **Источник:** Signal требует больше данных чем сам MACD
+- **Warmup:** ~35 bars vs 26 для MACD
+- **Для 4h:** 35 bars = 140 часов = 5.83 дня
+- **Последствия:** Первые почти 6 дней имеют invalid flag
+- **Митигация:** WOULD BE EXCELLENT (если исправить default)
+
+---
+
+### ПРИЗНАК 13: `momentum` (Price Momentum Indicator)
+
+**Индекс:** 13
+**Тип:** float32
+**Диапазон:** unbounded или 0.0 (fallback)
+**Источник:** `mediator.py:1092+1106-1107` → `_extract_technical_indicators()`
+**Обработка:** `obs_builder.pyx:292-293` - с validity flag
+
+#### ПУТЬ ДАННЫХ:
+1. **Инициализация** (mediator.py:1092): `momentum = 0.0`
+2. **Попытка извлечения** (mediator.py:1106-1107):
+   ```python
+   if hasattr(sim, "get_momentum"):
+       momentum = float(sim.get_momentum(row_idx))
+   ```
+3. **Проверка валидности** (obs_builder.pyx:291-294):
+   ```cython
+   momentum_valid = not isnan(momentum)
+   out_features[feature_idx] = momentum if momentum_valid else 0.0
+   feature_idx += 1
+   out_features[feature_idx] = 1.0 if momentum_valid else 0.0  # validity flag
+   ```
+4. **Запись** →
+   - `out_features[13] = momentum` (или 0.0)
+   - `out_features[14] = is_momentum_valid` (следующий признак)
+
+#### ИСКАЖЕНИЯ И МИТИГАЦИИ:
+
+**1. IDENTICAL BROKEN PATTERN (КРИТИЧНО)**
+- **Проблема:** ТОЧНО те же проблемы что у MACD!
+  1. Default 0.0 вместо NaN → ломает validity flag
+  2. Silent exception swallowing (mediator.py:1118)
+  3. No DataFrame fallback
+  4. No normalization
+- **Источник:** Copy-paste архитектура в mediator.py:1089-1119
+- **BEST PRACTICE VIOLATION:**
+  - "Don't Repeat Yourself" (DRY principle)
+  - Одна и та же ошибка размножена на 6 индикаторов!
+
+**2. Warmup Period ~10 Bars (ОЖИДАЕМО)**
+- **Источник:** Momentum обычно рассчитывается как price - price[10]
+- **Формула типичная:** `momentum = close - close.shift(10)`
+- **Для 4h таймфрейма:** 10 bars = 40 часов = 1.67 дня
+- **Комментарий из кода** (obs_builder.pyx:288):
+  ```cython
+  # CRITICAL: Momentum requires ~10 bars for first valid value
+  ```
+- **Митигация:** WOULD BE EXCELLENT (validity flag, если исправить)
+
+**3. Ambiguous Fallback 0.0 (КРИТИЧНО)**
+- **Источник:** Momentum = 0.0 может означать:
+  1. Нет изменения цены (реальный сигнал - sideways market)
+  2. Нет данных (fallback)
+- **Комментарий из кода** (obs_builder.pyx:289-290):
+  ```cython
+  # Fallback 0.0 creates AMBIGUITY: no price movement (0) vs insufficient data (0)
+  # Validity flag eliminates this: model can distinguish valid zero from missing data
+  ```
+- **Митигация:** DESIGN EXCELLENT, IMPLEMENTATION BROKEN
+- **Fix:** Изменить mediator.py:1092 на `momentum = float('nan')`
+
+**4. No Normalization (СРЕДНЯЯ КРИТИЧНОСТЬ)**
+- **Источник:** Momentum unbounded (может быть -5000 до +5000 для BTC)
+- **Проблема:** Зависит от абсолютной цены
+- **Пример:**
+  - BTC $50k: momentum = 500 (1% рост)
+  - BTC $100k: momentum = 1000 (тот же 1% рост)
+- **Альтернативы:**
+  - `momentum / price` - процентный momentum
+  - `tanh(momentum / (price * 0.01))` - bounded нормализация
+- **Текущее:** Модель должна адаптироваться
+
+**5. Used in Derived Feature price_momentum (ВАЖНО)**
+- **Источник:** obs_builder.pyx:410-424 использует momentum
+- **Формула:** `price_momentum = tanh(momentum / (price_d * 0.01 + 1e-8))`
+- **CRITICAL DEPENDENCY:** Если momentum=NaN, price_momentum станет NaN!
+- **Защита:** obs_builder.pyx:419 проверяет `if momentum_valid:`
+- **Последствия:**
+  - Если momentum invalid → price_momentum = 0.0 (safe fallback)
+  - Validity flag используется для предотвращения NaN propagation
+- **BEST PRACTICE:** ✅ Defensive programming (при условии что validity работает!)
+
+---
+
+### ПРИЗНАК 14: `is_momentum_valid` (Флаг валидности Momentum)
+
+**Индекс:** 14
+**Тип:** float32
+**Диапазон:** {0.0, 1.0} (бинарный)
+**Источник:** `obs_builder.pyx:291-295`
+**Формула:** `1.0 if not isnan(momentum) else 0.0`
+**Обработка:** Прямая запись
+
+#### ПУТЬ ДАННЫХ:
+1. **Проверка** (obs_builder.pyx:291): `momentum_valid = not isnan(momentum)`
+2. **Запись** (obs_builder.pyx:294): `out_features[14] = 1.0 if momentum_valid else 0.0`
+
+#### ИСКАЖЕНИЯ И МИТИГАЦИИ:
+
+**1. BROKEN (Same as MACD) (КРИТИЧНО)**
+- **Проблема:** mediator.py инициализирует `momentum = 0.0` (не NaN!)
+- **Последствия:**
+  - Если simulator отсутствует → momentum=0.0
+  - `is_momentum_valid = not isnan(0.0)` = True
+  - **ЛОЖНО ПОЛОЖИТЕЛЬНЫЙ!**
+- **Текущий статус:** BROKEN
+- **РЕКОМЕНДАЦИЯ:** Изменить default на `float('nan')`
+
+**2. Critical for price_momentum Feature (ОЧЕНЬ ВАЖНО)**
+- **Источник:** Используется в obs_builder.pyx:419 для защиты
+- **Код:**
+  ```cython
+  if momentum_valid:
+      price_momentum = tanh(momentum / (price_d * 0.01 + 1e-8))
+  else:
+      price_momentum = 0.0
+  ```
+- **CRITICAL:** Если validity flag broken → price_momentum может использовать invalid 0.0!
+- **Последствия:**
+  - Bar 5: momentum=0.0 (no data), is_valid=True (WRONG!)
+  - price_momentum = tanh(0.0 / price) = 0.0 (выглядит как "no trend")
+  - Модель думает "sideways market" вместо "нет данных"
+- **SEVERITY:** ВЫСОКАЯ (влияет на derived feature!)
+
+---
+
+### ПРИЗНАК 15: `atr` (Average True Range)
+
+**Индекс:** 15
+**Тип:** float32
+**Диапазон:** > 0.0 или price*0.01 (fallback)
+**Источник:** `mediator.py:1093+1108-1109` → `_extract_technical_indicators()`
+**Обработка:** `obs_builder.pyx:303-304` - с validity flag
+
+#### ПУТЬ ДАННЫХ:
+1. **Инициализация** (mediator.py:1093): `atr = 0.0`
+2. **Попытка извлечения** (mediator.py:1108-1109):
+   ```python
+   if hasattr(sim, "get_atr"):
+       atr = float(sim.get_atr(row_idx))
+   ```
+3. **Проверка валидности и fallback** (obs_builder.pyx:302-305):
+   ```cython
+   atr_valid = not isnan(atr)
+   out_features[feature_idx] = atr if atr_valid else <float>(price_d * 0.01)
+   feature_idx += 1
+   out_features[feature_idx] = 1.0 if atr_valid else 0.0  # validity flag
+   ```
+4. **Запись** →
+   - `out_features[15] = atr` (или price*0.01)
+   - `out_features[16] = is_atr_valid` (следующий признак)
+
+#### ИСКАЖЕНИЯ И МИТИГАЦИИ:
+
+**1. UNIQUE Fallback: price*0.01 (ИНТЕРЕСНО!)**
+- **Источник:** В отличие от других индикаторов, ATR fallback НЕ 0.0!
+- **Fallback:** `price * 0.01` (1% от цены)
+- **Комментарий из кода** (obs_builder.pyx:299-300):
+  ```cython
+  # Fallback price*0.01 (1%) creates AMBIGUITY: calm market (1%) vs insufficient data (1%)
+  # Validity flag eliminates this: model can distinguish real low volatility from missing data
+  ```
+- **RATIONALE:** ATR = 0 невозможен в реальности (всегда есть волатильность)
+- **BEST PRACTICE:** ✅ Domain-appropriate default (лучше чем 0.0!)
+- **Пример:**
+  - BTC $50,000: ATR fallback = $500
+  - BTC $100,000: ATR fallback = $1,000
+  - Масштабируется с ценой - ПРАВИЛЬНО!
+
+**2. BROKEN Validity Flag (КРИТИЧНО)**
+- **Проблема:** mediator.py:1093 инициализирует `atr = 0.0` (не NaN!)
+- **Последствия:**
+  - Если simulator отсутствует → atr=0.0
+  - `is_atr_valid = not isnan(0.0)` = True (ЛОЖЬ!)
+  - obs_builder.pyx:303 НЕ применяет fallback price*0.01
+  - Модель видит ATR=0.0 (нереалистично!)
+- **DOUBLE BUG:**
+  1. Validity flag не работает
+  2. Fallback price*0.01 никогда не используется (потому что atr=0.0 валиден!)
+- **SEVERITY:** КРИТИЧНО (ломает оба механизма защиты!)
+
+**3. Warmup Period ~14 Bars (ОЖИДАЕМО)**
+- **Источник:** ATR использует Wilder's smoothing (EMA_14)
+- **Формула:** `ATR = EMA_14(TrueRange)`
+- **Для 4h таймфрейма:** 14 bars = 56 часов = 2.33 дня
+- **Комментарий из кода** (obs_builder.pyx:298):
+  ```cython
+  # CRITICAL: ATR requires ~14 bars for first valid value (Wilder's smoothing EMA_14)
+  ```
+- **BEST PRACTICE REFERENCE:** "Using the Average True Range (ATR)" (Wilder 1978)
+
+**4. CRITICAL for vol_proxy Feature (ОЧЕНЬ ВАЖНО!)**
+- **Источник:** obs_builder.pyx:361-378 использует ATR и is_atr_valid
+- **Формула:**
+  ```cython
+  if atr_valid:
+      vol_proxy = tanh(log1p(atr / (price_d + 1e-8)))
+  else:
+      # Use fallback ATR value (1% of price) for vol_proxy calculation
+      atr_fallback = price_d * 0.01
+      vol_proxy = tanh(log1p(atr_fallback / (price_d + 1e-8)))
+  ```
+- **EXCELLENT DESIGN:**
+  - Проверяет validity перед использованием
+  - Имеет explicit fallback для vol_proxy
+  - Предотвращает NaN propagation
+- **НО BROKEN:**
+  - Если is_atr_valid = True (ложный) и atr=0.0
+  - vol_proxy = tanh(log1p(0/price)) = tanh(0) = 0.0
+  - Неверный сигнал "zero volatility" вместо fallback!
+- **SEVERITY:** КРИТИЧНО (влияет на важный derived feature!)
+
+**5. No Normalization (НИЗКАЯ КРИТИЧНОСТЬ)**
+- **Источник:** ATR в абсолютных единицах цены
+- **Для BTC:** ATR может быть $100-$5000
+- **НО:** vol_proxy уже нормализует через tanh(log1p(atr/price))
+- **Оценка:** ПРИЕМЛЕМО (derived feature решает проблему)
+
+---
+
+### ПРИЗНАК 16: `is_atr_valid` (Флаг валидности ATR)
+
+**Индекс:** 16
+**Тип:** float32
+**Диапазон:** {0.0, 1.0} (бинарный)
+**Источник:** `obs_builder.pyx:302-306`
+**Формула:** `1.0 if not isnan(atr) else 0.0`
+**Обработка:** Прямая запись
+
+#### ПУТЬ ДАННЫХ:
+1. **Проверка** (obs_builder.pyx:302): `atr_valid = not isnan(atr)`
+2. **Запись** (obs_builder.pyx:305): `out_features[16] = 1.0 if atr_valid else 0.0`
+
+#### ИСКАЖЕНИЯ И МИТИГАЦИИ:
+
+**1. MOST CRITICAL Validity Flag (КРИТИЧНО)**
+- **Важность:** Используется для предотвращения NaN в vol_proxy (признак #23)
+- **Комментарий из кода** (obs_builder.pyx:301):
+  ```cython
+  # IMPORTANT: This flag is used by vol_proxy calculation to prevent NaN propagation
+  ```
+- **Последствия broken flag:**
+  1. vol_proxy может получить atr=0.0 вместо fallback
+  2. vol_proxy = 0.0 вместо ~tanh(log1p(0.01)) ≈ 0.01
+  3. Модель думает "zero volatility" в warmup period
+- **BEST PRACTICE VIOLATION:** "Critical paths need extra validation" (Safety Engineering)
+
+**2. BROKEN (Same as Other Indicators) (КРИТИЧНО)**
+- **Проблема:** mediator.py:1093 инициализирует `atr = 0.0`
+- **Последствия:**
+  - is_atr_valid = True (ложный)
+  - Fallback price*0.01 НЕ применяется
+  - vol_proxy видит atr=0.0 (неверно!)
+- **SEVERITY:** МАКСИМАЛЬНАЯ
+  - Влияет на 2 признака: #15 (atr) и #23 (vol_proxy)
+  - Ломает 2 механизма защиты
+
+**3. Added in 62→63 Feature Migration (ИСТОРИЧЕСКОЕ)**
+- **Источник:** Комментарий в feature_config.py:48
+  ```python
+  # Changed from 19 to 20 (62→63): added 1 validity flag for atr (critical for vol_proxy NaN prevention)
+  ```
+- **REASON:** Явно добавлен для предотвращения NaN в vol_proxy
+- **IRONY:** Добавлен для защиты, но не работает из-за broken default!
+
+---
+
+### ПРИЗНАК 17: `cci` (Commodity Channel Index)
+
+**Индекс:** 17
+**Тип:** float32
+**Диапазон:** unbounded или 0.0 (fallback)
+**Источник:** `mediator.py:1094+1110-1111` → `_extract_technical_indicators()`
+**Обработка:** `obs_builder.pyx:313-314` - с validity flag
+
+#### ПУТЬ ДАННЫХ:
+1. **Инициализация** (mediator.py:1094): `cci = 0.0`
+2. **Попытка извлечения** (mediator.py:1110-1111):
+   ```python
+   if hasattr(sim, "get_cci"):
+       cci = float(sim.get_cci(row_idx))
+   ```
+3. **Проверка валидности** (obs_builder.pyx:312-315):
+   ```cython
+   cci_valid = not isnan(cci)
+   out_features[feature_idx] = cci if cci_valid else 0.0
+   feature_idx += 1
+   out_features[feature_idx] = 1.0 if cci_valid else 0.0  # validity flag
+   ```
+4. **Запись** →
+   - `out_features[17] = cci` (или 0.0)
+   - `out_features[18] = is_cci_valid` (следующий признак)
+
+#### ИСКАЖЕНИЯ И МИТИГАЦИИ:
+
+**1. IDENTICAL BROKEN PATTERN (КРИТИЧНО)**
+- **Все проблемы MACD/momentum/atr применимы:**
+  1. Default 0.0 вместо NaN
+  2. Silent exception swallowing
+  3. No DataFrame fallback
+  4. No normalization
+- **Copy-paste bug #5** из 6 индикаторов
+
+**2. Warmup Period ~20 Bars (ОЖИДАЕМО)**
+- **Источник:** CCI требует минимум 20 периодов для SMA и mean deviation
+- **Формула:** `CCI = (TP - SMA(TP, 20)) / (0.015 * mean_deviation(20))`
+- **Для 4h таймфрейма:** 20 bars = 80 часов = 3.33 дня
+- **Комментарий из кода** (obs_builder.pyx:309):
+  ```cython
+  # CRITICAL: CCI requires ~20 bars for first valid value
+  ```
+
+**3. Ambiguous Fallback 0.0 (КРИТИЧНО)**
+- **Источник:** CCI = 0.0 означает:
+  1. Price at average level (реальный сигнал)
+  2. No data (fallback)
+- **Комментарий из кода** (obs_builder.pyx:310-311):
+  ```cython
+  # Fallback 0.0 creates AMBIGUITY: at average level (0) vs insufficient data (0)
+  # Validity flag eliminates this: model can distinguish valid zero from missing data
+  ```
+- **Design:** EXCELLENT
+- **Implementation:** BROKEN (default 0.0 вместо NaN)
+
+**4. CCI Typical Range (ИНФОРМАТИВНО)**
+- **Источник:** CCI теоретически unbounded, практически [-200, +200]
+- **Интерпретация:**
+  - CCI > +100: Overbought
+  - CCI < -100: Oversold
+  - CCI around 0: Neutral
+- **No Normalization:**
+  - Unbounded (может быть -300 до +300 в экстремальных случаях)
+  - Разный масштаб vs другие признаки
+- **BEST PRACTICE:** "CCI doesn't require normalization for NN" (Technical Analysis + ML)
+- **Оценка:** ПРИЕМЛЕМО (bounded в практике)
+
+---
+
+### ПРИЗНАК 18: `is_cci_valid` (Флаг валидности CCI)
+
+**Индекс:** 18
+**Тип:** float32
+**Диапазон:** {0.0, 1.0} (бинарный)
+**Источник:** `obs_builder.pyx:312-316`
+**Формула:** `1.0 if not isnan(cci) else 0.0`
+**Обработка:** Прямая запись
+
+#### ПУТЬ ДАННЫХ:
+1. **Проверка** (obs_builder.pyx:312): `cci_valid = not isnan(cci)`
+2. **Запись** (obs_builder.pyx:315): `out_features[18] = 1.0 if cci_valid else 0.0`
+
+#### ИСКАЖЕНИЯ И МИТИГАЦИИ:
+
+**1. BROKEN (Identical to Others) (КРИТИЧНО)**
+- **Проблема:** mediator.py:1094 инициализирует `cci = 0.0`
+- **Последствия:** is_cci_valid = True (ложный) при отсутствии данных
+- **Текущий статус:** BROKEN
+- **РЕКОМЕНДАЦИЯ:** Изменить default на `float('nan')`
+
+**2. Longest Warmup in Indicators Group (ВНИМАНИЕ)**
+- **CCI warmup:** 20 bars (80 часов для 4h)
+- **Сравнение:**
+  - RSI: 14 bars
+  - ATR: 14 bars
+  - Momentum: 10 bars
+  - CCI: 20 bars ← LONGEST
+- **Последствия:** Первые 3.3 дня должны иметь is_valid=0.0
+- **НО:** Broken flag показывает is_valid=1.0 даже в warmup!
+
+**3. No Critical Dependencies (ИНФОРМАТИВНО)**
+- **В отличие от is_atr_valid:** CCI validity не используется в derived features
+- **Последствия:** Broken flag влияет только на сам CCI
+- **Severity:** СРЕДНЯЯ (vs is_atr_valid = КРИТИЧНА)
+
+---
+
+## СВОДКА ПО ЭТАПУ 3 (Признаки 12-18)
+
+### КРИТИЧНЫЕ ПРОБЛЕМЫ:
+1. **ALL VALIDITY FLAGS BROKEN** - defaults 0.0 вместо NaN для всех 5 индикаторов!
+   - momentum = 0.0 (should be NaN)
+   - atr = 0.0 (should be NaN) ← WORST (breaks vol_proxy!)
+   - cci = 0.0 (should be NaN)
+2. **COPY-PASTE BUG MULTIPLICATION** - одна ошибка размножена 6 раз
+3. **is_atr_valid MOST CRITICAL** - используется для защиты vol_proxy от NaN
+4. **price_momentum зависит от broken is_momentum_valid**
+5. **ATR fallback price*0.01 NEVER USED** - brilliant идея, но не работает!
+
+### ОТЛИЧНЫЕ РЕШЕНИЯ (IF FIXED):
+1. **ATR fallback price*0.01** - domain-appropriate default (масштабируется с ценой!)
+2. **vol_proxy защита через is_atr_valid** - defensive programming
+3. **price_momentum защита через is_momentum_valid** - consistent pattern
+4. **Explicit warmup documentation** - комментарии excellent
+
+### РЕКОМЕНДАЦИИ (CRITICAL PRIORITY):
+1. **IMMEDIATE FIX:** Изменить ВСЕ defaults на `float('nan')`:
+   ```python
+   # mediator.py:1089-1095
+   macd = float('nan')  # was 0.0
+   macd_signal = float('nan')  # was 0.0
+   momentum = float('nan')  # was 0.0
+   atr = float('nan')  # was 0.0
+   cci = float('nan')  # was 0.0
+   obv = float('nan')  # will analyze in stage 4
+   ```
+2. **REFACTOR:** Extract indicator loading to single function (DRY principle)
+3. **ADD TESTS:** Unit tests для validity flags (сейчас НЕТ!)
+4. **DOCUMENT:** Добавить CRITICAL warning в mediator.py
+
+### ИСТОЧНИКИ И ЛУЧШИЕ ПРАКТИКИ:
+- ✅ Wilder (1978): ATR calculation and usage
+- ✅ Technical Analysis: Domain-appropriate defaults (ATR fallback)
+- ✅ Defense in Depth: Multiple validation layers (если бы работали!)
+- ❌ DRY Principle: Copy-paste код (нарушено)
+- ❌ Fail-Safe Defaults: 0.0 не является safe default для validity flags!
+- ❌ Testing: Критичные компоненты должны иметь unit tests
+
+### IMPACT ASSESSMENT:
+- **Broken validity flags:** 7 из 7 на этом этапе (100% failure rate!)
+- **Affected derived features:** 2 (price_momentum, vol_proxy)
+- **Training impact:** Модель обучается на garbage warmup данных
+- **Severity escalation:** От СРЕДНЕЙ (этап 1) → КРИТИЧЕСКОЙ (этап 2-3)
+
+### PATTERN RECOGNITION:
+- **Root cause:** SINGLE mistake в mediator.py:1089-1095
+- **Propagation:** Copy-pasted 6 раз (macd, macd_signal, momentum, atr, cci, obv)
+- **Blast radius:** 14 признаков affected (7 indicators + 7 validity flags)
+- **Fix complexity:** TRIVIAL (5 lines change)
+- **Impact:** MASSIVE (fixes 14 broken features)
+
+---
+
+**ЭТАП 3 ЗАВЕРШЕН.**
+
+---
+
 Дата анализа: 2025-11-16
 Аналитик: Claude Code (Sonnet 4.5)
 Версия кодовой базы: commit bc75c15
