@@ -391,8 +391,9 @@ cdef void build_observation_vector_c(
     # 1. Price momentum (replaces ofi_proxy) - captures trend direction and strength
     # Uses normalized momentum indicator to measure price movement strength
     # Normalized by 1% of price (price_d * 0.01) for sensitivity to typical intraday moves
-    # NaN handling: if momentum is NaN (first 10 bars), use 0.0 (no momentum)
-    if not isnan(momentum):
+    # Validity flag: Uses momentum_valid flag to check data availability
+    # If momentum is invalid (first 10 bars), use 0.0 (no momentum)
+    if momentum_valid:
         price_momentum = tanh(momentum / (price_d * 0.01 + 1e-8))
     else:
         price_momentum = 0.0
@@ -429,8 +430,9 @@ cdef void build_observation_vector_c(
     # 3. Trend strength via MACD divergence (replaces micro_dev) - measures trend strength
     # Positive = bullish trend, negative = bearish trend, magnitude = strength
     # Normalized by 1% of price (price_d * 0.01) similar to price_momentum for consistency
-    # NaN handling: if MACD not ready (first ~26 bars), use 0.0 (no trend signal)
-    if not isnan(macd) and not isnan(macd_signal):
+    # Validity flags: Uses macd_valid and macd_signal_valid flags to check data availability
+    # If either MACD or signal is invalid (first ~26-35 bars), use 0.0 (no trend signal)
+    if macd_valid and macd_signal_valid:
         trend_strength = tanh((macd - macd_signal) / (price_d * 0.01 + 1e-8))
     else:
         trend_strength = 0.0
