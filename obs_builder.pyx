@@ -221,6 +221,8 @@ cdef void build_observation_vector_c(
     cdef double bb_width
     cdef bint ma5_valid
     cdef bint ma20_valid
+    cdef bint macd_valid
+    cdef bint macd_signal_valid
     cdef bint bb_valid
     cdef double min_bb_width
     cdef int padded_tokens
@@ -251,10 +253,21 @@ cdef void build_observation_vector_c(
     out_features[feature_idx] = rsi14 if not isnan(rsi14) else 50.0
     feature_idx += 1
 
-    # MACD: 0.0 = no divergence signal
-    out_features[feature_idx] = macd if not isnan(macd) else 0.0
+    # MACD: with validity flags to distinguish "no data" from "no divergence"
+    # CRITICAL: MACD=0.0 can mean either:
+    #   1. No data yet (first ~26 bars for EMA26 warmup) → is_macd_valid = 0.0
+    #   2. No divergence (EMA12 = EMA26) → is_macd_valid = 1.0, macd = 0.0
+    # Validity flag prevents ambiguity (same pattern as ma5/ma20)
+    macd_valid = not isnan(macd)
+    out_features[feature_idx] = macd if macd_valid else 0.0
     feature_idx += 1
-    out_features[feature_idx] = macd_signal if not isnan(macd_signal) else 0.0
+    out_features[feature_idx] = 1.0 if macd_valid else 0.0
+    feature_idx += 1
+
+    macd_signal_valid = not isnan(macd_signal)
+    out_features[feature_idx] = macd_signal if macd_signal_valid else 0.0
+    feature_idx += 1
+    out_features[feature_idx] = 1.0 if macd_signal_valid else 0.0
     feature_idx += 1
 
     # Momentum: 0.0 = no price movement
@@ -385,8 +398,9 @@ cdef void build_observation_vector_c(
     # 3. Trend strength via MACD divergence (replaces micro_dev) - measures trend strength
     # Positive = bullish trend, negative = bearish trend, magnitude = strength
     # Normalized by 1% of price (price_d * 0.01) similar to price_momentum for consistency
-    # NaN handling: if MACD not ready (first ~26 bars), use 0.0 (no trend signal)
-    if not isnan(macd) and not isnan(macd_signal):
+    # IMPROVED: Use validity flags instead of isnan checks (consistent with updated MACD handling)
+    # If MACD not ready (first ~26 bars), use 0.0 (no trend signal)
+    if macd_valid and macd_signal_valid:
         trend_strength = tanh((macd - macd_signal) / (price_d * 0.01 + 1e-8))
     else:
         trend_strength = 0.0
