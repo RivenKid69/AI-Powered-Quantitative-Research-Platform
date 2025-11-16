@@ -1781,6 +1781,21 @@ def objective(trial: optuna.Trial,
 
     print(f">>> Trial {trial.number+1} with budget={total_timesteps}")
 
+    # Validate data splits to prevent test data leakage
+    if not val_data_by_token:
+        raise ValueError(
+            "Validation data is required for hyperparameter optimization. "
+            "Please configure validation split in your config (val_start_ts/val_end_ts)."
+        )
+
+    # Log warning if test data is provided (it will be ignored during HPO)
+    if test_data_by_token:
+        logger.warning(
+            f"Test data provided to HPO objective function but will NOT be used "
+            f"for hyperparameter optimization (correct behavior). Test data should "
+            f"only be used for final evaluation after HPO is complete."
+        )
+
     def _extract_bins_vol_from_cfg(cfg, default=EXPECTED_VOLUME_BINS):
         try:
             aw = getattr(getattr(cfg, "algo", None), "action_wrapper", None)
@@ -3963,15 +3978,24 @@ def objective(trial: optuna.Trial,
         value_head=value_head_meta,
     )
 
-    
 
-    print(f"<<< Trial {trial.number+1} finished training, starting unified final evaluation…")
 
-    eval_phase_data = test_data_by_token if test_data_by_token else val_data_by_token
-    eval_phase_obs = test_obs_by_token if test_data_by_token else val_obs_by_token
-    eval_phase_name = "test" if test_data_by_token else "val"
+    print(f"<<< Trial {trial.number+1} finished training, starting HPO evaluation on validation set…")
+
+    # CRITICAL: HPO must ONLY use validation data to prevent test data leakage.
+    # Using test data during hyperparameter optimization would lead to:
+    # 1. Overfitting hyperparameters to the test set
+    # 2. Inflated performance metrics that don't reflect true generalization
+    # 3. No independent holdout set for final model assessment
+    # Reference: Hastie et al., "Elements of Statistical Learning" (2009), Section 7.10
+    eval_phase_data = val_data_by_token
+    eval_phase_obs = val_obs_by_token
+    eval_phase_name = "val"
     if not eval_phase_data:
-        raise ValueError("No data available for validation/test evaluation. Check time split configuration.")
+        raise ValueError(
+            "No validation data available for HPO evaluation. "
+            "Check time split configuration - validation set is required for hyperparameter optimization."
+        )
 
     # 1. Определяем все режимы для оценки
     regimes_to_evaluate = ['normal', 'choppy_flat', 'strong_trend']
@@ -3981,7 +4005,7 @@ def objective(trial: optuna.Trial,
     # 2. Последовательно оцениваем модель в каждом режиме
     for regime in regimes_to_evaluate:
         symbol_equity_curves: list[list[float]] = []
-        test_stats_path = trials_dir / f"vec_normalize_test_{trial.number}.pkl"
+        val_stats_path = trials_dir / f"vec_normalize_val_{trial.number}.pkl"
 
         for symbol, df in sorted(eval_phase_data.items()):
             def make_final_eval_env(symbol: str = symbol, df: pd.DataFrame = df):
@@ -4080,9 +4104,9 @@ def objective(trial: optuna.Trial,
 
             final_eval_env.close()
 
-        if not test_stats_path.exists():
-            final_eval_norm.save(str(test_stats_path))
-            save_sidecar_metadata(str(test_stats_path), extra={"kind": "vecnorm_stats", "phase": eval_phase_name})
+        if not val_stats_path.exists():
+            final_eval_norm.save(str(val_stats_path))
+            save_sidecar_metadata(str(val_stats_path), extra={"kind": "vecnorm_stats", "phase": eval_phase_name})
 
         all_returns = [pd.Series(c).pct_change().dropna().to_numpy() for c in symbol_equity_curves if len(c) > 1]
         flat_returns = np.concatenate(all_returns) if all_returns else np.array([0.0])
@@ -4950,7 +4974,9 @@ def main():
     for i, trial in enumerate(top_trials):
         model_idx = i + 1
         src_model = trials_dir / f"trial_{trial.number}_model.zip"
-        src_stats = trials_dir / f"vec_normalize_{trial.number}.pkl"
+        # CRITICAL FIX: Copy training stats (not test/val) for model inference
+        # Models need the same normalization statistics they were trained with
+        src_stats = trials_dir / f"vec_normalize_train_{trial.number}.pkl"
 
         if os.path.exists(src_model):
             shutil.copyfile(src_model, ensemble_dir / f"model_{model_idx}.zip")
@@ -4971,16 +4997,33 @@ def main():
         json.dump(ensemble_meta, f, indent=4)
     print(f"\n✅ Ensemble of {len(ensemble_meta)} models saved to '{ensemble_dir}'. HPO complete.")
 
-    # --- Validation of the best model for reproducibility ---
+    # --- Final evaluation of the best model on test set (AFTER HPO completion) ---
+    # NOTE: This is the ONLY place where test data should be used.
+    # Test data is used here for final, independent evaluation AFTER all
+    # hyperparameter optimization is complete. This follows ML best practices:
+    # - Training set: fit model parameters
+    # - Validation set: select hyperparameters (HPO)
+    # - Test set: final independent assessment (here, once only)
     best_model_path = ensemble_dir / "model_1.zip"
     best_stats_path = ensemble_dir / "vec_normalize_1.pkl"
     if best_model_path.exists() and best_stats_path.exists():
-        print("\nRunning validation on the best ensemble model...")
+        print("\n" + "="*80)
+        print("FINAL INDEPENDENT EVALUATION ON TEST SET (post-HPO)")
+        print("="*80)
         best_trial = top_trials[0]
 
+        # Use test data if available, otherwise fall back to validation data
+        # (fallback is for backwards compatibility with configs that don't define test split)
         final_eval_data = test_data_by_token if test_data_by_token else val_data_by_token
         final_eval_obs = test_obs_by_token if test_data_by_token else val_obs_by_token
         final_eval_mode = "test" if test_data_by_token else "val"
+
+        if test_data_by_token:
+            print(f"✓ Using test set for final independent evaluation ({len(test_data_by_token)} symbols)")
+        else:
+            print(f"⚠ Test set not available - using validation set for final evaluation ({len(val_data_by_token)} symbols)")
+            print("  (This is acceptable but test set is recommended for unbiased assessment)")
+
         if not final_eval_data:
             print("⚠️ Skipping final validation: evaluation split is empty.")
         else:
