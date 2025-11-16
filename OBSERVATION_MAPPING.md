@@ -2,9 +2,9 @@
 
 ## Overview
 
-This document describes the complete structure of the observation vector (56 features) used by the trading agent. The observation vector is constructed by `obs_builder.build_observation_vector()` and populated with technical indicators from `prepare_and_run.py` and market microstructure data.
+This document describes the complete structure of the observation vector (62 features) used by the trading agent. The observation vector is constructed by `obs_builder.build_observation_vector()` and populated with technical indicators from `prepare_and_run.py` and market microstructure data.
 
-**Total Features**: 56 (with max_num_tokens=1 and EXT_NORM_DIM=21)
+**Total Features**: 62 (with max_num_tokens=1 and EXT_NORM_DIM=21)
 
 **Note**: This document is being updated to reflect the current implementation. The actual feature count is calculated dynamically in `feature_config.py` based on block sizes.
 
@@ -129,9 +129,9 @@ With `max_num_tokens=1` (default), this adds 1 feature:
 | 55 | Token 0 | One-hot encoding (1.0 for current token, 0.0 otherwise) |
 
 **Total with max_num_tokens=1**:
-- Bar (3) + Derived (2) + Indicators (13) + Microstructure (3) + Agent (6) + Metadata (5) + External/EXT_NORM_DIM (21) + Token metadata (2) + Token one-hot (1) = **56 features**
+- Bar (3) + Derived (2) + Indicators (13) + Microstructure (3) + Agent (6) + Metadata (5) + External/EXT_NORM_DIM (21) + Token metadata (2) + Token one-hot (1) = **62 features**
 
-**Calculation**: 3 + 2 + 13 + 3 + 6 + 5 + 21 + 2 + 1 = **56 features**
+**Calculation**: 3 + 2 + 13 + 3 + 6 + 5 + 21 + 2 + 1 = **62 features**
 
 ## Data Flow
 
@@ -162,7 +162,7 @@ mediator.py
     ↓
     Calls obs_builder.build_observation_vector()
     ↓
-    Returns observation vector (56 features)
+    Returns observation vector (62 features)
     ↓
 RL Agent (DistributionalPPO)
 ```
@@ -205,9 +205,9 @@ RL Agent (DistributionalPPO)
 - `obs_builder` filled only 43 positions → **14 positions were zeros!**
 
 **Current Setup (CORRECTED - November 2025):**
-- `observation_space = (N_FEATURES,)` where N_FEATURES correctly calculated as **56**
-- `observation_space.shape = (56,)`
-- `obs_builder` fills all 56 positions → **All features populated!**
+- `observation_space = (N_FEATURES,)` where N_FEATURES correctly calculated as **62**
+- `observation_space.shape = (62,)`
+- `obs_builder` fills all 62 positions → **All features populated!**
 
 **Changes Made:**
 1. Updated `lob_state_cython.pyx:_compute_n_features()` to use `norm_cols=np.zeros(21)` (expanded from 8 to 21)
@@ -221,13 +221,13 @@ RL Agent (DistributionalPPO)
 
 Comprehensive tests should verify the observation vector structure:
 
-1. **test_observation_size_and_non_zero()**: Verifies size=56 and non-zero content
+1. **test_observation_size_and_non_zero()**: Verifies size=62 and non-zero content
 2. **test_technical_indicators_present()**: Checks indicators are in correct positions
 3. **test_cvd_garch_yangzhang_in_obs()**: Verifies specific indicators appear
-4. **test_observations_in_training_env()**: Tests training scenario with obs_size=56
+4. **test_observations_in_training_env()**: Tests training scenario with obs_size=62
 5. **test_observation_works_without_indicators()**: Tests fallback mode
 
-**Note**: Verify that `tests/test_technical_indicators_in_obs.py` exists and is updated to reflect N_FEATURES=56.
+**Note**: Verify that `tests/test_technical_indicators_in_obs.py` exists and is updated to reflect N_FEATURES=62.
 
 ## Fallback Behavior
 
@@ -239,7 +239,7 @@ If technical indicators are missing from the dataframe:
 - CVD/GARCH/Yang-Zhang: Default to 0.0 (neutral)
 - Fear & Greed: Defaults to 50.0 (neutral)
 
-The observation vector is always constructed with the correct size (56), but may contain more zeros if indicators are unavailable.
+The observation vector is always constructed with the correct size (62), but may contain more zeros if indicators are unavailable.
 
 ## Usage Examples
 
@@ -252,9 +252,9 @@ from train_model_multi_patch import create_envs
 # Environment automatically loads data with technical indicators
 env = TradingEnv(df=df_with_indicators, ...)
 
-# Observation is automatically constructed with all 56 features
+# Observation is automatically constructed with all 62 features
 obs, info = env.reset()
-assert obs.shape == (56,)
+assert obs.shape == (62,)
 ```
 
 ### In Production
@@ -292,10 +292,10 @@ After updating `lob_state_cython.pyx`, you MUST recompile:
 python setup.py build_ext --inplace
 ```
 
-This will update `lob_state_cython.N_FEATURES` to return 56.
+This will update `lob_state_cython.N_FEATURES` to return 62.
 
 ---
 
-**Last Updated**: 2025-11-11 (Size corrected from 43 to 56, EXT_NORM_DIM expanded from 8 to 21)
+**Last Updated**: 2025-11-11 (Size corrected from 43 to 62, EXT_NORM_DIM expanded from 8 to 21)
 **Authors**: Technical Indicators Integration Task
 **Related Files**: `mediator.py`, `obs_builder.pyx`, `prepare_and_run.py`, `feature_config.py`, `lob_state_cython.pyx`, `trading_patchnew.py`

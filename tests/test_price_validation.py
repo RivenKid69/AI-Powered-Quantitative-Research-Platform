@@ -70,7 +70,7 @@ class TestPriceValidation:
             "max_num_tokens": 1,
             "num_tokens": 1,
             "norm_cols_values": np.zeros(21, dtype=np.float32),
-            "out_features": np.zeros(56, dtype=np.float32),
+            "out_features": np.zeros(62, dtype=np.float32),
         }
 
     def test_valid_price_inputs(self):
@@ -273,7 +273,7 @@ class TestPriceValidation:
         params = self.valid_params.copy()
 
         # Set up realistic market data
-        params["price"] = 51234.56
+        params["price"] = 51234.62
         params["prev_price"] = 51000.00
         params["log_volume_norm"] = 0.75
         params["rel_volume"] = 0.82
@@ -320,8 +320,8 @@ class TestPriceValidation:
         obs = params["out_features"]
 
         # Validate observation properties
-        assert obs.shape == (56,), f"Expected shape (56,), got {obs.shape}"
-        assert obs[0] == pytest.approx(51234.56), "First feature should be price"
+        assert obs.shape == (62,), f"Expected shape (62,), got {obs.shape}"
+        assert obs[0] == pytest.approx(51234.62), "First feature should be price"
 
         # Check that observation is well-formed
         non_zero_count = np.count_nonzero(obs)
@@ -400,7 +400,7 @@ class TestPriceValidationErrorMessages:
             "max_num_tokens": 1,
             "num_tokens": 1,
             "norm_cols_values": np.zeros(21, dtype=np.float32),
-            "out_features": np.zeros(56, dtype=np.float32),
+            "out_features": np.zeros(62, dtype=np.float32),
         }
 
     def test_error_message_contains_diagnostic_info(self):
@@ -471,7 +471,7 @@ class TestPortfolioValidation:
             "max_num_tokens": 1,
             "num_tokens": 1,
             "norm_cols_values": np.zeros(21, dtype=np.float32),
-            "out_features": np.zeros(56, dtype=np.float32),
+            "out_features": np.zeros(62, dtype=np.float32),
         }
 
     def test_nan_cash_raises_error(self):

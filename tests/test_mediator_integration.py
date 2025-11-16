@@ -209,7 +209,7 @@ class TestFullPipelineIntegration:
         validated_prev = self._validate_critical_price(prev_price, "prev_price")
 
         # Step 2: obs_builder (should also validate)
-        obs = np.zeros(56, dtype=np.float32)
+        obs = np.zeros(62, dtype=np.float32)
         norm_cols = np.zeros(21, dtype=np.float32)
 
         build_observation_vector(
@@ -268,7 +268,7 @@ class TestFullPipelineIntegration:
             pytest.skip("obs_builder not compiled")
 
         # Simulate bypassing mediator validation (shouldn't happen in prod)
-        obs = np.zeros(56, dtype=np.float32)
+        obs = np.zeros(62, dtype=np.float32)
         norm_cols = np.zeros(21, dtype=np.float32)
 
         # obs_builder should catch this as second defense

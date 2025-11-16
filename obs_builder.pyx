@@ -221,8 +221,12 @@ cdef void build_observation_vector_c(
     cdef double bb_width
     cdef bint ma5_valid
     cdef bint ma20_valid
+    cdef bint rsi_valid
     cdef bint macd_valid
     cdef bint macd_signal_valid
+    cdef bint momentum_valid
+    cdef bint cci_valid
+    cdef bint obv_valid
     cdef bint bb_valid
     cdef double min_bb_width
     cdef int padded_tokens
@@ -249,8 +253,15 @@ cdef void build_observation_vector_c(
     feature_idx += 1
 
     # Technical indicators with NaN handling (early bars may not have enough history)
-    # RSI: 50.0 = neutral (no trend signal)
-    out_features[feature_idx] = rsi14 if not isnan(rsi14) else 50.0
+    # RSI: with validity flag to distinguish "no data" from "neutral zone"
+    # CRITICAL: RSI=50.0 can mean either:
+    #   1. No data yet (first ~14 bars for RSI warmup) → is_rsi_valid = 0.0
+    #   2. Neutral zone (neither overbought nor oversold) → is_rsi_valid = 1.0, rsi = 50.0
+    # Validity flag prevents ambiguity (consistent with ma5/ma20/macd pattern)
+    rsi_valid = not isnan(rsi14)
+    out_features[feature_idx] = rsi14 if rsi_valid else 50.0
+    feature_idx += 1
+    out_features[feature_idx] = 1.0 if rsi_valid else 0.0
     feature_idx += 1
 
     # MACD: with validity flags to distinguish "no data" from "no divergence"
@@ -270,20 +281,41 @@ cdef void build_observation_vector_c(
     out_features[feature_idx] = 1.0 if macd_signal_valid else 0.0
     feature_idx += 1
 
-    # Momentum: 0.0 = no price movement
-    out_features[feature_idx] = momentum if not isnan(momentum) else 0.0
+    # Momentum: with validity flag to distinguish "no data" from "no movement"
+    # CRITICAL: Momentum=0.0 can mean either:
+    #   1. No data yet (first ~10 bars for momentum warmup) → is_momentum_valid = 0.0
+    #   2. No price movement (price unchanged over 10 bars) → is_momentum_valid = 1.0, momentum = 0.0
+    # Validity flag prevents ambiguity (consistent with other indicators)
+    momentum_valid = not isnan(momentum)
+    out_features[feature_idx] = momentum if momentum_valid else 0.0
+    feature_idx += 1
+    out_features[feature_idx] = 1.0 if momentum_valid else 0.0
     feature_idx += 1
 
     # ATR: default to 1% of price (small volatility estimate)
     out_features[feature_idx] = atr if not isnan(atr) else <float>(price_d * 0.01)
     feature_idx += 1
 
-    # CCI: 0.0 = at average level
-    out_features[feature_idx] = cci if not isnan(cci) else 0.0
+    # CCI: with validity flag to distinguish "no data" from "at average level"
+    # CRITICAL: CCI=0.0 can mean either:
+    #   1. No data yet (first ~20 bars for CCI warmup) → is_cci_valid = 0.0
+    #   2. Price at average level (typical price = SMA) → is_cci_valid = 1.0, cci = 0.0
+    # Validity flag prevents ambiguity (consistent with other indicators)
+    cci_valid = not isnan(cci)
+    out_features[feature_idx] = cci if cci_valid else 0.0
+    feature_idx += 1
+    out_features[feature_idx] = 1.0 if cci_valid else 0.0
     feature_idx += 1
 
-    # OBV: always valid, but handle NaN defensively
-    out_features[feature_idx] = obv if not isnan(obv) else 0.0
+    # OBV: with validity flag to distinguish "no data" from "balanced volume"
+    # CRITICAL: OBV=0.0 can mean either:
+    #   1. No data yet (first bar, no volume history) → is_obv_valid = 0.0
+    #   2. Balanced buy/sell volume (cumulative = 0) → is_obv_valid = 1.0, obv = 0.0
+    # Validity flag prevents ambiguity (consistent with other indicators)
+    obv_valid = not isnan(obv)
+    out_features[feature_idx] = obv if obv_valid else 0.0
+    feature_idx += 1
+    out_features[feature_idx] = 1.0 if obv_valid else 0.0
     feature_idx += 1
 
     # CRITICAL: Derived price/volatility signals (bar-to-bar return for current timeframe)

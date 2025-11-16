@@ -60,7 +60,7 @@ class TestPrevPriceRetBarValidation:
             "max_num_tokens": 10,
             "num_tokens": 5,
             "norm_cols_values": np.zeros(5, dtype=np.float32),
-            "out_features": np.zeros(56, dtype=np.float32),
+            "out_features": np.zeros(62, dtype=np.float32),
         }
 
     # ========================================================================
