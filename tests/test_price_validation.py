@@ -70,7 +70,7 @@ class TestPriceValidation:
             "max_num_tokens": 1,
             "num_tokens": 1,
             "norm_cols_values": np.zeros(21, dtype=np.float32),
-            "out_features": np.zeros(62, dtype=np.float32),
+            "out_features": np.zeros(63, dtype=np.float32),
         }
 
     def test_valid_price_inputs(self):
@@ -279,7 +279,7 @@ class TestPriceValidation:
         params["rel_volume"] = 0.82
         params["ma5"] = 51100.0
         params["ma20"] = 50800.0
-        params["rsi14"] = 62.5
+        params["rsi14"] = 63.5
         params["macd"] = 15.5
         params["macd_signal"] = 12.3
         params["momentum"] = 20.0
@@ -320,7 +320,7 @@ class TestPriceValidation:
         obs = params["out_features"]
 
         # Validate observation properties
-        assert obs.shape == (62,), f"Expected shape (62,), got {obs.shape}"
+        assert obs.shape == (63,), f"Expected shape (63,), got {obs.shape}"
         assert obs[0] == pytest.approx(51234.56), "First feature should be price"
 
         # Check that observation is well-formed
@@ -400,7 +400,7 @@ class TestPriceValidationErrorMessages:
             "max_num_tokens": 1,
             "num_tokens": 1,
             "norm_cols_values": np.zeros(21, dtype=np.float32),
-            "out_features": np.zeros(62, dtype=np.float32),
+            "out_features": np.zeros(63, dtype=np.float32),
         }
 
     def test_error_message_contains_diagnostic_info(self):
@@ -471,7 +471,7 @@ class TestPortfolioValidation:
             "max_num_tokens": 1,
             "num_tokens": 1,
             "norm_cols_values": np.zeros(21, dtype=np.float32),
-            "out_features": np.zeros(62, dtype=np.float32),
+            "out_features": np.zeros(63, dtype=np.float32),
         }
 
     def test_nan_cash_raises_error(self):

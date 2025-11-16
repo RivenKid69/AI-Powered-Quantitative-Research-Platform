@@ -2,13 +2,13 @@
 
 ## Overview
 
-This document describes the complete structure of the observation vector (62 features) used by the trading agent. The observation vector is constructed by `obs_builder.build_observation_vector()` and populated with technical indicators from `prepare_and_run.py` and market microstructure data.
+This document describes the complete structure of the observation vector (63 features) used by the trading agent. The observation vector is constructed by `obs_builder.build_observation_vector()` and populated with technical indicators from `prepare_and_run.py` and market microstructure data.
 
-**Total Features**: 62 (with max_num_tokens=1 and EXT_NORM_DIM=21)
+**Total Features**: 63 (with max_num_tokens=1 and EXT_NORM_DIM=21)
 
 **Note**: This document reflects the current implementation with validity flags for all technical indicators. The actual feature count is calculated dynamically in `feature_config.py` based on block sizes.
 
-**Validity Flags (NEW)**: Added 6 explicit validity flags for indicators (rsi, macd, macd_signal, momentum, cci, obv) to eliminate ambiguity between "no data yet" (warmup period) and "meaningful zero value". This increased the observation size from 56 to 62 features.
+**Validity Flags (NEW)**: Added 7 explicit validity flags for indicators (rsi, macd, macd_signal, momentum, atr, cci, obv) to eliminate ambiguity between "no data yet" (warmup period) and "meaningful zero value". This increased the observation size from 56 to 62 features (6 flags), then to 63 features (7 flags, added ATR).
 
 ## Feature Layout
 
@@ -34,9 +34,9 @@ This document describes the complete structure of the observation vector (62 fea
 | 5 | `ma20` | `df['sma_15']` | 15-period SMA (mapped to ma20 slot) |
 | 6 | `ma20_valid` | Computed | 1.0 if ma20 is not NaN, 0.0 otherwise |
 
-### Positions 7-19: Technical Indicators (13 features)
+### Positions 7-20: Technical Indicators (14 features)
 
-**Note**: This section now includes 6 NEW validity flags to distinguish "no data yet" from "meaningful zero value".
+**Note**: This section now includes 7 validity flags to distinguish "no data yet" from "meaningful zero value".
 
 | Position | Feature | Source | Description |
 |----------|---------|--------|-------------|
@@ -49,64 +49,65 @@ This document describes the complete structure of the observation vector (62 fea
 | 13 | `momentum` | Simulator (`get_momentum`) | Price momentum, fallback: 0.0 |
 | 14 | `momentum_valid` | Computed | **NEW**: 1.0 if momentum valid, 0.0 if no data yet (warmup < 10 bars) |
 | 15 | `atr` | Simulator (`get_atr`) | Average True Range (volatility), fallback: price*0.01 |
-| 16 | `cci` | Simulator (`get_cci`) | Commodity Channel Index, fallback: 0.0 |
-| 17 | `cci_valid` | Computed | **NEW**: 1.0 if cci valid, 0.0 if no data yet (warmup < 20 bars) |
-| 18 | `obv` | Simulator (`get_obv`) | On-Balance Volume, fallback: 0.0 |
-| 19 | `obv_valid` | Computed | **NEW**: 1.0 if obv valid, 0.0 if no data yet (warmup < 1 bar) |
+| 16 | `atr_valid` | Computed | **NEW v63**: 1.0 if atr valid, 0.0 if no data yet (warmup < 14 bars). **CRITICAL**: Prevents NaN in vol_proxy |
+| 17 | `cci` | Simulator (`get_cci`) | Commodity Channel Index, fallback: 0.0 |
+| 18 | `cci_valid` | Computed | 1.0 if cci valid, 0.0 if no data yet (warmup < 20 bars) |
+| 19 | `obv` | Simulator (`get_obv`) | On-Balance Volume, fallback: 0.0 |
+| 20 | `obv_valid` | Computed | 1.0 if obv valid, 0.0 if no data yet (warmup < 1 bar) |
 
 **Why validity flags?** Indicators like RSI (neutral = 50) and MACD (no divergence = 0) create ambiguity: does value=50 or value=0 mean "no data yet" or "meaningful signal"? Validity flags eliminate this confusion for the neural network.
 
-### Positions 20-21: Derived Price/Volatility Signals (2 features)
+### Positions 21-22: Derived Price/Volatility Signals (2 features)
 
 | Position | Feature | Formula | Description |
 |----------|---------|---------|-------------|
-| 20 | `ret_bar` | `tanh((price - prev_price) / (prev_price + 1e-8))` | Bar-to-bar return (normalized) |
-| 21 | `vol_proxy` | `tanh(log1p(atr / (price + 1e-8)))` | Volatility proxy based on ATR |
+| 21 | `ret_bar` | `tanh((price - prev_price) / (prev_price + 1e-8))` | Bar-to-bar return (normalized) |
+| 22 | `vol_proxy` | `tanh(log1p(atr / (price + 1e-8)))` if atr_valid else fallback | **Volatility proxy based on ATR (uses atr_valid flag!)** |
 
-### Positions 22-27: Agent State (6 features)
+### Positions 23-28: Agent State (6 features)
 
 | Position | Feature | Formula | Description |
 |----------|---------|---------|-------------|
-| 22 | `cash_ratio` | `cash / (cash + position_value)` | Proportion of cash in portfolio |
-| 23 | `position_ratio` | `tanh(position_value / total_worth)` | Position size relative to portfolio |
-| 24 | `vol_imbalance` | `state.last_vol_imbalance` | Volume imbalance from last step |
-| 25 | `trade_intensity` | `state.last_trade_intensity` | Trade intensity from last step |
-| 26 | `realized_spread` | `state.last_realized_spread` | Realized spread from last execution |
-| 27 | `agent_fill_ratio` | `state.last_agent_fill_ratio` | Fill ratio of agent orders |
+| 23 | `cash_ratio` | `cash / (cash + position_value)` | Proportion of cash in portfolio |
+| 24 | `position_ratio` | `tanh(position_value / total_worth)` | Position size relative to portfolio |
+| 25 | `vol_imbalance` | `state.last_vol_imbalance` | Volume imbalance from last step |
+| 26 | `trade_intensity` | `state.last_trade_intensity` | Trade intensity from last step |
+| 27 | `realized_spread` | `state.last_realized_spread` | Realized spread from last execution |
+| 28 | `agent_fill_ratio` | `state.last_agent_fill_ratio` | Fill ratio of agent orders |
 
-### Positions 28-30: Microstructure Proxies (3 features)
+### Positions 29-31: Microstructure Proxies (3 features)
 
 **Note**: These are adapted for 4h timeframe using indicator-based proxies instead of high-frequency order flow data.
 
 | Position | Feature | Formula | Description |
 |----------|---------|---------|-------------|
-| 28 | `price_momentum` | `tanh(momentum / (price * 0.01))` if momentum_valid else 0.0 | Price momentum strength (uses validity flag) |
-| 29 | `bb_squeeze` | `tanh((bb_upper - bb_lower) / price)` if bb_valid else 0.0 | Bollinger Band squeeze (volatility regime) |
-| 30 | `trend_strength` | `tanh((macd - macd_signal) / (price * 0.01))` if macd_valid and macd_signal_valid else 0.0 | MACD divergence (uses validity flags) |
+| 29 | `price_momentum` | `tanh(momentum / (price * 0.01))` if momentum_valid else 0.0 | Price momentum strength (uses validity flag) |
+| 30 | `bb_squeeze` | `tanh((bb_upper - bb_lower) / price)` if bb_valid else 0.0 | Bollinger Band squeeze (volatility regime) |
+| 31 | `trend_strength` | `tanh((macd - macd_signal) / (price * 0.01))` if macd_valid and macd_signal_valid else 0.0 | MACD divergence (uses validity flags) |
 
-### Positions 31-32: Bollinger Bands (2 features)
-
-| Position | Feature | Source | Description |
-|----------|---------|--------|-------------|
-| 31 | `bb_position` | Computed from `bb_lower`, `bb_upper` | Price position within Bollinger Bands (0.5 if unavailable) |
-| 32 | `bb_width` | `(bb_upper - bb_lower) / price` | Bollinger Band width (normalized, 0.0 if unavailable) |
-
-### Positions 33-35: Event Metadata (3 features)
+### Positions 32-33: Bollinger Bands Context (2 features)
 
 | Position | Feature | Source | Description |
 |----------|---------|--------|-------------|
-| 33 | `is_high_importance` | `df['is_high_importance']` | Binary flag for high-importance events |
-| 34 | `time_since_event` | `tanh(df['time_since_event'] / 24.0)` | Hours since last major event (normalized) |
-| 35 | `risk_off_flag` | `fear_greed < 25` | Binary flag for risk-off market regime |
+| 32 | `bb_position` | Computed from `bb_lower`, `bb_upper` | Price position within Bollinger Bands (0.5 if unavailable) |
+| 33 | `bb_width` | `(bb_upper - bb_lower) / price` | Bollinger Band width (normalized, 0.0 if unavailable) |
 
-### Positions 36-37: Fear & Greed Index (2 features)
+### Positions 34-36: Event Metadata (3 features)
 
 | Position | Feature | Source | Description |
 |----------|---------|--------|-------------|
-| 36 | `fear_greed_value` | `df['fear_greed_value'] / 100` | Fear & Greed Index (0-100 normalized) |
-| 37 | `fear_greed_indicator` | Computed | 1.0 if F&G data available, 0.0 otherwise |
+| 34 | `is_high_importance` | `df['is_high_importance']` | Binary flag for high-importance events |
+| 35 | `time_since_event` | `tanh(df['time_since_event'] / 24.0)` | Hours since last major event (normalized) |
+| 36 | `risk_off_flag` | `fear_greed < 25` | Binary flag for risk-off market regime |
 
-### Positions 38-58: External Normalized Columns (21 features - EXT_NORM_DIM)
+### Positions 37-38: Fear & Greed Index (2 features)
+
+| Position | Feature | Source | Description |
+|----------|---------|--------|-------------|
+| 37 | `fear_greed_value` | `df['fear_greed_value'] / 100` | Fear & Greed Index (0-100 normalized) |
+| 38 | `fear_greed_indicator` | Computed | 1.0 if F&G data available, 0.0 otherwise |
+
+### Positions 39-59: External Normalized Columns (21 features - EXT_NORM_DIM)
 
 **These positions contain advanced technical indicators from `prepare_and_run.py`**:
 
@@ -115,37 +116,35 @@ This document describes the complete structure of the observation vector (62 fea
 Confirmed features include:
 | Position | Feature | Source | Description |
 |----------|---------|--------|-------------|
-| 38 | `cvd_24h` | `df['cvd_24h']` | Cumulative Volume Delta (24-hour) |
-| 39 | `cvd_168h` | `df['cvd_168h']` | Cumulative Volume Delta (168-hour / 1-week) |
-| 40 | `yang_zhang_24h` | `df['yang_zhang_24h']` | Yang-Zhang volatility estimator (24h) |
-| 41 | `yang_zhang_168h` | `df['yang_zhang_168h']` | Yang-Zhang volatility estimator (168h) |
-| 42 | `garch_12h` | `df['garch_12h']` | GARCH(1,1) conditional volatility (12h) |
-| 43 | `garch_24h` | `df['garch_24h']` | GARCH(1,1) conditional volatility (24h) |
-| 44 | `ret_15m` | `df['ret_15m']` | 15-minute return |
-| 45 | `ret_60m` | `df['ret_60m']` | 60-minute return |
-| 46-58 | Additional features | To be documented | Taker buy ratio derivatives and other technical features |
+| 39 | `cvd_24h` | `df['cvd_24h']` | Cumulative Volume Delta (24-hour) |
+| 40 | `cvd_7d` | `df['cvd_7d']` | Cumulative Volume Delta (7-day) |
+| 41 | `yang_zhang_48h` | `df['yang_zhang_48h']` | Yang-Zhang volatility estimator (48h) |
+| 42 | `yang_zhang_7d` | `df['yang_zhang_7d']` | Yang-Zhang volatility estimator (7d) |
+| 43 | `garch_200h` | `df['garch_200h']` | GARCH(1,1) conditional volatility (200h) |
+| 44 | `garch_14d` | `df['garch_14d']` | GARCH(1,1) conditional volatility (14d) |
+| 45-59 | Additional 15 features | `df[...]` | Returns, taker buy ratio derivatives, and other technical indicators (see verify_63_features.py for complete list) |
 
-**Note**: All values in positions 38-58 are normalized using `tanh()` to keep them in the range [-1, 1].
+**Note**: All values in positions 39-59 are normalized using `tanh()` to keep them in the range [-1, 1].
 
-### Positions 59-60: Token Metadata (2 features)
+### Positions 60-61: Token Metadata (2 features)
 
 | Position | Feature | Formula | Description |
 |----------|---------|--------|-------------|
-| 59 | `num_tokens_norm` | `num_tokens / max_num_tokens` | Number of tokens normalized |
-| 60 | `token_id_norm` | `token_id / max_num_tokens` | Token ID normalized |
+| 60 | `num_tokens_norm` | `num_tokens / max_num_tokens` | Number of tokens normalized |
+| 61 | `token_id_norm` | `token_id / max_num_tokens` | Token ID normalized |
 
-### Position 61: One-Hot Token Encoding (variable size)
+### Position 62: One-Hot Token Encoding (variable size)
 
 With `max_num_tokens=1` (default), this adds 1 feature:
 
 | Position | Feature | Description |
 |----------|---------|-------------|
-| 61 | Token 0 | One-hot encoding (1.0 for current token, 0.0 otherwise) |
+| 62 | Token 0 | One-hot encoding (1.0 for current token, 0.0 otherwise) |
 
 **Total with max_num_tokens=1**:
-- Bar (3) + MA features (4) + Indicators with validity flags (13) + Derived (2) + Agent (6) + Microstructure (3) + Bollinger Bands (2) + Event Metadata (3) + Fear & Greed (2) + External/EXT_NORM_DIM (21) + Token metadata (2) + Token one-hot (1) = **62 features**
+- Bar (3) + MA features (4) + Indicators with validity flags (14) + Derived (2) + Agent (6) + Microstructure (3) + Bollinger Bands (2) + Event Metadata (3) + Fear & Greed (2) + External/EXT_NORM_DIM (21) + Token metadata (2) + Token one-hot (1) = **63 features**
 
-**Calculation**: 3 + 4 + 13 + 2 + 6 + 3 + 2 + 3 + 2 + 21 + 2 + 1 = **62 features**
+**Breakdown**: 3 + 4 + 14 + 2 + 6 + 3 + 2 + 3 + 2 + 21 + 2 + 1 = **63** ✅
 
 ## Data Flow
 
@@ -176,7 +175,7 @@ mediator.py
     ↓
     Calls obs_builder.build_observation_vector()
     ↓
-    Returns observation vector (62 features)
+    Returns observation vector (63 features)
     ↓
  RL Agent (DistributionalPPO)
 ```

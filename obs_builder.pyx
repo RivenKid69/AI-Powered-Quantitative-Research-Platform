@@ -225,6 +225,7 @@ cdef void build_observation_vector_c(
     cdef bint macd_valid
     cdef bint macd_signal_valid
     cdef bint momentum_valid
+    cdef bint atr_valid
     cdef bint cci_valid
     cdef bint obv_valid
     cdef bint bb_valid
@@ -293,8 +294,15 @@ cdef void build_observation_vector_c(
     out_features[feature_idx] = 1.0 if momentum_valid else 0.0
     feature_idx += 1
 
-    # ATR: default to 1% of price (small volatility estimate)
-    out_features[feature_idx] = atr if not isnan(atr) else <float>(price_d * 0.01)
+    # ATR with validity flag
+    # CRITICAL: ATR requires ~14 bars for first valid value (Wilder's smoothing EMA_14)
+    # Fallback price*0.01 (1%) creates AMBIGUITY: calm market (1%) vs insufficient data (1%)
+    # Validity flag eliminates this: model can distinguish real low volatility from missing data
+    # IMPORTANT: This flag is used by vol_proxy calculation to prevent NaN propagation
+    atr_valid = not isnan(atr)
+    out_features[feature_idx] = atr if atr_valid else <float>(price_d * 0.01)
+    feature_idx += 1
+    out_features[feature_idx] = 1.0 if atr_valid else 0.0
     feature_idx += 1
 
     # CCI with validity flag
@@ -318,7 +326,7 @@ cdef void build_observation_vector_c(
     feature_idx += 1
 
     # CRITICAL: Derived price/volatility signals (bar-to-bar return for current timeframe)
-    # ret_bar calculation (feature index 20, was 14 before adding validity flags):
+    # ret_bar calculation (feature index 22, was 14 in 56-feature, 20 in 62-feature):
     # - Formula: tanh((price_d - prev_price_d) / (prev_price_d + 1e-8))
     # - Numerator: price_d - prev_price_d (price change)
     # - Denominator: prev_price_d + 1e-8 (epsilon prevents division by zero)
@@ -350,7 +358,22 @@ cdef void build_observation_vector_c(
     out_features[feature_idx] = <float>ret_bar
     feature_idx += 1
 
-    vol_proxy = tanh(log1p(atr / (price_d + 1e-8)))
+    # vol_proxy calculation with ATR validity check to prevent NaN propagation
+    # CRITICAL: Must use atr_valid flag to prevent NaN when ATR is unavailable (first ~14 bars)
+    # Without this check, vol_proxy becomes NaN during warmup period, violating
+    # the core guarantee of "no NaN in observation vector"
+    #
+    # Research references:
+    # - IEEE 754: NaN propagates through arithmetic (log1p(NaN) = NaN, tanh(NaN) = NaN)
+    # - "Defense in Depth" (OWASP): Validate before use, not just at storage
+    # - Wilder (1978): ATR requires 14 bars minimum (EMA smoothing)
+    if atr_valid:
+        vol_proxy = tanh(log1p(atr / (price_d + 1e-8)))
+    else:
+        # Use fallback ATR value (1% of price) for vol_proxy calculation
+        # This ensures vol_proxy is always finite, even during warmup
+        atr_fallback = price_d * 0.01
+        vol_proxy = tanh(log1p(atr_fallback / (price_d + 1e-8)))
     out_features[feature_idx] = <float>vol_proxy
     feature_idx += 1
 

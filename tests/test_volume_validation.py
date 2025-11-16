@@ -70,7 +70,7 @@ class TestVolumeMetricValidation:
             "max_num_tokens": 1,
             "num_tokens": 1,
             "norm_cols_values": np.zeros(21, dtype=np.float32),
-            "out_features": np.zeros(62, dtype=np.float32),
+            "out_features": np.zeros(63, dtype=np.float32),
         }
 
     # ========================================================================
@@ -299,7 +299,7 @@ class TestVolumeMetricValidation:
         params["rel_volume"] = 0.82       # High relative volume
         params["ma5"] = 51100.0
         params["ma20"] = 50800.0
-        params["rsi14"] = 62.5
+        params["rsi14"] = 63.5
 
         # Execute
         build_observation_vector(**params)
@@ -307,7 +307,7 @@ class TestVolumeMetricValidation:
         obs = params["out_features"]
 
         # Validate observation properties
-        assert obs.shape == (62,), f"Expected shape (62,), got {obs.shape}"
+        assert obs.shape == (63,), f"Expected shape (63,), got {obs.shape}"
         assert obs[0] == pytest.approx(51234.56), "Price at index 0"
         assert obs[1] == pytest.approx(0.75), "log_volume_norm at index 1"
         assert obs[2] == pytest.approx(0.82), "rel_volume at index 2"
@@ -464,7 +464,7 @@ class TestVolumeMetricErrorMessages:
             "max_num_tokens": 1,
             "num_tokens": 1,
             "norm_cols_values": np.zeros(21, dtype=np.float32),
-            "out_features": np.zeros(62, dtype=np.float32),
+            "out_features": np.zeros(63, dtype=np.float32),
         }
 
     def test_error_message_contains_diagnostic_info(self):
