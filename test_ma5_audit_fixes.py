@@ -138,6 +138,24 @@ class TestIsFinalValidation(unittest.TestCase):
         feats = fp.update(bar)
         self.assertTrue(len(feats) > 0, "Bar without is_final should be processed (defaults to True)")
 
+    def test_is_final_none_rejected(self):
+        """EDGE CASE: is_final=None must be REJECTED (strict validation)."""
+        fp = FeaturePipe(spec=FeatureSpec(lookbacks_prices=[5]))
+
+        # Python dataclass allows None even with bool type hint!
+        bar = Bar(
+            ts=1000,
+            symbol="BTCUSDT",
+            open=Decimal("50000"),
+            high=Decimal("50100"),
+            low=Decimal("49900"),
+            close=Decimal("50050"),
+            is_final=None  # ← Edge case: explicitly None
+        )
+
+        feats = fp.update(bar)
+        self.assertEqual(feats, {}, "is_final=None must be rejected (not True)")
+
 
 class TestDecisionDelayValidation(unittest.TestCase):
     """Test decision_delay_ms validation in LeakGuard."""
@@ -172,6 +190,26 @@ class TestDecisionDelayValidation(unittest.TestCase):
 
         self.assertIn("must be >= 0", str(cm.exception))
         self.assertIn("future", str(cm.exception).lower())
+
+    def test_strict_mode_raises_error(self):
+        """STRICT MODE: decision_delay_ms=0 must raise ValueError if STRICT_LEAK_GUARD=true."""
+        import os
+        old_value = os.environ.get("STRICT_LEAK_GUARD")
+        try:
+            # Enable strict mode
+            os.environ["STRICT_LEAK_GUARD"] = "true"
+
+            with self.assertRaises(ValueError) as cm:
+                lg = LeakGuard(LeakConfig(decision_delay_ms=0))
+
+            self.assertIn("STRICT mode", str(cm.exception))
+            self.assertIn("decision_delay_ms=0", str(cm.exception))
+        finally:
+            # Restore original value
+            if old_value is None:
+                os.environ.pop("STRICT_LEAK_GUARD", None)
+            else:
+                os.environ["STRICT_LEAK_GUARD"] = old_value
 
 
 class TestTrainInferenceConsistency(unittest.TestCase):

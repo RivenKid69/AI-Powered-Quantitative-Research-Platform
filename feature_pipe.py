@@ -339,7 +339,9 @@ class FeaturePipe:
         # CRITICAL GUARD: Reject non-final (unclosed) bars
         # Binance sends intermediate updates with is_final=False
         # Using unclosed bars creates forward-looking bias!
-        if not getattr(bar, 'is_final', True):
+        # STRICT: Only is_final=True (identity check) is accepted
+        # Rejects: False, None, 0, 1, "", "yes", [], etc.
+        if getattr(bar, 'is_final', True) is not True:
             return {}
 
         try:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional
+import os
 import warnings
 
 import numpy as np
@@ -43,6 +44,16 @@ class LeakGuard:
         # - Decisions at decision_ts = ts_ms + 0 = ts_ms
         # - Target from ts_ms → model sees immediate future!
         if self.cfg.decision_delay_ms == 0:
+            # STRICT MODE: Environment variable can enforce hard error
+            if os.getenv("STRICT_LEAK_GUARD", "").lower() == "true":
+                raise ValueError(
+                    "CRITICAL: decision_delay_ms=0 not allowed in STRICT mode! "
+                    "Features and targets are computed at the same timestamp, creating "
+                    "forward-looking bias. Recommended: decision_delay_ms >= 8000. "
+                    "To override: unset STRICT_LEAK_GUARD or set to 'false'. "
+                    "Reference: de Prado (2018) 'Advances in Financial Machine Learning', Ch. 7"
+                )
+            # Default: warning (backward compatible)
             warnings.warn(
                 "CRITICAL: decision_delay_ms=0 creates FORWARD-LOOKING BIAS! "
                 "Features and targets are computed at the same timestamp, allowing "
