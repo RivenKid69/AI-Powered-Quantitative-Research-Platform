@@ -43,7 +43,14 @@ class LeakGuard:
     def __init__(self, cfg: Optional[LeakConfig] = None):
         self.cfg = cfg or LeakConfig()
 
-        # CRITICAL VALIDATION: Warn if decision_delay_ms is too low
+        # FIRST: Validate decision_delay_ms is non-negative (hard constraint)
+        if self.cfg.decision_delay_ms < 0:
+            raise ValueError(
+                f"decision_delay_ms must be >= 0, got {self.cfg.decision_delay_ms}. "
+                "Negative delay would create features from the future!"
+            )
+
+        # SECOND: Warn if decision_delay_ms is too low (soft constraint with strict mode)
         # Insufficient delay creates forward-looking bias in training:
         # - Features computed at ts_ms
         # - Decisions at decision_ts = ts_ms + delay
@@ -74,7 +81,7 @@ class LeakGuard:
                     stacklevel=2
                 )
             else:
-                # Warning for delays below recommended minimum
+                # Warning for delays below recommended minimum (1-7999 ms)
                 warnings.warn(
                     f"WARNING: decision_delay_ms={self.cfg.decision_delay_ms} is below recommended minimum of {RECOMMENDED_MIN_DELAY_MS}ms! "
                     "Insufficient delay may create forward-looking bias in training. "
@@ -84,13 +91,6 @@ class LeakGuard:
                     UserWarning,
                     stacklevel=2
                 )
-
-        # Validate decision_delay_ms is non-negative
-        if self.cfg.decision_delay_ms < 0:
-            raise ValueError(
-                f"decision_delay_ms must be >= 0, got {self.cfg.decision_delay_ms}. "
-                "Negative delay would create features from the future!"
-            )
 
     def attach_decision_time(self, df: pd.DataFrame, *, ts_col: str = "ts_ms") -> pd.DataFrame:
         if ts_col not in df.columns:
