@@ -457,7 +457,491 @@
 
 ---
 
-**ЭТАП 1 ЗАВЕРШЕН. ГОТОВ К ПЕРЕХОДУ НА ЭТАП 2.**
+**ЭТАП 1 ЗАВЕРШЕН.**
+
+---
+
+# ЭТАП 2/10: Признаки 6-11 (Validity Flags + Technical Indicators)
+
+## Признаки 6-11 (MA20 Validity + RSI + MACD Group)
+
+---
+
+### ПРИЗНАК 6: `is_ma20_valid` (Флаг валидности MA20)
+
+**Индекс:** 6
+**Тип:** float32
+**Диапазон:** {0.0, 1.0} (бинарный)
+**Источник:** `obs_builder.pyx:250-253`
+**Формула:** `1.0 if not isnan(ma20) else 0.0`
+**Обработка:** Прямая запись
+
+#### ПУТЬ ДАННЫХ:
+1. **Проверка** (obs_builder.pyx:250): `ma20_valid = not isnan(ma20)`
+2. **Запись** (obs_builder.pyx:253): `out_features[6] = 1.0 if ma20_valid else 0.0`
+
+#### ИСКАЖЕНИЯ И МИТИГАЦИИ:
+
+**1. Identical to is_ma5_valid Implementation (КОНСИСТЕНТНОСТЬ)**
+- **Источник:** Тот же подход что для MA5
+- **Warmup period:** 21 bars (84 часа для 4h)
+- **Митигация:** ИДЕАЛЬНАЯ - см. анализ is_ma5_valid
+- **BEST PRACTICE COMPLIANCE:** ✅ Полное
+
+**2. No Specific Issues**
+- Все замечания из is_ma5_valid анализа применимы
+- Консистентная реализация across всех MA validity flags
+
+---
+
+### ПРИЗНАК 7: `rsi14` (Relative Strength Index)
+
+**Индекс:** 7
+**Тип:** float32
+**Диапазон:** [0, 100] (теоретически) или 50.0 (fallback)
+**Источник:** `mediator.py:1087` → `_extract_technical_indicators()`
+**Название колонки:** `rsi`
+**Обработка:** `obs_builder.pyx:262-263` - с validity flag
+
+#### ПУТЬ ДАННЫХ:
+1. **Генерация** → `transformers.py` или другой источник создает `rsi`
+2. **Извлечение** (mediator.py:1087): `_get_safe_float(row, "rsi", 50.0)`
+   - Default: `50.0` (neutral RSI)
+3. **Проверка валидности** (obs_builder.pyx:261-264):
+   ```cython
+   rsi_valid = not isnan(rsi14)
+   out_features[feature_idx] = rsi14 if rsi_valid else 50.0
+   feature_idx += 1
+   out_features[feature_idx] = 1.0 if rsi_valid else 0.0  # validity flag
+   ```
+4. **Запись** →
+   - `out_features[7] = rsi14` (или 50.0)
+   - `out_features[8] = is_rsi14_valid` (следующий признак)
+
+#### ИСКАЖЕНИЯ И МИТИГАЦИИ:
+
+**1. Ambiguous Fallback Value 50.0 (КРИТИЧНО)**
+- **Источник:** RSI = 50.0 имеет два значения:
+  1. Реальная нейтральная зона (neither overbought nor oversold)
+  2. Fallback для недостаточных данных
+- **Вероятность:** ГАРАНТИРОВАНА в первые ~14 баров
+- **Последствия:**
+  - Модель видит RSI=50 но не знает "это реальный нейтрал или warmup?"
+  - **КРИТИЧНО:** Validity flag РЕШАЕТ проблему!
+- **Пример:**
+  - Bar 10: RSI=NaN → rsi14=50.0, is_valid=0.0 (модель знает "fake 50")
+  - Bar 20: RSI=50.1 → rsi14=50.1, is_valid=1.0 (модель знает "real neutral")
+- **Митигация:** ОТЛИЧНАЯ (validity flag устраняет ambiguity)
+- **BEST PRACTICE REFERENCE:**
+  - obs_builder.pyx:258-260 комментарий: "Fallback 50.0 creates AMBIGUITY"
+  - "Validity flag eliminates this: model can distinguish valid neutral from missing data"
+
+**2. Warmup Period ~14 Bars (ОЖИДАЕМО)**
+- **Источник:** RSI формула требует минимум 14 периодов
+- **RSI Calculation:** Wilder's smoothing (EMA of gains/losses over 14 periods)
+- **Для 4h таймфрейма:** 14 bars = 56 часов = 2.33 дня
+- **Последствия:** Первые 2+ дня данных имеют is_rsi_valid=0.0
+- **Митигация:** ИДЕАЛЬНАЯ (validity flag явно указывает на warmup)
+- **BEST PRACTICE:** "Handle indicator warmup explicitly" (ta-lib)
+
+**3. No Normalization (ВНИМАНИЕ)**
+- **Источник:** RSI хранится в [0, 100] диапазоне
+- **Проблема:** Не нормализован в [-1, 1] как большинство признаков
+- **Сравнение:**
+  - `log_volume_norm`: tanh → [-1, 1]
+  - `ret_bar`: tanh → [-1, 1]
+  - `rsi14`: raw → [0, 100]
+- **Последствия:**
+  - Разный масштаб признаков
+  - Может замедлить обучение (gradient issues)
+- **Контраргумент:**
+  - RSI уже bounded [0, 100]
+  - Neural networks могут адаптироваться через layer normalization
+- **Альтернатива:** `(rsi14 - 50.0) / 50.0` → [-1, 1]
+- **BEST PRACTICE:** Mixed
+  - ✅ "Bounded indicators don't require normalization" (Technical Analysis)
+  - ⚠️ "Uniform feature scales improve convergence" (Deep Learning)
+- **Текущее решение:** Оставить как есть (модель адаптируется)
+
+**4. RSI Extreme Values (ИНФОРМАТИВНО)**
+- **Источник:** RSI может достичь 0 или 100 в экстремальных условиях
+- **Вероятность:** НИЗКАЯ (но возможна при сильных трендах)
+- **Примеры:**
+  - RSI = 0: Только падения за последние 14 баров (крайне редко)
+  - RSI = 100: Только росты за последние 14 баров (крайне редко)
+- **Последствия:**
+  - Сильный сигнал oversold/overbought
+  - Модель должна научиться использовать эти экстремумы
+- **Митигация:** НЕТ (это feature, не bug!)
+- **BEST PRACTICE:** "Extreme RSI values are valid trading signals" (Technical Analysis)
+
+**5. RSI Default 50.0 vs NaN Propagation (АРХИТЕКТУРНОЕ РЕШЕНИЕ)**
+- **Вопрос:** Почему default=50.0 в mediator.py:1087, а не float('nan')?
+- **Ответ:**
+  ```python
+  # mediator.py:1087
+  rsi14 = self._get_safe_float(row, "rsi", 50.0)  # default 50.0
+  # vs MA approach:
+  ma5 = self._get_safe_float(row, "sma_1200", float('nan'))  # default NaN
+  ```
+- **Причина:**
+  - Если `rsi` колонка отсутствует → return 50.0
+  - Если `rsi` = NaN → return 50.0
+  - В obs_builder.pyx: `rsi_valid = not isnan(rsi14)` будет True!
+- **ПРОБЛЕМА:** Validity flag НЕ ЛОВИТ отсутствующую колонку!
+- **Сценарий:**
+  1. DataFrame не содержит колонку `rsi`
+  2. `_get_safe_float` возвращает 50.0 (default)
+  3. `rsi_valid = not isnan(50.0)` = True
+  4. Модель думает что RSI=50 валиден, хотя данных нет!
+- **Митигация:** ЧАСТИЧНАЯ
+  - Работает если колонка есть но NaN
+  - НЕ работает если колонка отсутствует
+- **РЕКОМЕНДАЦИЯ:** Использовать float('nan') как default (как для MA)
+- **BEST PRACTICE VIOLATION:** "Explicit is better than implicit" (Zen of Python)
+
+---
+
+### ПРИЗНАК 8: `is_rsi14_valid` (Флаг валидности RSI)
+
+**Индекс:** 8
+**Тип:** float32
+**Диапазон:** {0.0, 1.0} (бинарный)
+**Источник:** `obs_builder.pyx:261-265`
+**Формула:** `1.0 if not isnan(rsi14) else 0.0`
+**Обработка:** Прямая запись
+
+#### ПУТЬ ДАННЫХ:
+1. **Проверка** (obs_builder.pyx:261): `rsi_valid = not isnan(rsi14)`
+2. **Запись** (obs_builder.pyx:264): `out_features[8] = 1.0 if rsi_valid else 0.0`
+
+#### ИСКАЖЕНИЯ И МИТИГАЦИИ:
+
+**1. Excellent Design Intent (ОТЛИЧНО)**
+- **Комментарий из кода** (obs_builder.pyx:258-260):
+  ```cython
+  # CRITICAL: RSI requires ~14 bars for first valid value
+  # Fallback 50.0 creates AMBIGUITY: neutral RSI (50) vs insufficient data (50)
+  # Validity flag eliminates this: model can distinguish valid neutral from missing data
+  ```
+- **BEST PRACTICE COMPLIANCE:** ✅ Полное соответствие
+- **Ссылки:**
+  - "Missing data indicators" (sklearn)
+  - "Incomplete Data - ML Trading" (OMSCS)
+
+**2. Inherited Issue from RSI Default (КРИТИЧНО)**
+- **Проблема:** См. RSI признак #7, issue #5
+- **Если колонка `rsi` отсутствует:**
+  - mediator возвращает 50.0 (не NaN)
+  - is_rsi14_valid = 1.0 (ложно положительный!)
+- **Последствия:** Модель не знает что RSI данных нет вообще
+- **Митигация:** Изменить default в mediator.py на float('nan')
+- **Текущий статус:** PARTIAL PROTECTION
+
+**3. No Confidence Gradient (ENHANCEMENT OPPORTUNITY)**
+- **Текущее:** Бинарный {0, 1}
+- **Альтернатива:** Confidence score [0, 1]
+  - Bars 0-13: confidence = 0.0 (warmup)
+  - Bar 14: confidence = 0.5 (minimum data)
+  - Bar 28+: confidence = 1.0 (stable RSI)
+- **Обоснование:**
+  - RSI на 14-м баре менее надежен чем на 100-м
+  - Wilder's smoothing стабилизируется постепенно
+- **BEST PRACTICE:** "Bayesian confidence estimation" (Probabilistic ML)
+- **Оценка:** MINOR enhancement (low priority)
+
+---
+
+### ПРИЗНАК 9: `macd` (Moving Average Convergence Divergence)
+
+**Индекс:** 9
+**Тип:** float32
+**Диапазон:** unbounded (может быть любым) или 0.0 (fallback)
+**Источник:** `mediator.py:1090-1103` → `_extract_technical_indicators()`
+**Обработка:** `obs_builder.pyx:272-273` - с validity flag
+
+#### ПУТЬ ДАННЫХ:
+1. **Инициализация** (mediator.py:1090): `macd = 0.0`
+2. **Попытка извлечения из симулятора** (mediator.py:1100-1103):
+   ```python
+   if sim is not None and hasattr(sim, "get_macd"):
+       try:
+           if hasattr(sim, "get_macd"):
+               macd = float(sim.get_macd(row_idx))
+       except Exception:
+           pass
+   ```
+3. **Проверка валидности** (obs_builder.pyx:271-274):
+   ```cython
+   macd_valid = not isnan(macd)
+   out_features[feature_idx] = macd if macd_valid else 0.0
+   feature_idx += 1
+   out_features[feature_idx] = 1.0 if macd_valid else 0.0  # validity flag
+   ```
+4. **Запись** →
+   - `out_features[9] = macd` (или 0.0)
+   - `out_features[10] = is_macd_valid` (следующий признак)
+
+#### ИСКАЖЕНИЯ И МИТИГАЦИИ:
+
+**1. Dual-Source Architecture (КРИТИЧНО - АРХИТЕКТУРНАЯ ПРОБЛЕМА)**
+- **Проблема:** MACD может приходить из двух источников:
+  1. MarketSimulator (`sim.get_macd(row_idx)`)
+  2. DataFrame колонка (НЕ РЕАЛИЗОВАНО в текущем коде!)
+- **Текущая реализация:**
+  - Только simulator source (mediator.py:1100-1103)
+  - НЕТ fallback к DataFrame колонке
+- **Последствия:**
+  - Если simulator отсутствует → macd = 0.0 всегда
+  - is_macd_valid = False всегда (NaN check)
+- **Сравнение с RSI:**
+  ```python
+  # RSI: извлекается из DataFrame
+  rsi14 = self._get_safe_float(row, "rsi", 50.0)
+  # MACD: только из simulator
+  macd = 0.0  # default
+  if sim is not None and hasattr(sim, "get_macd"):
+      macd = float(sim.get_macd(row_idx))
+  ```
+- **BEST PRACTICE VIOLATION:**
+  - "Single Source of Truth" (DDD)
+  - "Fallback chain for robustness" (Resilience Engineering)
+- **РЕКОМЕНДАЦИЯ:**
+  ```python
+  # Try DataFrame first, then simulator
+  macd = self._get_safe_float(row, "macd", float('nan'))
+  if math.isnan(macd) and sim is not None:
+      macd = float(sim.get_macd(row_idx))
+  ```
+
+**2. Silent Exception Swallowing (ОПАСНО)**
+- **Источник:** (mediator.py:1118)
+  ```python
+  try:
+      if hasattr(sim, "get_macd"):
+          macd = float(sim.get_macd(row_idx))
+  except Exception:
+      pass  # ПРОБЛЕМА: Молча игнорирует ошибки!
+  ```
+- **Последствия:**
+  - IndexError → macd=0.0 (молчание)
+  - TypeError → macd=0.0 (молчание)
+  - AttributeError → macd=0.0 (молчание)
+  - НЕТ логирования ошибки!
+- **Проблема:** Невозможно отладить проблемы с данными
+- **BEST PRACTICE VIOLATION:**
+  - "Never catch generic Exception" (Python best practices)
+  - "Log all failures" (Observability)
+- **РЕКОМЕНДАЦИЯ:**
+  ```python
+  try:
+      macd = float(sim.get_macd(row_idx))
+  except (IndexError, TypeError, ValueError) as e:
+      logger.warning(f"Failed to get MACD: {e}")
+      macd = float('nan')
+  ```
+
+**3. Warmup Period ~26 Bars (ОЖИДАЕМО)**
+- **Источник:** MACD формула
+  - EMA_fast = EMA(12)
+  - EMA_slow = EMA(26)
+  - MACD = EMA_fast - EMA_slow
+- **Minimum bars:** 26 (для EMA_slow)
+- **Для 4h таймфрейма:** 26 bars = 104 часа = 4.33 дня
+- **Митигация:** ИДЕАЛЬНАЯ (validity flag)
+- **BEST PRACTICE COMPLIANCE:** ✅
+
+**4. Ambiguous Fallback 0.0 (КРИТИЧНО)**
+- **Источник:** MACD = 0.0 имеет два значения:
+  1. EMA_fast = EMA_slow (нет дивергенции - реальный сигнал)
+  2. Fallback для недостаточных данных
+- **Комментарий из кода** (obs_builder.pyx:268-270):
+  ```cython
+  # CRITICAL: MACD requires ~26 bars for first valid value (12+26 EMA periods)
+  # Fallback 0.0 creates AMBIGUITY: no divergence (0) vs insufficient data (0)
+  # Validity flag eliminates this: model can distinguish valid zero from missing data
+  ```
+- **Митигация:** ОТЛИЧНАЯ (validity flag решает проблему)
+- **BEST PRACTICE COMPLIANCE:** ✅
+
+**5. No Normalization (КРИТИЧНО)**
+- **Источник:** MACD unbounded (может быть -1000 до +1000 для BTC)
+- **Проблема:**
+  - Не нормализован (в отличие от большинства признаков)
+  - Зависит от абсолютной цены актива
+- **Пример:**
+  - BTC $50k: MACD = 100 (небольшой тренд)
+  - BTC $100k: MACD = 200 (тот же % тренд, другой абсолют)
+- **Последствия:**
+  - Модель должна научиться масштабу для каждого актива
+  - Не работает для multi-asset моделей
+- **Альтернативы:**
+  - `macd / price` - нормализация к цене
+  - `tanh(macd / (price * 0.001))` - bounded нормализация
+- **BEST PRACTICE VIOLATION:**
+  - "Normalize features to similar scales" (sklearn)
+  - "Price-invariant features for multi-asset" (Quantitative Finance)
+- **Текущее решение:** Модель должна адаптироваться
+- **Оценка:** СРЕДНЯЯ критичность (зависит от use case)
+
+---
+
+### ПРИЗНАК 10: `is_macd_valid` (Флаг валидности MACD)
+
+**Индекс:** 10
+**Тип:** float32
+**Диапазон:** {0.0, 1.0} (бинарный)
+**Источник:** `obs_builder.pyx:271-275`
+**Формула:** `1.0 if not isnan(macd) else 0.0`
+**Обработка:** Прямая запись
+
+#### ПУТЬ ДАННЫХ:
+1. **Проверка** (obs_builder.pyx:271): `macd_valid = not isnan(macd)`
+2. **Запись** (obs_builder.pyx:274): `out_features[10] = 1.0 if macd_valid else 0.0`
+
+#### ИСКАЖЕНИЯ И МИТИГАЦИИ:
+
+**1. Inherited Issue from MACD Default (КРИТИЧНО)**
+- **Проблема:** mediator.py инициализирует `macd = 0.0` (не NaN!)
+- **Последствия:**
+  - Если simulator отсутствует или failback → macd=0.0
+  - `is_macd_valid = not isnan(0.0)` = True
+  - **ЛОЖНО ПОЛОЖИТЕЛЬНЫЙ!** Модель думает MACD валиден
+- **Сценарий:**
+  1. No simulator → macd=0.0 (line 1090)
+  2. is_macd_valid = True (потому что 0.0 не NaN)
+  3. Модель видит "MACD=0 (no divergence)" вместо "нет данных"
+- **BEST PRACTICE VIOLATION:** "Explicit missing data markers" (Data Engineering)
+- **РЕКОМЕНДАЦИЯ:** Инициализировать `macd = float('nan')` в mediator.py
+- **Текущий статус:** BROKEN (validity flag не работает как задумано!)
+
+**2. Try-Except Breaks Validity Detection (КРИТИЧНО)**
+- **Источник:** (mediator.py:1118) `except Exception: pass`
+- **Проблема:**
+  - Ошибка при `sim.get_macd()` → exception пойман молча
+  - macd остается 0.0 (не меняется на NaN)
+  - is_macd_valid = True (ложный сигнал!)
+- **Правильный подход:**
+  ```python
+  macd = float('nan')  # default
+  try:
+      macd = float(sim.get_macd(row_idx))
+  except Exception:
+      pass  # macd уже NaN
+  ```
+
+**3. Excellent Design Intent (IF FIXED)**
+- **Комментарий из кода** (obs_builder.pyx:268-270) - отличный дизайн
+- **НО:** Реализация в mediator.py ломает замысел
+- **Потенциал:** ВЫСОКИЙ (после исправления default на NaN)
+
+---
+
+### ПРИЗНАК 11: `macd_signal` (MACD Signal Line)
+
+**Индекс:** 11
+**Тип:** float32
+**Диапазон:** unbounded или 0.0 (fallback)
+**Источник:** `mediator.py:1091-1105` → `_extract_technical_indicators()`
+**Обработка:** `obs_builder.pyx:282-283` - с validity flag
+
+#### ПУТЬ ДАННЫХ:
+1. **Инициализация** (mediator.py:1091): `macd_signal = 0.0`
+2. **Попытка извлечения** (mediator.py:1104-1105):
+   ```python
+   if hasattr(sim, "get_macd_signal"):
+       macd_signal = float(sim.get_macd_signal(row_idx))
+   ```
+3. **Проверка валидности** (obs_builder.pyx:281-284):
+   ```cython
+   macd_signal_valid = not isnan(macd_signal)
+   out_features[feature_idx] = macd_signal if macd_signal_valid else 0.0
+   feature_idx += 1
+   out_features[feature_idx] = 1.0 if macd_signal_valid else 0.0  # validity flag (index 12)
+   ```
+4. **Запись** →
+   - `out_features[11] = macd_signal` (или 0.0)
+   - `out_features[12] = is_macd_signal_valid` (следующий этап)
+
+#### ИСКАЖЕНИЯ И МИТИГАЦИИ:
+
+**1. Identical Issues to MACD (КРИТИЧНО)**
+- **Все проблемы MACD признака применимы:**
+  1. Default 0.0 вместо NaN → ломает validity flag
+  2. Silent exception swallowing
+  3. No DataFrame fallback
+  4. No normalization
+- **Дополнительно:**
+  - Warmup period: ~35 bars (26 для MACD + 9 для EMA signal)
+  - Для 4h: 35 bars = 140 часов = 5.83 дня
+
+**2. MACD vs Signal Correlation (ИНФОРМАТИВНО)**
+- **Источник:** MACD Signal = EMA_9(MACD)
+- **Correlation:** Очень высокая (0.9+)
+- **Полезная информация:**
+  - Histogram = MACD - Signal (divergence measure)
+  - Текущее: модель должна вычислить сама
+- **ENHANCEMENT OPPORTUNITY:**
+  - Добавить `macd_histogram` как отдельный признак
+  - Histogram пересекает 0 = trend change signal
+- **BEST PRACTICE:** "Pre-compute derived features" (Feature Engineering)
+- **Оценка:** MINOR priority (модель может научиться)
+
+**3. Ambiguous Fallback 0.0 (КРИТИЧНО)**
+- **Комментарий из кода** (obs_builder.pyx:278-280):
+  ```cython
+  # CRITICAL: MACD Signal requires ~35 bars (26 for MACD + 9 for signal line)
+  # Fallback 0.0 creates AMBIGUITY: no signal (0) vs insufficient data (0)
+  # Validity flag eliminates this: model can distinguish valid zero from missing data
+  ```
+- **Митигация:** WOULD BE EXCELLENT (если бы не broken validity flag)
+- **Текущий статус:** BROKEN (см. MACD анализ)
+
+---
+
+## СВОДКА ПО ЭТАПУ 2 (Признаки 6-11)
+
+### КРИТИЧНЫЕ ПРОБЛЕМЫ:
+1. **MACD/MACD_signal default 0.0 вместо NaN** - ломает validity flags!
+2. **Silent exception swallowing** - нет логирования ошибок
+3. **No DataFrame fallback для MACD** - зависимость только от simulator
+4. **No normalization для RSI/MACD** - разные масштабы признаков
+5. **RSI default 50.0 может создать false validity** - если колонка отсутствует
+
+### ОТЛИЧНЫЕ РЕШЕНИЯ:
+1. **Validity flags design intent** - brilliant идея (если исправить)
+2. **Explicit warmup handling** - комментарии в коде excellent
+3. **Consistent pattern across indicators** - RSI, MACD, MACD_signal
+4. **NaN-based missing data detection** - правильный подход
+
+### РЕКОМЕНДАЦИИ (PRIORITY ORDER):
+1. **CRITICAL:** Изменить defaults на float('nan'):
+   - `macd = float('nan')` (не 0.0)
+   - `macd_signal = float('nan')` (не 0.0)
+   - `rsi14 = float('nan')` (не 50.0) в fallback случаях
+2. **HIGH:** Добавить DataFrame fallback для MACD indicators
+3. **MEDIUM:** Логировать exceptions вместо молчаливого pass
+4. **LOW:** Рассмотреть нормализацию RSI/MACD к [-1, 1]
+5. **ENHANCEMENT:** Добавить macd_histogram как derived feature
+
+### ИСТОЧНИКИ И ЛУЧШИЕ ПРАКТИКИ:
+- ✅ sklearn: Missing data indicators (design intent excellent)
+- ✅ ta-lib: Indicator warmup handling
+- ✅ OMSCS: Explicit missingness signals
+- ❌ Python: Never catch generic Exception (нарушено)
+- ❌ sklearn: Feature normalization (частично нарушено)
+- ❌ DDD: Single Source of Truth (dual source без fallback)
+
+### COMPARISON С ЭТАПОМ 1:
+- **Этап 1:** Mostly excellent (minor issues)
+- **Этап 2:** BROKEN validity flags для MACD (critical fix needed!)
+- **Общее:** Отличный дизайн, но реализация mediator.py ломает его
+
+---
+
+**ЭТАП 2 ЗАВЕРШЕН.**
+
+---
 
 Дата анализа: 2025-11-16
 Аналитик: Claude Code (Sonnet 4.5)
