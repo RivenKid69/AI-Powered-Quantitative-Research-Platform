@@ -68,11 +68,20 @@ OLD (62)         NEW (63)         Shift
 17: cci_valid    18: cci_valid    +1
 18: obv          19: obv          +1
 19: obv_valid    20: obv_valid    +1
-20: bb_position  21: bb_position  +1
-21: bb_width     22: bb_width     +1
-22: ret_bar      23: ret_bar      +1
-23: vol_proxy    24: vol_proxy    +1  ← CRITICAL: This was becoming NaN!
-24: cash_ratio   25: cash_ratio   +1
+20: ret_bar      21: ret_bar      +1
+21: vol_proxy    22: vol_proxy    +1  ← CRITICAL: This was becoming NaN!
+22: cash_ratio   23: cash_ratio   +1
+23: position_ratio 24: position_ratio +1
+24: vol_imbalance 25: vol_imbalance +1
+25: trade_intensity 26: trade_intensity +1
+26: realized_spread 27: realized_spread +1
+27: agent_fill_ratio 28: agent_fill_ratio +1
+28: price_momentum 29: price_momentum +1
+29: bb_squeeze   30: bb_squeeze   +1
+30: trend_strength 31: trend_strength +1
+31: bb_position  32: bb_position  +1
+32: bb_width     33: bb_width     +1
+33: is_high_importance 34: is_high_importance +1
 ...              ...              +1
 38: external[0]  39: external[0]  +1
 58: external[20] 59: external[20] +1
@@ -192,8 +201,8 @@ build_observation_vector(
 assert obs[16] == 0.0, "atr_valid should be 0.0 during warmup"
 
 # CRITICAL: vol_proxy must NOT be NaN (this was the bug!)
-assert not np.isnan(obs[24]), "vol_proxy must not be NaN during warmup!"
-assert np.isfinite(obs[24]), "vol_proxy must be finite"
+assert not np.isnan(obs[22]), "vol_proxy must not be NaN during warmup!"
+assert np.isfinite(obs[22]), "vol_proxy must be finite"
 ```
 
 ### ☐ Step 8: Run Verification Script
@@ -218,7 +227,7 @@ python verify_63_features.py
 ```python
 # Bar 10: Not enough data for ATR (requires 14 bars)
 obs[15] = 500.0    # atr = 500.0 (fallback: price*0.01 = 50000*0.01)
-obs[23] = NaN      # vol_proxy = tanh(log1p(NaN / ...)) = NaN ❌
+obs[21] = NaN      # vol_proxy = tanh(log1p(NaN / ...)) = NaN ❌ (OLD: before fix)
 
 # CRITICAL BUG: vol_proxy contains NaN!
 # This violates the "no NaN in observation" guarantee.
@@ -230,12 +239,12 @@ obs[23] = NaN      # vol_proxy = tanh(log1p(NaN / ...)) = NaN ❌
 # Bar 10: Not enough data for ATR (requires 14 bars)
 obs[15] = 500.0    # atr = 500.0 (fallback: price*0.01)
 obs[16] = 0.0      # atr_valid = 0.0 (INVALID) ← NEW!
-obs[24] = -3.912   # vol_proxy calculated with fallback ATR ✅
+obs[22] = -3.912   # vol_proxy calculated with fallback ATR ✅
 
 # Bar 20: Enough data, ATR is now valid
 obs[15] = 623.5    # atr = 623.5 (real value from Wilder's EMA)
 obs[16] = 1.0      # atr_valid = 1.0 (VALID) ← NEW!
-obs[24] = -3.683   # vol_proxy calculated with real ATR ✅
+obs[22] = -3.683   # vol_proxy calculated with real ATR ✅
 
 # NOW vol_proxy is NEVER NaN, and model can distinguish:
 # - Real low volatility (atr_valid=1.0, low vol_proxy)
@@ -385,11 +394,11 @@ python -c "from lob_state_cython import _compute_n_features; print(_compute_n_fe
 ### 1. Eliminates NaN Propagation (CRITICAL)
 ```python
 # OLD (62): vol_proxy could be NaN during warmup
-if np.isnan(obs[23]):
+if np.isnan(obs[21]):  # vol_proxy was at index 21 in 62-feature (before atr_valid)
     # Episode crashes or invalid gradients! ❌
 
 # NEW (63): vol_proxy is NEVER NaN
-assert not np.isnan(obs[24])  # Always passes ✅
+assert not np.isnan(obs[22])  # vol_proxy now at index 22 (after atr_valid) ✅
 ```
 
 ### 2. Consistent Validation Pattern
