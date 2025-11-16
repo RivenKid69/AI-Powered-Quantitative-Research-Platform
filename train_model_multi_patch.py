@@ -4974,7 +4974,9 @@ def main():
     for i, trial in enumerate(top_trials):
         model_idx = i + 1
         src_model = trials_dir / f"trial_{trial.number}_model.zip"
-        src_stats = trials_dir / f"vec_normalize_{trial.number}.pkl"
+        # CRITICAL FIX: Copy training stats (not test/val) for model inference
+        # Models need the same normalization statistics they were trained with
+        src_stats = trials_dir / f"vec_normalize_train_{trial.number}.pkl"
 
         if os.path.exists(src_model):
             shutil.copyfile(src_model, ensemble_dir / f"model_{model_idx}.zip")
