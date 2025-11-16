@@ -129,8 +129,8 @@ class TestATRValidityFlag:
 
         build_observation_vector(**valid_params)
 
-        # Index 23: vol_proxy (after ret_bar at index 22)
-        vol_proxy = obs[23]
+        # Index 22: vol_proxy (after ret_bar at index 21)
+        vol_proxy = obs[22]
 
         assert not np.isnan(vol_proxy), \
             f"vol_proxy MUST NOT be NaN when ATR is NaN! Got {vol_proxy}"
@@ -159,7 +159,7 @@ class TestATRValidityFlag:
 
         build_observation_vector(**valid_params)
 
-        vol_proxy = obs[23]
+        vol_proxy = obs[22]
 
         # Expected: vol_proxy = tanh(log1p(15.0 / 1000.0)) = tanh(log1p(0.015)) ≈ tanh(0.01489) ≈ 0.01488
         expected_vol_proxy = math.tanh(math.log1p(15.0 / 1000.0))
@@ -333,8 +333,8 @@ class TestATRValidityFlag:
 
             build_observation_vector(**params)
 
-            # Critical check: vol_proxy (index 23) must NEVER be NaN
-            vol_proxy = obs[23]
+            # Critical check: vol_proxy (index 22) must NEVER be NaN
+            vol_proxy = obs[22]
             assert not np.isnan(vol_proxy), \
                 f"Bar {bar}: vol_proxy is NaN! This should NEVER happen."
 

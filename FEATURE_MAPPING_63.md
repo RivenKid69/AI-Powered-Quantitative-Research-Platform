@@ -58,30 +58,34 @@ After this change:
 | 19 | obv | YES ✅ | 0.0 | Requires 1 bar |
 | 20 | obv_valid | FLAG ✅ | 1.0/0.0 | Validity flag for obv |
 
-### Derived Price/Volatility Features (21-23)
+### Derived Price/Volatility Features (21-22)
 | Index | Feature Name | Notes |
 |-------|--------------|-------|
-| 21 | bb_position | Price position within Bollinger Bands |
-| 22 | bb_width | Normalized Bollinger Band width |
-| 23 | ret_bar | Bar-to-bar return (tanh normalized) |
-| 24 | **vol_proxy** | **Volatility proxy from ATR (uses atr_valid!)** |
+| 21 | ret_bar | Bar-to-bar return (tanh normalized) |
+| 22 | **vol_proxy** | **Volatility proxy from ATR (uses atr_valid!)** |
 
-### Agent State Features (25-30)
+### Agent State Features (23-28)
 | Index | Feature Name | Notes |
 |-------|--------------|-------|
-| 25 | cash_ratio | Cash / Total worth |
-| 26 | position_ratio | Position value / Total worth |
-| 27 | vol_imbalance | Volume imbalance (tanh) |
-| 28 | trade_intensity | Trade intensity (tanh) |
-| 29 | realized_spread | Realized spread (clipped) |
-| 30 | agent_fill_ratio | Agent fill ratio |
+| 23 | cash_ratio | Cash / Total worth |
+| 24 | position_ratio | Position value / Total worth |
+| 25 | vol_imbalance | Volume imbalance (tanh) |
+| 26 | trade_intensity | Trade intensity (tanh) |
+| 27 | realized_spread | Realized spread (clipped) |
+| 28 | agent_fill_ratio | Agent fill ratio |
 
-### Technical Indicators for 4h Timeframe (31-33)
+### Technical Indicators for 4h Timeframe (29-31)
 | Index | Feature Name | Notes |
 |-------|--------------|-------|
-| 31 | price_momentum | Uses momentum_valid flag |
-| 32 | bb_squeeze | Uses bb_valid flag |
-| 33 | trend_strength | Uses macd_valid AND macd_signal_valid flags |
+| 29 | price_momentum | Uses momentum_valid flag |
+| 30 | bb_squeeze | Uses bb_valid flag |
+| 31 | trend_strength | Uses macd_valid AND macd_signal_valid flags |
+
+### Bollinger Bands Context (32-33)
+| Index | Feature Name | Notes |
+|-------|--------------|-------|
+| 32 | bb_position | Price position within Bollinger Bands |
+| 33 | bb_width | Normalized Bollinger Band width |
 
 ### Event Metadata (34-36)
 | Index | Feature Name | Notes |
@@ -122,11 +126,17 @@ All features AFTER index 15 (atr) have been shifted by **+1 position**:
 | cci_valid | 17 | 18 | +1 |
 | obv | 18 | 19 | +1 |
 | obv_valid | 19 | 20 | +1 |
-| bb_position | 20 | 21 | +1 |
-| bb_width | 21 | 22 | +1 |
-| ret_bar | 22 | 23 | +1 |
-| vol_proxy | 23 | 24 | +1 |
-| cash_ratio | 24 | 25 | +1 |
+| ret_bar | 20 | 21 | +1 |
+| vol_proxy | 21 | 22 | +1 |
+| cash_ratio | 22 | 23 | +1 |
+| position_ratio | 23 | 24 | +1 |
+| ... | ... | ... | +1 |
+| agent_fill_ratio | 27 | 28 | +1 |
+| price_momentum | 28 | 29 | +1 |
+| bb_squeeze | 29 | 30 | +1 |
+| trend_strength | 30 | 31 | +1 |
+| bb_position | 31 | 32 | +1 |
+| bb_width | 32 | 33 | +1 |
 | ... | ... | ... | +1 |
 | external[0] | 38 | 39 | +1 |
 | external[20] | 58 | 59 | +1 |
