@@ -199,7 +199,7 @@ class MockMediator:
         norm_cols[14] = self._get_safe_float(row, "taker_buy_ratio", 0.0)
         norm_cols[15] = self._get_safe_float(row, "taker_buy_ratio_sma_24h", 0.0)
 
-        # Additional 5 (51->56, обновлено для 4h)
+        # Additional 5 norm_cols features (norm_cols expanded 16->21 for 4h timeframe)
         norm_cols[16] = self._get_safe_float(row, "taker_buy_ratio_sma_8h", 0.0)  # было 6h
         norm_cols[17] = self._get_safe_float(row, "taker_buy_ratio_sma_16h", 0.0)  # было 12h
         norm_cols[18] = self._get_safe_float(row, "taker_buy_ratio_momentum_4h", 0.0)  # было 1h
