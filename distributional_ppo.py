@@ -7708,6 +7708,67 @@ class DistributionalPPO(RecurrentPPO):
                 bucket_sample_count = 0
                 bucket_sample_weight = 0.0
 
+                # CRITICAL FIX: Compute advantage normalization statistics at the GROUP level
+                # (across all microbatches in the gradient accumulation group) rather than
+                # per-microbatch. This preserves relative importance between microbatches.
+                # Per-microbatch normalization would make all microbatches appear equally
+                # important regardless of their actual advantage magnitudes.
+                #
+                # We collect advantages from all microbatches BEFORE computing statistics
+                # to ensure consistency with the second loop's mask handling logic.
+                group_advantages_for_stats: list[torch.Tensor] = []
+
+                # First pass: collect advantages for statistics computation
+                for data, mask in zip(microbatch_items, microbatch_masks):
+                    advantages = data.advantages
+                    advantages_flat = advantages.reshape(-1)
+
+                    if mask is not None:
+                        mask_view = mask.reshape(-1).to(device=advantages.device)
+                        if mask_view.dtype == torch.bool:
+                            mask_float = mask_view.to(dtype=torch.float32)
+                            valid_mask = mask_view
+                        else:
+                            mask_float = mask_view.to(dtype=torch.float32)
+                            valid_mask = mask_float > 0
+
+                        # Use the same logic as the main loop: extract valid indices
+                        valid_indices_local = valid_mask.nonzero(as_tuple=False).squeeze(1)
+                        if valid_indices_local.numel() > 0:
+                            mask_values_local = mask_float[valid_indices_local]
+                            weight_sum_local = float(mask_values_local.sum().item())
+                            # Only include if there's positive weight (same check as main loop)
+                            if weight_sum_local > 0.0:
+                                group_advantages_for_stats.append(advantages_flat[valid_indices_local])
+                    else:
+                        # No mask: include all advantages
+                        group_advantages_for_stats.append(advantages_flat)
+
+                # Compute group-level statistics
+                with torch.no_grad():
+                    if group_advantages_for_stats:
+                        group_advantages_concat = torch.cat(group_advantages_for_stats, dim=0)
+                        if group_advantages_concat.numel() > 0:
+                            group_adv_mean = group_advantages_concat.mean()
+                            group_adv_std = group_advantages_concat.std(unbiased=False)
+                            group_adv_std_clamped = torch.clamp(group_adv_std, min=1e-8)
+                        else:
+                            # Fallback if no valid advantages
+                            device = microbatch_items[0].advantages.device
+                            group_adv_mean = torch.zeros((), device=device)
+                            group_adv_std = torch.ones((), device=device)
+                            group_adv_std_clamped = torch.ones((), device=device)
+                    else:
+                        # Fallback if no advantages at all
+                        device = microbatch_items[0].advantages.device
+                        group_adv_mean = torch.zeros((), device=device)
+                        group_adv_std = torch.ones((), device=device)
+                        group_adv_std_clamped = torch.ones((), device=device)
+
+                # Log group-level statistics once per group (not per microbatch)
+                group_adv_mean_value = float(group_adv_mean.item())
+                group_adv_std_value = float(group_adv_std.item())
+
                 for rollout_data, sample_count, mask_tensor, sample_weight in zip(
                     microbatch_items, sample_counts, microbatch_masks, sample_weight_sums
                 ):
@@ -7786,35 +7847,24 @@ class DistributionalPPO(RecurrentPPO):
                     target_returns_raw_clipped: Optional[torch.Tensor] = None
                     old_values_raw_tensor: Optional[torch.Tensor] = None
 
+                    # Use GROUP-LEVEL normalization statistics (computed above)
+                    # instead of per-microbatch statistics to preserve relative
+                    # importance between microbatches during gradient accumulation
                     advantages_flat = advantages.reshape(-1)
                     if valid_indices is not None:
-                        advantages_selected_raw = advantages_flat[valid_indices]
-                        with torch.no_grad():
-                            adv_mean_tensor = advantages_selected_raw.mean()
-                            adv_std_tensor = advantages_selected_raw.std(unbiased=False)
-                            adv_std_tensor_clamped = torch.clamp(adv_std_tensor, min=1e-8)
                         advantages_normalized_flat = advantages_flat.new_zeros(
                             advantages_flat.shape
                         )
+                        advantages_selected_raw = advantages_flat[valid_indices]
                         advantages_normalized_flat[valid_indices] = (
-                            (advantages_selected_raw - adv_mean_tensor)
-                            / adv_std_tensor_clamped
+                            (advantages_selected_raw - group_adv_mean)
+                            / group_adv_std_clamped
                         )
                         advantages = advantages_normalized_flat.view_as(advantages)
                         advantages_selected = advantages_normalized_flat[valid_indices]
                     else:
-                        with torch.no_grad():
-                            adv_mean_tensor = advantages.mean()
-                            adv_std_tensor = advantages.std(unbiased=False)
-                            adv_std_tensor_clamped = torch.clamp(adv_std_tensor, min=1e-8)
-                        advantages = (advantages - adv_mean_tensor) / adv_std_tensor_clamped
+                        advantages = (advantages - group_adv_mean) / group_adv_std_clamped
                         advantages_selected = advantages.reshape(-1)
-
-                    adv_mean = float(adv_mean_tensor.item())
-                    adv_std = float(adv_std_tensor.item())
-                    adv_mean_accum += adv_mean
-                    adv_std_accum += adv_std
-                    adv_batch_count += 1
 
                     with torch.no_grad():
                         adv_z_values.append(advantages_selected.detach().cpu())
@@ -8797,6 +8847,11 @@ class DistributionalPPO(RecurrentPPO):
                         "warn/microbatch_size_mismatch",
                         float(bucket_sample_count - bucket_target_size),
                     )
+
+                # Accumulate group-level advantage statistics (once per group, not per microbatch)
+                adv_mean_accum += group_adv_mean_value
+                adv_std_accum += group_adv_std_value
+                adv_batch_count += 1
 
                 # Handle gradient clipping configuration
                 if self.max_grad_norm is None:
