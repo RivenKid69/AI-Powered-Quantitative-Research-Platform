@@ -96,13 +96,13 @@ def build_obs_with_inputs(**kwargs):
     Build observation vector with given inputs.
 
     Returns:
-        np.ndarray: Observation vector (56 features)
+        np.ndarray: Observation vector (62 features)
     """
     inputs = create_valid_inputs(**kwargs)
 
     # Create norm_cols and output array
     norm_cols = np.zeros(21, dtype=np.float32)
-    obs = np.zeros(56, dtype=np.float32)
+    obs = np.zeros(62, dtype=np.float32)
 
     build_observation_vector(
         float(inputs["price"]),
@@ -163,18 +163,18 @@ def get_bb_features(obs):
     """
     Extract Bollinger Bands related features from observation.
 
-    Feature layout (56-feature observation):
-    - bb_squeeze: index 23 (derived from bb_width, measures volatility regime)
-    - bb_position: index 25 (price position within bands)
-    - bb_width: index 26 (normalized band width)
+    Feature layout (62-feature observation):
+    - bb_squeeze: index 29 (in microstructure block, measures volatility regime)
+    - bb_position: index 31 (in bollinger block, price position within bands)
+    - bb_width: index 32 (in bollinger block, normalized band width)
 
     Returns:
         dict: {feature_name: value}
     """
     return {
-        "bb_squeeze": obs[23],
-        "bb_position": obs[25],
-        "bb_width": obs[26],
+        "bb_squeeze": obs[29],
+        "bb_position": obs[31],
+        "bb_width": obs[32],
     }
 
 

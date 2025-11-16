@@ -57,7 +57,7 @@ def test_upstream_conflict():
     # Step 2: Try to build observation with coerced price
     print(f"3. Calling build_observation_vector(price={coerced_price}, ...)")
 
-    obs = np.zeros(56, dtype=np.float32)
+    obs = np.zeros(62, dtype=np.float32)
     norm_cols = np.zeros(21, dtype=np.float32)
 
     try:
@@ -131,7 +131,7 @@ def test_positive_infinity_scenario():
     coerced_price = _coerce_finite(mark_price, default=0.0)
     print(f"2. After _coerce_finite(): price = {coerced_price}")
 
-    obs = np.zeros(56, dtype=np.float32)
+    obs = np.zeros(62, dtype=np.float32)
     norm_cols = np.zeros(21, dtype=np.float32)
 
     try:

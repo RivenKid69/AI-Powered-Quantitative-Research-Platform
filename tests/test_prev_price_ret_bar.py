@@ -2,7 +2,7 @@
 Comprehensive test suite for prev_price validation in ret_bar calculation.
 
 This test suite specifically targets the vulnerability where invalid prev_price
-values could propagate NaN into the ret_bar feature (index 14) in the observation vector.
+values could propagate NaN into the ret_bar feature (index 20, was 14 pre-v62) in the observation vector.
 
 Coverage:
 - P0 (Entry point validation): Tests at build_observation_vector() wrapper
@@ -60,7 +60,7 @@ class TestPrevPriceRetBarValidation:
             "max_num_tokens": 10,
             "num_tokens": 5,
             "norm_cols_values": np.zeros(5, dtype=np.float32),
-            "out_features": np.zeros(56, dtype=np.float32),
+            "out_features": np.zeros(62, dtype=np.float32),
         }
 
     # ========================================================================
@@ -165,7 +165,7 @@ class TestPrevPriceRetBarValidation:
         params["prev_price"] = 49500.0
 
         build_observation_vector(**params)
-        ret_bar = params["out_features"][14]  # ret_bar is at index 14
+        ret_bar = params["out_features"][20]  # ret_bar is at index 20 (was 14 pre-v62)
 
         # Calculate expected value: tanh((50000 - 49500) / (49500 + 1e-8))
         expected = math.tanh((50000.0 - 49500.0) / (49500.0 + 1e-8))
@@ -342,11 +342,12 @@ class TestPrevPriceRetBarValidation:
         assert len(nan_indices) == 0, \
             f"No NaN values should be in observation vector. Found at indices: {nan_indices}"
 
-    def test_ret_bar_index_14_is_correct(self, valid_params):
+    def test_ret_bar_index_20_is_correct(self, valid_params):
         """
-        Test P3.2: Verify ret_bar is actually at index 14 (documentation check).
+        Test P3.2: Verify ret_bar is actually at index 20 (was 14 pre-v62, documentation check).
 
-        Critical: If feature ordering changes, tests need to be updated.
+        Critical: Feature ordering changed in v62 with validity flags.
+        ret_bar moved from index 14 → 20 due to 6 new validity flags.
         """
         params = valid_params.copy()
         params["price"] = 51000.0
@@ -357,11 +358,11 @@ class TestPrevPriceRetBarValidation:
         # Calculate expected ret_bar
         expected_ret_bar = math.tanh((51000.0 - 50000.0) / (50000.0 + 1e-8))
 
-        # Check index 14
-        actual_ret_bar = params["out_features"][14]
+        # Check index 20 (was 14 in v56)
+        actual_ret_bar = params["out_features"][20]
 
         assert abs(actual_ret_bar - expected_ret_bar) < 1e-6, \
-            f"ret_bar at index 14 should be {expected_ret_bar}, got {actual_ret_bar}. " \
+            f"ret_bar at index 20 should be {expected_ret_bar}, got {actual_ret_bar}. " \
             f"Feature ordering may have changed - update tests!"
 
     def test_both_price_and_prev_price_invalid(self, valid_params):
