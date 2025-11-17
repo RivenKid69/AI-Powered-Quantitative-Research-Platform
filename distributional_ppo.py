@@ -7154,7 +7154,8 @@ class DistributionalPPO(RecurrentPPO):
 
                     # CRITICAL FIX: Do NOT clip targets in eval! Only predictions should be clipped.
                     # Targets represent the actual GAE returns and should remain unchanged.
-                    target_norm_col = target_returns_norm.reshape(-1, 1)
+                    # Use UNCLIPPED targets for explained variance computation
+                    target_norm_col = target_returns_norm_unclipped.reshape(-1, 1)
                     target_raw_col = target_returns_raw.reshape(-1, 1)
 
                     index_tensor: Optional[torch.Tensor] = None
@@ -8191,9 +8192,11 @@ class DistributionalPPO(RecurrentPPO):
                             # Use larger epsilon for numerical stability and check for degenerate case
                             if abs(delta_z) < 1e-6:
                                 # Degenerate case: all targets fall into single atom
-                                b = torch.zeros_like(target_returns_norm)
+                                b = torch.zeros_like(target_returns_norm_raw)
                             else:
-                                clamped_targets = target_returns_norm.clamp(
+                                # CRITICAL FIX: Use UNCLIPPED target for distributional projection
+                                # Only clamp to support bounds [v_min, v_max] for C51 algorithm
+                                clamped_targets = target_returns_norm_raw.clamp(
                                     self.policy.v_min, self.policy.v_max
                                 )
                                 b = (clamped_targets - self.policy.v_min) / delta_z
@@ -8253,8 +8256,9 @@ class DistributionalPPO(RecurrentPPO):
                         clamp_above_sum += above_frac * weight
                         clamp_weight += weight
 
+                    # CRITICAL FIX: Store UNCLIPPED targets for explained variance
                     value_target_batches_norm.append(
-                        target_returns_norm_selected.reshape(-1, 1)
+                        target_returns_norm_raw_selected.reshape(-1, 1)
                         .detach()
                         .to(device="cpu", dtype=torch.float32)
                     )
@@ -8266,15 +8270,17 @@ class DistributionalPPO(RecurrentPPO):
                     if value_mask_weights is not None:
                         weight_tensor = value_mask_weights.detach().reshape(-1, 1)
                     else:
+                        # Use unclipped target for consistency
                         weight_tensor = torch.ones(
-                            target_returns_norm_selected.numel(),
+                            target_returns_norm_raw_selected.numel(),
                             device=self.device,
                             dtype=torch.float32,
                         ).reshape(-1, 1)
                     value_weight_batches.append(
                         weight_tensor.to(device="cpu", dtype=torch.float32)
                     )
-                    expected_group_len = int(target_returns_norm_selected.reshape(-1).shape[0])  # FIX
+                    # Use unclipped target for consistency
+                    expected_group_len = int(target_returns_norm_raw_selected.reshape(-1).shape[0])  # FIX
                     if group_keys_local and len(group_keys_local) != expected_group_len:  # FIX
                         if not ev_group_key_len_mismatch_logged:  # FIX
                             if self.logger is not None:  # FIX
@@ -8362,7 +8368,10 @@ class DistributionalPPO(RecurrentPPO):
                         else:
                             quantiles_for_loss = quantiles_fp32
                         quantiles_for_ev = quantiles_for_loss
-                        targets_norm_for_loss = target_returns_norm_selected.reshape(-1, 1)
+                        # CRITICAL FIX: Use UNCLIPPED target for VF clipping loss
+                        # PPO formula: L^CLIP_VF = max((V-V_targ)^2, (clip(V)-V_targ)^2)
+                        # V_targ must remain unchanged in both terms
+                        targets_norm_for_loss = target_returns_norm_raw_selected.reshape(-1, 1)
                         # FIX: Target should NOT be clipped for VF clipping
 
                         critic_loss_unclipped = self._quantile_huber_loss(
