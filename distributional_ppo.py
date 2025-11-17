@@ -7866,12 +7866,26 @@ class DistributionalPPO(RecurrentPPO):
                     else:
                         log_prob_selected = log_prob_flat
                         old_log_prob_selected = old_log_prob_flat
-                    # Compute importance sampling ratio
-                    # Following standard PPO implementations (Stable Baselines3, CleanRL):
-                    # - No clamping on log_ratio (trust region is enforced by PPO clip in loss)
-                    # - Clamping log_ratio breaks gradient flow and violates PPO theory
-                    # - PPO clipping on ratio in loss is the correct trust region mechanism
+                    # Compute importance sampling ratio with numerical safety
+                    # CRITICAL: Use wide safety clamp to prevent exp() overflow without affecting normal training
+                    #
+                    # Theory vs Practice balance:
+                    # - PPO theory (Schulman 2017): Trust region via clipping in loss, not on log_ratio
+                    # - Numerical reality: exp(x) overflows to inf for x > 88 in float32
+                    # - Solution: Clamp at ±85 (exp(85) ≈ 8e36, huge but finite)
+                    #
+                    # Why ±85 is correct:
+                    # 1. Normal training: log_ratio ∈ [-0.1, 0.1], clamp never activates ✓
+                    # 2. Prevents overflow: exp(85) is finite, exp(89+) = inf ✓
+                    # 3. Gradient flow: Intact for all realistic values ✓
+                    # 4. Theory-aligned: Clamp so wide it's effectively a safety guard ✓
+                    #
+                    # Comparison:
+                    # - No clamp: Can produce inf → NaN gradients → training breaks ✗
+                    # - Clamp ±10: exp(10)≈22k, too restrictive, breaks gradients ✗
+                    # - Clamp ±85: exp(85)≈8e36, perfect safety/theory balance ✓
                     log_ratio = log_prob_selected - old_log_prob_selected
+                    log_ratio = torch.clamp(log_ratio, min=-85.0, max=85.0)
                     ratio = torch.exp(log_ratio)
                     policy_loss_1 = advantages_selected * ratio
                     policy_loss_2 = advantages_selected * torch.clamp(
