@@ -7866,8 +7866,10 @@ class DistributionalPPO(RecurrentPPO):
                         log_prob_selected = log_prob_flat
                         old_log_prob_selected = old_log_prob_flat
                     log_ratio = log_prob_selected - old_log_prob_selected
-                    # Clamp log_ratio to prevent overflow in exp (exp(20) ≈ 5e8, exp(88) overflows)
-                    log_ratio = torch.clamp(log_ratio, min=-20.0, max=20.0)
+                    # Clamp log_ratio to prevent overflow and maintain trust region stability
+                    # exp(10) ≈ 22k is much more reasonable than exp(20) ≈ 485M
+                    # This provides numerical stability while allowing some slack for outliers
+                    log_ratio = torch.clamp(log_ratio, min=-10.0, max=10.0)
                     ratio = torch.exp(log_ratio)
                     policy_loss_1 = advantages_selected * ratio
                     policy_loss_2 = advantages_selected * torch.clamp(
