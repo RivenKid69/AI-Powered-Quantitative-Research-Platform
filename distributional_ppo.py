@@ -7145,56 +7145,9 @@ class DistributionalPPO(RecurrentPPO):
                         clip_bounds=norm_clip_bounds,
                     )
 
-                    target_returns_raw_clipped = target_returns_raw
-                    target_returns_norm_clipped = target_returns_norm
-                    if clip_range_vf_value is not None and clip_old_values_available:
-                        clip_delta = float(clip_range_vf_value)
-                        old_values_aligned = old_values_raw_tensor.to(
-                            device=target_returns_raw.device, dtype=torch.float32
-                        )
-                        old_values_aligned = old_values_aligned.reshape_as(target_returns_raw)
-                        target_returns_raw_clipped = torch.clamp(
-                            target_returns_raw,
-                            min=old_values_aligned - clip_delta,
-                            max=old_values_aligned + clip_delta,
-                        )
-                        if self.normalize_returns:
-                            ret_std_safe = torch.clamp(ret_std_tensor, min=1e-6)
-                            target_returns_norm_clipped = (
-                                (target_returns_raw_clipped - ret_mu_tensor)
-                                / ret_std_safe
-                            ).clamp(
-                                self._value_norm_clip_min, self._value_norm_clip_max
-                            )
-                        else:
-                            target_returns_norm_clipped = (
-                                (target_returns_raw_clipped / float(base_scale_safe))
-                                * self._value_target_scale_effective
-                            )
-                            if self._value_clip_limit_scaled is not None:
-                                target_returns_norm_clipped = torch.clamp(
-                                    target_returns_norm_clipped,
-                                    min=-self._value_clip_limit_scaled,
-                                    max=self._value_clip_limit_scaled,
-                                )
-
-                    self._record_value_debug_stats(
-                        "ev_target_raw_post_vf_clip", target_returns_raw_clipped
-                    )
-                    self._record_value_debug_stats(
-                        "ev_target_norm_post_vf_clip",
-                        target_returns_norm_clipped,
-                        clip_bounds=norm_clip_bounds,
-                    )
-                    self._log_vf_clip_dispersion(
-                        "train/ev_vf_clip/target",
-                        raw_pre=target_returns_raw,
-                        raw_post=target_returns_raw_clipped,
-                        norm_pre=target_returns_norm,
-                        norm_post=target_returns_norm_clipped,
-                    )
-
-                    target_norm_col = target_returns_norm_clipped.reshape(-1, 1)
+                    # CRITICAL FIX: Do NOT clip targets in eval! Only predictions should be clipped.
+                    # Targets represent the actual GAE returns and should remain unchanged.
+                    target_norm_col = target_returns_norm.reshape(-1, 1)
                     target_raw_col = target_returns_raw.reshape(-1, 1)
 
                     index_tensor: Optional[torch.Tensor] = None
@@ -7843,8 +7796,6 @@ class DistributionalPPO(RecurrentPPO):
                         else 0.0
                     )
 
-                    target_returns_norm_clipped: Optional[torch.Tensor] = None
-                    target_returns_raw_clipped: Optional[torch.Tensor] = None
                     old_values_raw_tensor: Optional[torch.Tensor] = None
 
                     # Use GROUP-LEVEL normalization statistics (computed above)
@@ -8166,58 +8117,10 @@ class DistributionalPPO(RecurrentPPO):
                             target_returns_norm_selected = target_returns_norm_flat
                             target_returns_norm_raw_selected = target_returns_norm_raw_flat
 
-                        target_returns_norm_clipped_selected = target_returns_norm_selected
-
-                        if clip_range_vf_value is not None:
-                            clip_delta = float(clip_range_vf_value)
-                            target_returns_raw_clipped = torch.clamp(
-                                target_returns_raw,
-                                min=old_values_raw_tensor - clip_delta,
-                                max=old_values_raw_tensor + clip_delta,
-                            )
-                            if self.normalize_returns:
-                                target_returns_norm_clipped = (
-                                    (target_returns_raw_clipped - ret_mu_tensor)
-                                    / ret_std_tensor
-                                ).clamp(
-                                    self._value_norm_clip_min, self._value_norm_clip_max
-                                )
-                            else:
-                                target_returns_norm_clipped = (
-                                    (target_returns_raw_clipped / float(base_scale_safe))
-                                    * self._value_target_scale_effective
-                                )
-                                if self._value_clip_limit_scaled is not None:
-                                    target_returns_norm_clipped = torch.clamp(
-                                        target_returns_norm_clipped,
-                                        min=-self._value_clip_limit_scaled,
-                                        max=self._value_clip_limit_scaled,
-                                    )
-                        else:
-                            target_returns_raw_clipped = target_returns_raw
-                            target_returns_norm_clipped = target_returns_norm
-
-                        self._record_value_debug_stats(
-                            "train_target_raw_post_vf_clip", target_returns_raw_clipped
-                        )
-                        self._record_value_debug_stats(
-                            "train_target_norm_post_vf_clip",
-                            target_returns_norm_clipped,
-                            clip_bounds=norm_clip_bounds_train,
-                        )
-                        self._log_vf_clip_dispersion(
-                            "train/vf_clip/target",
-                            raw_pre=target_returns_raw,
-                            raw_post=target_returns_raw_clipped,
-                            norm_pre=target_returns_norm,
-                            norm_post=target_returns_norm_clipped,
-                        )
-
-                        target_returns_norm_clipped_flat = target_returns_norm_clipped.reshape(-1)
-                        if valid_indices is not None:
-                            target_returns_norm_clipped_selected = target_returns_norm_clipped_flat[valid_indices]
-                        else:
-                            target_returns_norm_clipped_selected = target_returns_norm_clipped_flat
+                        # CRITICAL FIX: Do NOT clip targets! Only predictions should be clipped.
+                        # According to PPO paper, VF clipping formula is:
+                        # L^CLIP_VF = max( (V(s) - V_targ)^2, (clip(V(s), V_old±eps) - V_targ)^2 )
+                        # The target V_targ must remain unchanged in both loss terms.
                         target_returns_raw_for_ev_selected = target_returns_raw_selected
 
                         if self._use_quantile_value:
@@ -8297,7 +8200,7 @@ class DistributionalPPO(RecurrentPPO):
                                     target_distribution[same_indices] = 0.0
                                     target_distribution[same_indices, upper_bound_before_adjust[same_indices]] = 1.0
 
-                        target_norm_for_stats = target_returns_norm_clipped_selected.to(
+                        target_norm_for_stats = target_returns_norm_selected.to(
                             dtype=torch.float32
                         )
                         if target_norm_for_stats.numel() > 0:
@@ -8321,7 +8224,7 @@ class DistributionalPPO(RecurrentPPO):
                         clamp_weight += weight
 
                     value_target_batches_norm.append(
-                        target_returns_norm_clipped_selected.reshape(-1, 1)
+                        target_returns_norm_selected.reshape(-1, 1)
                         .detach()
                         .to(device="cpu", dtype=torch.float32)
                     )
@@ -8334,14 +8237,14 @@ class DistributionalPPO(RecurrentPPO):
                         weight_tensor = value_mask_weights.detach().reshape(-1, 1)
                     else:
                         weight_tensor = torch.ones(
-                            target_returns_norm_clipped_selected.numel(),
+                            target_returns_norm_selected.numel(),
                             device=self.device,
                             dtype=torch.float32,
                         ).reshape(-1, 1)
                     value_weight_batches.append(
                         weight_tensor.to(device="cpu", dtype=torch.float32)
                     )
-                    expected_group_len = int(target_returns_norm_clipped_selected.reshape(-1).shape[0])  # FIX
+                    expected_group_len = int(target_returns_norm_selected.reshape(-1).shape[0])  # FIX
                     if group_keys_local and len(group_keys_local) != expected_group_len:  # FIX
                         if not ev_group_key_len_mismatch_logged:  # FIX
                             if self.logger is not None:  # FIX
@@ -8430,9 +8333,7 @@ class DistributionalPPO(RecurrentPPO):
                             quantiles_for_loss = quantiles_fp32
                         quantiles_for_ev = quantiles_for_loss
                         targets_norm_for_loss = target_returns_norm_selected.reshape(-1, 1)
-                        targets_norm_clipped_for_loss = (
-                            target_returns_norm_clipped_selected.reshape(-1, 1)
-                        )
+                        # FIX: Target should NOT be clipped for VF clipping
 
                         critic_loss_unclipped = self._quantile_huber_loss(
                             quantiles_for_loss, targets_norm_for_loss
@@ -8509,8 +8410,10 @@ class DistributionalPPO(RecurrentPPO):
                             else:
                                 quantiles_norm_clipped_for_loss = quantiles_norm_clipped
                             quantiles_for_ev = quantiles_norm_clipped_for_loss
+                            # CRITICAL FIX: Use unclipped target with clipped predictions
+                            # PPO VF clipping: max(loss(pred, target), loss(clip(pred), target))
                             critic_loss_clipped = self._quantile_huber_loss(
-                                quantiles_norm_clipped_for_loss, targets_norm_clipped_for_loss
+                                quantiles_norm_clipped_for_loss, targets_norm_for_loss  # Use UNCLIPPED target
                             )
                             critic_loss = torch.max(critic_loss_unclipped, critic_loss_clipped)
                         else:
@@ -8782,20 +8685,18 @@ class DistributionalPPO(RecurrentPPO):
                             )
                             log_predictions_clipped = torch.log(pred_distribution_clipped.clamp(min=1e-8))
 
-                            # Build clipped target distribution
-                            target_distribution_clipped = self._build_support_distribution(
-                                target_returns_norm_clipped, value_logits_fp32
-                            )
-
+                            # CRITICAL FIX: Use UNCLIPPED target distribution with clipped predictions
+                            # PPO VF clipping: max(loss(pred, target), loss(clip(pred), target))
+                            # Target must remain unchanged in both loss terms
                             if valid_indices is not None:
-                                target_distribution_clipped_selected = target_distribution_clipped[valid_indices]
                                 log_predictions_clipped_selected = log_predictions_clipped[valid_indices]
+                                # Use the unclipped target_distribution_selected computed earlier
                             else:
-                                target_distribution_clipped_selected = target_distribution_clipped
                                 log_predictions_clipped_selected = log_predictions_clipped
+                                # Use the unclipped target_distribution_selected computed earlier
 
                             critic_loss_clipped = -(
-                                target_distribution_clipped_selected * log_predictions_clipped_selected
+                                target_distribution_selected * log_predictions_clipped_selected  # Use UNCLIPPED target
                             ).sum(dim=1).mean()
                             critic_loss_clipped = critic_loss_clipped / self._critic_ce_normalizer
                             critic_loss = torch.max(critic_loss, critic_loss_clipped)
