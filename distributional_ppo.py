@@ -1740,7 +1740,7 @@ class DistributionalPPO(RecurrentPPO):
 
         def _clone_item(item: Any) -> Any:
             if isinstance(item, torch.Tensor):
-                return item.to(device)
+                return item.detach().to(device)
             if isinstance(item, tuple):
                 cloned_items = tuple(_clone_item(sub_item) for sub_item in item)
                 if hasattr(item, "_fields"):
