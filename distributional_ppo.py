@@ -756,7 +756,7 @@ class PopArtController:
                 return float("nan"), float("nan")
             filtered = values64[finite_mask]
             mean_val = float(np.mean(filtered))
-            std_val = float(np.std(filtered))
+            std_val = float(np.std(filtered, ddof=1))
             return mean_val, std_val
 
         weights64 = np.asarray(weights, dtype=np.float64).reshape(-1)
@@ -3866,8 +3866,8 @@ class DistributionalPPO(RecurrentPPO):
                 mean_pred = float(np.mean(pred_vals))
                 diff = true_vals - pred_vals
                 bias_value = float(np.mean(diff))
-                var_true = float(np.var(true_vals))
-                var_pred = float(np.var(pred_vals))
+                var_true = float(np.var(true_vals, ddof=1))
+                var_pred = float(np.var(pred_vals, ddof=1))
                 if sample_count >= 2:
                     corr_matrix = np.corrcoef(true_vals, pred_vals)
                     corr_value = float(corr_matrix[0, 1])
@@ -6471,7 +6471,7 @@ class DistributionalPPO(RecurrentPPO):
             # Safety check: ensure we have advantages to normalize
             if advantages_flat.size > 0:
                 adv_mean = float(np.mean(advantages_flat))
-                adv_std = float(np.std(advantages_flat))
+                adv_std = float(np.std(advantages_flat, ddof=1))
 
                 # Additional safety: check for NaN/Inf in statistics
                 if not np.isfinite(adv_mean) or not np.isfinite(adv_std):
@@ -9547,9 +9547,9 @@ class DistributionalPPO(RecurrentPPO):
             y_true_np = y_true_tensor.flatten().detach().cpu().numpy().astype(np.float64)
             y_pred_np = y_pred_tensor.flatten().detach().cpu().numpy().astype(np.float64)
             self.logger.record("train/value_pred_mean", float(np.mean(y_pred_np)))
-            self.logger.record("train/value_pred_std", float(np.std(y_pred_np)))
+            self.logger.record("train/value_pred_std", float(np.std(y_pred_np, ddof=1)))
             self.logger.record("train/target_return_mean", float(np.mean(y_true_np)))
-            self.logger.record("train/target_return_std", float(np.std(y_true_np)))
+            self.logger.record("train/target_return_std", float(np.std(y_true_np, ddof=1)))
             diff_np = y_pred_np - y_true_np
             self.logger.record("train/value_mae", float(np.mean(np.abs(diff_np))))
             self.logger.record(

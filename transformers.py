@@ -439,8 +439,8 @@ def calculate_garch_volatility(prices: List[float], n: int) -> Optional[float]:
                 # Вычисляем логарифмические доходности
                 log_returns = np.log(price_window[1:] / price_window[:-1])
 
-                # Проверяем, что есть вариация в данных
-                returns_std = np.std(log_returns)
+                # Проверяем, что есть вариация в данных (используем ddof=1 для выборки)
+                returns_std = np.std(log_returns, ddof=1)
                 if returns_std >= VOLATILITY_FLOOR:
                     # Конвертируем в процентные доходности для лучшей численной стабильности
                     returns_pct = log_returns * 100

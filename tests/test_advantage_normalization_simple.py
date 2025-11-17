@@ -22,17 +22,17 @@ def test_global_advantage_normalization_basic():
     np.random.seed(42)
     advantages = np.random.randn(buffer_size, n_envs).astype(np.float32) * 10.0 + 5.0
 
-    # Compute expected global statistics
+    # Compute expected global statistics (using ddof=1 for sample std)
     expected_mean = float(np.mean(advantages))
-    expected_std = float(np.std(advantages))
+    expected_std = float(np.std(advantages, ddof=1))
     expected_std_clamped = max(expected_std, 1e-8)
 
     # Normalize (simulating the code in collect_rollouts)
     advantages_normalized = (advantages - expected_mean) / expected_std_clamped
 
-    # Verify global statistics of normalized advantages
+    # Verify global statistics of normalized advantages (using ddof=1)
     actual_mean = float(np.mean(advantages_normalized))
-    actual_std = float(np.std(advantages_normalized))
+    actual_std = float(np.std(advantages_normalized, ddof=1))
 
     assert abs(actual_mean) < 1e-6, f"Normalized mean should be ≈0, got {actual_mean}"
     assert abs(actual_std - 1.0) < 1e-6, f"Normalized std should be ≈1, got {actual_std}"
@@ -51,9 +51,9 @@ def test_global_normalization_preserves_relative_ordering():
 
     advantages = np.concatenate([group_a, group_b, group_c])
 
-    # Global normalization
+    # Global normalization (using ddof=1 for sample std)
     mean = float(np.mean(advantages))
-    std = float(np.std(advantages))
+    std = float(np.std(advantages, ddof=1))
     std_clamped = max(std, 1e-8)
     advantages_normalized = (advantages - mean) / std_clamped
 
@@ -88,8 +88,8 @@ def test_implementation_uses_global_normalization():
         "Should flatten entire buffer for global statistics"
     assert "np.mean(advantages_flat)" in source, \
         "Should compute mean over entire buffer"
-    assert "np.std(advantages_flat)" in source, \
-        "Should compute std over entire buffer"
+    assert "np.std(advantages_flat, ddof=1)" in source, \
+        "Should compute std over entire buffer with ddof=1 for unbiased estimate"
     assert "rollout_buffer.advantages = " in source, \
         "Should update buffer with normalized advantages"
 

@@ -373,7 +373,7 @@ class AnomalyDetector:
 
         rets_arr = np.asarray(self._rets, dtype=np.float64)
         cur_ret = rets_arr[-1]
-        sigma = np.std(rets_arr[:-1]) if len(rets_arr) > 1 else 0.0
+        sigma = np.std(rets_arr[:-1], ddof=1) if len(rets_arr) > 1 else 0.0
         if sigma > 0 and abs(cur_ret) > float(self.sigma_mult) * sigma:
             self._cooldown_left = int(self.cooldown_bars)
             self._last_reason = Reason.ANOMALY_RET

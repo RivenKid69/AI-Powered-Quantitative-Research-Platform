@@ -124,7 +124,7 @@ def test_normalization_with_extreme_values():
             # Use float64 for computation (as in implementation)
             advantages_64 = advantages.astype(np.float64)
             mean = float(np.mean(advantages_64))
-            std = float(np.std(advantages_64))
+            std = float(np.std(advantages_64, ddof=1))
             std_clamped = max(std, 1e-8)
 
             normalized = (advantages - mean) / std_clamped
@@ -151,7 +151,7 @@ def test_normalization_with_constant_values():
         advantages = np.ones(100, dtype=np.float32) * 42.0
 
         mean = float(np.mean(advantages))
-        std = float(np.std(advantages))
+        std = float(np.std(advantages, ddof=1))
         std_clamped = max(std, 1e-8)  # Should clamp to 1e-8
 
         normalized = (advantages - mean) / std_clamped
@@ -180,7 +180,7 @@ def test_normalization_with_single_outlier():
 
         advantages_64 = advantages.astype(np.float64)
         mean = float(np.mean(advantages_64))
-        std = float(np.std(advantages_64))
+        std = float(np.std(advantages_64, ddof=1))
         std_clamped = max(std, 1e-8)
 
         normalized = (advantages - mean) / std_clamped
@@ -208,7 +208,7 @@ def test_float32_vs_float64_precision():
         # Compute in float64 (as implementation does)
         advantages_f64 = advantages_f32.astype(np.float64)
         mean_f64 = float(np.mean(advantages_f64))
-        std_f64 = float(np.std(advantages_f64))
+        std_f64 = float(np.std(advantages_f64, ddof=1))
         std_clamped = max(std_f64, 1e-8)
 
         normalized = ((advantages_f32 - mean_f64) / std_clamped).astype(np.float32)
@@ -253,7 +253,7 @@ def test_single_value_buffer():
         advantages = np.array([42.0], dtype=np.float32)
 
         mean = float(np.mean(advantages))
-        std = float(np.std(advantages))  # Will be 0
+        std = float(np.std(advantages, ddof=1))  # Will be 0
         std_clamped = max(std, 1e-8)
 
         normalized = (advantages - mean) / std_clamped
@@ -275,7 +275,7 @@ def test_two_values_opposite_signs():
         advantages = np.array([-5.0, 5.0], dtype=np.float32)
 
         mean = float(np.mean(advantages))  # Should be 0
-        std = float(np.std(advantages))
+        std = float(np.std(advantages, ddof=1))
         std_clamped = max(std, 1e-8)
 
         normalized = (advantages - mean) / std_clamped
@@ -312,7 +312,7 @@ def test_implementation_uses_float64_for_computation():
         assert "np.mean(advantages_flat)" in source, \
             "Should use numpy mean on flattened advantages"
 
-        assert "np.std(advantages_flat)" in source, \
+        assert "np.std(advantages_flat, ddof=1)" in source, \
             "Should use numpy std on flattened advantages"
 
         # Should convert back to float32
@@ -456,14 +456,14 @@ def test_normalized_distribution_properties():
             # Normalize
             advantages_64 = advantages.astype(np.float64)
             mean = float(np.mean(advantages_64))
-            std = float(np.std(advantages_64))
+            std = float(np.std(advantages_64, ddof=1))
             std_clamped = max(std, 1e-8)
 
             normalized = (advantages - mean) / std_clamped
 
             # Check properties
             norm_mean = float(np.mean(normalized))
-            norm_std = float(np.std(normalized))
+            norm_std = float(np.std(normalized, ddof=1))
 
             assert abs(norm_mean) < 1e-5, \
                 f"{name}: normalized mean should be ≈0, got {norm_mean}"
@@ -488,7 +488,7 @@ def test_normalization_preserves_ordering():
 
         # Normalize
         mean = float(np.mean(advantages))
-        std = float(np.std(advantages))
+        std = float(np.std(advantages, ddof=1))
         std_clamped = max(std, 1e-8)
         normalized = (advantages - mean) / std_clamped
 
@@ -513,7 +513,7 @@ def test_normalization_is_linear_transformation():
 
         # Normalize
         mean = float(np.mean(advantages))
-        std = float(np.std(advantages))
+        std = float(np.std(advantages, ddof=1))
         std_clamped = max(std, 1e-8)
         normalized = (advantages - mean) / std_clamped
 
@@ -545,7 +545,7 @@ def test_advantages_remain_constant_across_epochs():
 
         # Normalize once (as in collect_rollouts)
         mean = float(np.mean(advantages))
-        std = float(np.std(advantages))
+        std = float(np.std(advantages, ddof=1))
         std_clamped = max(std, 1e-8)
         advantages_normalized = (advantages - mean) / std_clamped
 
@@ -557,7 +557,7 @@ def test_advantages_remain_constant_across_epochs():
 
             # Check that the VALUES are still from the normalized distribution
             epoch_mean = float(np.mean(shuffled))
-            epoch_std = float(np.std(shuffled))
+            epoch_std = float(np.std(shuffled, ddof=1))
 
             assert abs(epoch_mean) < 1e-5, \
                 f"Epoch {epoch}: mean should stay ≈0, got {epoch_mean}"
@@ -584,7 +584,7 @@ def test_matches_stable_baselines3_normalization():
         # Our approach (global normalization)
         advantages_64 = advantages.astype(np.float64)
         mean = float(np.mean(advantages_64))
-        std = float(np.std(advantages_64))
+        std = float(np.std(advantages_64, ddof=1))
         std_clamped = max(std, 1e-8)
         our_normalized = (advantages - mean) / std_clamped
 

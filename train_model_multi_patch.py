@@ -1718,7 +1718,7 @@ def sharpe_ratio(
     annualization_sqrt: float | None = None,
 ) -> float:
     ann = _resolve_ann_sqrt(annualization_sqrt)
-    std = np.std(returns)
+    std = np.std(returns, ddof=1)
     return np.mean(returns - risk_free_rate) / (std + 1e-9) * ann
 
 
@@ -1734,14 +1734,14 @@ def sortino_ratio(
     if downside_count == 0:
         # Если нет убытков, используем стандартное отклонение (как в Шарпе).
         # Это более адекватно оценивает риск, чем возврат константы.
-        std = np.std(returns)
+        std = np.std(returns, ddof=1)
         # Предотвращаем деление на ноль, если все доходности одинаковы.
         if std < 1e-9:
             return 0.0
         return np.mean(returns - risk_free_rate) / std * ann
 
     if downside_count < 20:
-        std = np.std(returns)
+        std = np.std(returns, ddof=1)
         if std < 1e-9:
             return 0.0
         return np.mean(returns - risk_free_rate) / std * ann
@@ -5099,7 +5099,7 @@ def main():
 
             report = {
                 "mean_reward": float(np.mean(rewards)),
-                "std_reward": float(np.std(rewards)),
+                "std_reward": float(np.std(rewards, ddof=1)),
                 "sortino_ratio": float(sortino),
                 "sharpe_ratio": float(sharpe),
             }

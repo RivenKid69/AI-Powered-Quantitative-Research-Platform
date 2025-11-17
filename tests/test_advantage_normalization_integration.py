@@ -25,7 +25,7 @@ def test_global_advantage_normalization_basic():
 
     # Compute expected global statistics
     expected_mean = float(np.mean(advantages))
-    expected_std = float(np.std(advantages))
+    expected_std = float(np.std(advantages, ddof=1))
     expected_std_clamped = max(expected_std, 1e-8)
 
     # Normalize (simulating the code in collect_rollouts)
@@ -33,7 +33,7 @@ def test_global_advantage_normalization_basic():
 
     # Verify global statistics of normalized advantages
     actual_mean = float(np.mean(advantages_normalized))
-    actual_std = float(np.std(advantages_normalized))
+    actual_std = float(np.std(advantages_normalized, ddof=1))
 
     assert abs(actual_mean) < 1e-6, f"Normalized mean should be ≈0, got {actual_mean}"
     assert abs(actual_std - 1.0) < 1e-6, f"Normalized std should be ≈1, got {actual_std}"
@@ -54,7 +54,7 @@ def test_global_normalization_preserves_relative_ordering():
 
     # Global normalization
     mean = float(np.mean(advantages))
-    std = float(np.std(advantages))
+    std = float(np.std(advantages, ddof=1))
     std_clamped = max(std, 1e-8)
     advantages_normalized = (advantages - mean) / std_clamped
 
@@ -83,7 +83,7 @@ def test_global_normalization_consistency_across_epochs():
 
     # Global normalization (done once in collect_rollouts)
     mean = float(np.mean(advantages))
-    std = float(np.std(advantages))
+    std = float(np.std(advantages, ddof=1))
     std_clamped = max(std, 1e-8)
     advantages_normalized = (advantages - mean) / std_clamped
 
@@ -116,7 +116,7 @@ def test_global_normalization_handles_edge_cases():
     # Case 1: All advantages are the same (std = 0)
     advantages_constant = np.ones(10, dtype=np.float32) * 5.0
     mean = float(np.mean(advantages_constant))
-    std = float(np.std(advantages_constant))
+    std = float(np.std(advantages_constant, ddof=1))
     std_clamped = max(std, 1e-8)  # Clamp to prevent division by zero
     normalized = (advantages_constant - mean) / std_clamped
 
@@ -126,7 +126,7 @@ def test_global_normalization_handles_edge_cases():
     # Case 2: Very small std
     advantages_small_std = np.array([1.0, 1.0001, 0.9999], dtype=np.float32)
     mean = float(np.mean(advantages_small_std))
-    std = float(np.std(advantages_small_std))
+    std = float(np.std(advantages_small_std, ddof=1))
     std_clamped = max(std, 1e-8)
     normalized = (advantages_small_std - mean) / std_clamped
 
@@ -153,8 +153,8 @@ def test_implementation_uses_global_normalization():
         "Should flatten entire buffer for global statistics"
     assert "np.mean(advantages_flat)" in source, \
         "Should compute mean over entire buffer"
-    assert "np.std(advantages_flat)" in source, \
-        "Should compute std over entire buffer"
+    assert "np.std(advantages_flat, ddof=1)" in source, \
+        "Should compute std over entire buffer with ddof=1 for unbiased estimate"
     assert "rollout_buffer.advantages = " in source, \
         "Should update buffer with normalized advantages"
 
@@ -230,12 +230,12 @@ def test_consistency_with_stable_baselines3_approach():
 
     # SB3: normalize entire buffer once
     mean = float(np.mean(advantages))
-    std = float(np.std(advantages))
+    std = float(np.std(advantages, ddof=1))
     advantages_normalized = (advantages - mean) / (std + 1e-8)
 
     # Verify it has the right properties
     assert abs(np.mean(advantages_normalized)) < 1e-6
-    assert abs(np.std(advantages_normalized) - 1.0) < 1e-5
+    assert abs(np.std(advantages_normalized, ddof=1) - 1.0) < 1e-5
 
     # Simulate training with batches (as SB3 does)
     # Each batch uses the SAME pre-normalized advantages
@@ -247,7 +247,7 @@ def test_consistency_with_stable_baselines3_approach():
     # (no re-normalization per batch)
     all_batches = np.concatenate([batch1, batch2, batch3])
     assert abs(np.mean(all_batches)) < 1e-6
-    assert abs(np.std(all_batches) - 1.0) < 1e-5
+    assert abs(np.std(all_batches, ddof=1) - 1.0) < 1e-5
 
     print("✓ Approach consistent with Stable-Baselines3")
 
