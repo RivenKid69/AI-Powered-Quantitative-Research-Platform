@@ -3233,6 +3233,8 @@ class DistributionalPPO(RecurrentPPO):
         current_cvar_weight_nominal: float,
         current_cvar_weight_raw: float,
         cvar_penalty_cap_value: float,
+        predicted_cvar_violation_unit_value: float = 0.0,
+        constraint_term_value: float = 0.0,
     ) -> None:
         """Emit CVaR telemetry in both raw fraction and normalised units."""
 
@@ -3267,6 +3269,11 @@ class DistributionalPPO(RecurrentPPO):
         self.logger.record("debug/cvar_lambda", float(cvar_lambda_value))
         self.logger.record("debug/cvar_limit", float(cvar_limit_raw_value))
         self.logger.record("debug/cvar_limit_unit", float(cvar_limit_unit_value))
+        # Predicted CVaR constraint metrics (with gradient flow)
+        self.logger.record("train/predicted_cvar_violation_unit", float(predicted_cvar_violation_unit_value))
+        self.logger.record("train/constraint_term", float(constraint_term_value))
+        self.logger.record("debug/predicted_cvar_violation_unit", float(predicted_cvar_violation_unit_value))
+        self.logger.record("debug/constraint_term", float(constraint_term_value))
 
     def _limit_mean_step(self, old_value: float, proposed: float, reference_std: float) -> float:
         max_rel_step = float(self._value_scale_max_rel_step)
@@ -7653,6 +7660,8 @@ class DistributionalPPO(RecurrentPPO):
                 bucket_cvar_loss_unit_value = 0.0
                 bucket_cvar_term_raw_value = 0.0
                 bucket_cvar_term_value = 0.0
+                bucket_predicted_cvar_violation_unit_value = 0.0
+                bucket_constraint_term_value = 0.0
                 bucket_total_loss_value = 0.0
                 bucket_value_mse_value = 0.0
                 bucket_value_logits_fp32: Optional[torch.Tensor] = None
@@ -8736,7 +8745,21 @@ class DistributionalPPO(RecurrentPPO):
                     )
 
                     if self.cvar_use_constraint:
-                        loss = loss + loss.new_tensor(lambda_scaled) * cvar_violation_unit_tensor
+                        # CRITICAL FIX: Use predicted CVaR (with gradients) instead of empirical CVaR
+                        # for constraint violation to enable proper gradient flow to policy parameters.
+                        # The Lagrangian constraint term must be differentiable w.r.t. policy parameters.
+                        # Reference: Nocedal & Wright (2006), "Numerical Optimization", Chapter 17
+                        cvar_limit_unit_for_constraint = cvar_raw.new_tensor(cvar_limit_unit_value)
+                        predicted_cvar_gap_unit = cvar_limit_unit_for_constraint - cvar_unit_tensor
+                        predicted_cvar_violation_unit = torch.clamp(predicted_cvar_gap_unit, min=0.0)
+
+                        # Use torch.tensor() with explicit device/dtype for clarity (both approaches work)
+                        lambda_tensor = torch.tensor(lambda_scaled, device=loss.device, dtype=loss.dtype)
+                        constraint_term = lambda_tensor * predicted_cvar_violation_unit
+                        loss = loss + constraint_term
+                    else:
+                        predicted_cvar_violation_unit = cvar_raw.new_tensor(0.0)
+                        constraint_term = cvar_raw.new_tensor(0.0)
 
                     loss_weighted = loss * loss.new_tensor(weight)
                     loss_weighted.backward()
@@ -8752,6 +8775,8 @@ class DistributionalPPO(RecurrentPPO):
                     bucket_cvar_loss_unit_value += float(cvar_loss.item()) * weight
                     bucket_cvar_term_raw_value += float(cvar_term_raw_tensor.item()) * weight
                     bucket_cvar_term_value += float(cvar_term.item()) * weight
+                    bucket_predicted_cvar_violation_unit_value += float(predicted_cvar_violation_unit.item()) * weight
+                    bucket_constraint_term_value += float(constraint_term.item()) * weight
                     bucket_total_loss_value += float(loss.item()) * weight
                     if self._use_quantile_value:
                         bucket_value_quantiles_fp32 = quantiles_fp32.detach()
@@ -8959,6 +8984,8 @@ class DistributionalPPO(RecurrentPPO):
                 cvar_loss_unit_value = bucket_cvar_loss_unit_value
                 cvar_term_raw_value = bucket_cvar_term_raw_value
                 cvar_term_value = bucket_cvar_term_value
+                predicted_cvar_violation_unit_value = bucket_predicted_cvar_violation_unit_value
+                constraint_term_value = bucket_constraint_term_value
                 total_loss_value = bucket_total_loss_value
 
                 if bucket_value_logits_fp32 is not None:
@@ -9324,6 +9351,8 @@ class DistributionalPPO(RecurrentPPO):
             cvar_penalty_cap_value=float(self.cvar_penalty_cap)
             if self.cvar_penalty_cap is not None
             else 0.0,
+            predicted_cvar_violation_unit_value=predicted_cvar_violation_unit_value,
+            constraint_term_value=constraint_term_value,
         )
         if reward_costs_fraction_value is not None:
             self.logger.record(
