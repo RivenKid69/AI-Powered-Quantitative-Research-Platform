@@ -7899,10 +7899,29 @@ class DistributionalPPO(RecurrentPPO):
                         policy_loss_bc_weighted = policy_loss_bc
                     else:
                         with torch.no_grad():
-                            # Clamp exp argument BEFORE computing exp to prevent overflow (exp(x) overflows at x > ~88)
-                            exp_arg = torch.clamp(advantages_selected / self.cql_beta, max=20.0)
+                            # Behavior Cloning with AWR-style (Advantage Weighted Regression) weighting
+                            # ----------------------------------------------------------------------
+                            # Standard AWR formula: weights = exp(A / β) where:
+                            #   - A: normalized advantage (mean=0, std=1 from group normalization)
+                            #   - β (self.cql_beta): temperature parameter controlling weight sharpness
+                            #     (default β=5.0 creates conservative "soft" weights ~1.0-2.0 for 95% cases)
+                            #
+                            # Weight clipping prevents extreme advantages from dominating training.
+                            # CRITICAL: Must clamp exp_arg BEFORE exp() to ensure correctness:
+                            #   ✓ CORRECT:   exp_arg = clamp(A/β, max=log(W_max)); w = exp(exp_arg)
+                            #   ✗ INCORRECT: exp_arg = clamp(A/β, max=20); w = exp(exp_arg); w = clamp(w, max=W_max)
+                            #                (exp(20)≈485M >> W_max=100, first clamp useless!)
+                            #
+                            # With normalized advantages and β=5.0:
+                            #   - 50th percentile (A=0σ):  weight = 1.00
+                            #   - 95th percentile (A=2σ):  weight = 1.49
+                            #   - 99.7th percentile (A=3σ): weight = 1.82
+                            #   - max_weight triggered at A≥23σ (statistically impossible)
+                            #
+                            # References: Peng et al. 2019 "Advantage-Weighted Regression"
+                            max_weight = 100.0
+                            exp_arg = torch.clamp(advantages_selected / self.cql_beta, max=math.log(max_weight))
                             weights = torch.exp(exp_arg)
-                            weights = torch.clamp(weights, max=100.0)
                         policy_loss_bc = (-log_prob_selected * weights).mean()
                         policy_loss_bc_weighted = policy_loss_bc * bc_coef
 
