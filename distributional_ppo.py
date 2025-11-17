@@ -6467,18 +6467,41 @@ class DistributionalPPO(RecurrentPPO):
         # This ensures consistent learning signal across all samples and proper gradient accumulation
         if self.normalize_advantage and rollout_buffer.advantages is not None:
             advantages_flat = rollout_buffer.advantages.reshape(-1).astype(np.float64)
-            adv_mean = float(np.mean(advantages_flat))
-            adv_std = float(np.std(advantages_flat))
-            adv_std_clamped = max(adv_std, 1e-8)
 
-            # Normalize in-place
-            rollout_buffer.advantages = (
-                (rollout_buffer.advantages - adv_mean) / adv_std_clamped
-            ).astype(np.float32)
+            # Safety check: ensure we have advantages to normalize
+            if advantages_flat.size > 0:
+                adv_mean = float(np.mean(advantages_flat))
+                adv_std = float(np.std(advantages_flat))
 
-            # Log global normalization statistics
-            self.logger.record("train/advantages_mean_raw", adv_mean)
-            self.logger.record("train/advantages_std_raw", adv_std)
+                # Additional safety: check for NaN/Inf in statistics
+                if not np.isfinite(adv_mean) or not np.isfinite(adv_std):
+                    self.logger.record("warn/advantages_invalid_stats", 1.0)
+                    # Skip normalization if statistics are invalid
+                else:
+                    adv_std_clamped = max(adv_std, 1e-8)
+
+                    # Normalize in-place
+                    normalized_advantages = (
+                        (rollout_buffer.advantages - adv_mean) / adv_std_clamped
+                    ).astype(np.float32)
+
+                    # Final safety check: ensure normalized advantages are finite
+                    if np.all(np.isfinite(normalized_advantages)):
+                        rollout_buffer.advantages = normalized_advantages
+
+                        # Log global normalization statistics
+                        self.logger.record("train/advantages_mean_raw", adv_mean)
+                        self.logger.record("train/advantages_std_raw", adv_std)
+                    else:
+                        # Normalization produced invalid values - skip it and log warning
+                        self.logger.record("warn/normalization_produced_invalid_values", 1.0)
+                        # Count how many are invalid
+                        invalid_count = float(np.sum(~np.isfinite(normalized_advantages)))
+                        total_count = float(normalized_advantages.size)
+                        self.logger.record("warn/normalization_invalid_fraction", invalid_count / total_count)
+            else:
+                # Empty buffer - log warning
+                self.logger.record("warn/empty_advantages_buffer", 1.0)
 
         callback.on_rollout_end()
 

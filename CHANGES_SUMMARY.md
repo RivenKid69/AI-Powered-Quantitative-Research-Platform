@@ -17,6 +17,17 @@ Switched to **global advantage normalization** (standard PPO practice):
 - ✅ Use pre-normalized advantages during training (no re-normalization)
 - ✅ Follows OpenAI Baselines and Stable-Baselines3 approach
 
+## Version 2.0: Safety Improvements (2025-11-17)
+
+After deep validation, added comprehensive safety checks:
+
+1. **Empty buffer protection** - Check `size > 0` before normalization
+2. **Invalid statistics detection** - Check `isfinite(mean)` and `isfinite(std)`
+3. **Normalized values validation** - Verify normalization produces finite values
+4. **Comprehensive logging** - 4 new warning metrics for debugging
+
+These improvements protect against edge cases without changing the core algorithm.
+
 ## Files Modified
 
 ### `distributional_ppo.py`
