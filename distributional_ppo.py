@@ -7866,11 +7866,12 @@ class DistributionalPPO(RecurrentPPO):
                     else:
                         log_prob_selected = log_prob_flat
                         old_log_prob_selected = old_log_prob_flat
+                    # Compute importance sampling ratio
+                    # Following standard PPO implementations (Stable Baselines3, CleanRL):
+                    # - No clamping on log_ratio (trust region is enforced by PPO clip in loss)
+                    # - Clamping log_ratio breaks gradient flow and violates PPO theory
+                    # - PPO clipping on ratio in loss is the correct trust region mechanism
                     log_ratio = log_prob_selected - old_log_prob_selected
-                    # Clamp log_ratio to prevent overflow and maintain trust region stability
-                    # exp(10) ≈ 22k is much more reasonable than exp(20) ≈ 485M
-                    # This provides numerical stability while allowing some slack for outliers
-                    log_ratio = torch.clamp(log_ratio, min=-10.0, max=10.0)
                     ratio = torch.exp(log_ratio)
                     policy_loss_1 = advantages_selected * ratio
                     policy_loss_2 = advantages_selected * torch.clamp(
