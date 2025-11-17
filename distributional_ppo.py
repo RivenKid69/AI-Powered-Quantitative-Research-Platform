@@ -7899,10 +7899,13 @@ class DistributionalPPO(RecurrentPPO):
                         policy_loss_bc_weighted = policy_loss_bc
                     else:
                         with torch.no_grad():
-                            # Clamp exp argument BEFORE computing exp to prevent overflow (exp(x) overflows at x > ~88)
-                            exp_arg = torch.clamp(advantages_selected / self.cql_beta, max=20.0)
+                            # AWR-style weighting: weights = exp(A / β), clipped to max_weight
+                            # To prevent numerical overflow and ensure weights ≤ max_weight,
+                            # we clamp exp_arg to log(max_weight) before computing exp
+                            # max_weight=100 => log(100) ≈ 4.605
+                            max_weight = 100.0
+                            exp_arg = torch.clamp(advantages_selected / self.cql_beta, max=math.log(max_weight))
                             weights = torch.exp(exp_arg)
-                            weights = torch.clamp(weights, max=100.0)
                         policy_loss_bc = (-log_prob_selected * weights).mean()
                         policy_loss_bc_weighted = policy_loss_bc * bc_coef
 
