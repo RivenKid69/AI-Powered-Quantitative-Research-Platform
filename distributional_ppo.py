@@ -2480,7 +2480,7 @@ class DistributionalPPO(RecurrentPPO):
             kappa * (abs_delta - 0.5 * kappa),
         )
         indicator = (delta.detach() < 0.0).float()
-        loss = torch.abs(tau - indicator) * (huber / kappa)
+        loss = torch.abs(tau - indicator) * huber
         return loss.mean()
 
     def _cvar_from_quantiles(self, predicted_quantiles: torch.Tensor) -> torch.Tensor:
