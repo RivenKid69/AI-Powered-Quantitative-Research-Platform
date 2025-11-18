@@ -8872,19 +8872,33 @@ class DistributionalPPO(RecurrentPPO):
                                 # Scale quantiles back if variance too large
                                 quantiles_norm_clipped = value_pred_norm_after_vf + quantiles_centered * std_ratio
                             elif self.distributional_vf_clip_mode == "per_quantile":
-                                # Per-quantile mode: clip EACH quantile individually relative to old_value
-                                # Formula: quantile_clipped = old_value + clip(quantile - old_value, -ε, +ε)
-                                # This GUARANTEES all quantiles stay within [old_value - ε, old_value + ε]
+                                # Per-quantile mode: clip EACH quantile individually relative to old quantile
+                                # Formula: quantile_i_clipped = old_quantile_i + clip(quantile_i - old_quantile_i, -ε, +ε)
+                                # This GUARANTEES all quantiles stay within [old_quantile_i - ε, old_quantile_i + ε]
                                 # This is the strictest interpretation of VF clipping for distributional critics
                                 # and most closely matches the original PPO VF clipping semantics.
 
-                                # Convert quantiles to raw space for clipping
+                                # CRITICAL FIX: Must use old_value_quantiles, NOT old_values_raw (mean)
+                                # Using old mean would collapse all quantiles toward the mean!
+                                if rollout_data.old_value_quantiles is None:
+                                    raise RuntimeError(
+                                        "distributional_vf_clip_mode='per_quantile' requires old_value_quantiles "
+                                        "in rollout buffer. Ensure value_quantiles are being stored."
+                                    )
+
+                                # Convert current and old quantiles to raw space for clipping
                                 quantiles_raw = self._to_raw_returns(quantiles_fp32)
 
-                                # Clip each quantile in raw space relative to old_values_raw_aligned
-                                # old_values_raw_aligned is already aligned to quantiles shape
-                                quantiles_raw_clipped = old_values_raw_aligned + torch.clamp(
-                                    quantiles_raw - old_values_raw_aligned,
+                                # Get old quantiles in raw space
+                                old_quantiles_norm = rollout_data.old_value_quantiles.to(
+                                    device=quantiles_fp32.device,
+                                    dtype=quantiles_fp32.dtype
+                                )
+                                old_quantiles_raw = self._to_raw_returns(old_quantiles_norm)
+
+                                # Clip each quantile relative to its corresponding old quantile
+                                quantiles_raw_clipped = old_quantiles_raw + torch.clamp(
+                                    quantiles_raw - old_quantiles_raw,
                                     min=-clip_delta,
                                     max=clip_delta
                                 )
