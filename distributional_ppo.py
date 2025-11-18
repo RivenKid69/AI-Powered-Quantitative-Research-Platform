@@ -2708,74 +2708,91 @@ class DistributionalPPO(RecurrentPPO):
         # When source atom exactly matches a target atom, the scatter_add logic above
         # may incorrectly distribute mass. We need to correct this.
         # IMPORTANT: Handle multiple same_bounds atoms per batch row correctly!
-        # GRADIENT FLOW FIX V2: Use pure tensor operations to maintain gradient flow
+        # GRADIENT FLOW FIX V3: Fully vectorized - NO batch loops, NO .item() on values
         if torch.any(same_bounds):
-            # Find batch rows that have at least one same_bounds atom
+            # Find which batch rows need correction
             rows_with_same_bounds = same_bounds.any(dim=1)
 
             if rows_with_same_bounds.any():
-                # Process each batch row that needs fixing
-                batch_indices_to_fix = rows_with_same_bounds.nonzero(as_tuple=False).squeeze(-1)
-                if batch_indices_to_fix.dim() == 0:
-                    batch_indices_to_fix = batch_indices_to_fix.unsqueeze(0)
+                # FULLY VECTORIZED APPROACH: Use flattened indices to avoid batch loop
 
-                for batch_idx_tensor in batch_indices_to_fix:
-                    # GRADIENT FLOW: Keep batch_idx as tensor when possible
-                    batch_idx = batch_idx_tensor.item()  # Need int for slicing, but minimize .item() usage
+                # Create batch and atom index grids
+                batch_indices_grid = torch.arange(batch_size, device=probs.device).unsqueeze(1).expand_as(same_bounds)
+                atom_indices_grid = torch.arange(num_atoms, device=probs.device).unsqueeze(0).expand_as(same_bounds)
 
-                    # Find all atoms with same_bounds in this batch row
-                    same_atoms_mask = same_bounds[batch_idx]
-                    same_atom_indices = same_atoms_mask.nonzero(as_tuple=False).squeeze(-1)
+                # ===================================================================
+                # Step 1: Handle same_bounds atoms (exact matches)
+                # ===================================================================
+                # Extract indices and values where same_bounds is True
+                same_batch_idx = batch_indices_grid[same_bounds]  # [n_same]
+                same_atom_idx = atom_indices_grid[same_bounds]  # [n_same]
+                same_target_atom_idx = upper_bound_before_adjust[same_bounds]  # [n_same]
+                same_probs_values = probs[same_bounds]  # [n_same]
 
-                    if same_atom_indices.numel() == 0:
-                        continue
+                # Convert 2D indices (batch, atom) to 1D flat indices
+                flat_target_idx_same = same_batch_idx * num_atoms + same_target_atom_idx
 
-                    # Ensure same_atom_indices is 1D
-                    if same_atom_indices.dim() == 0:
-                        same_atom_indices = same_atom_indices.unsqueeze(0)
+                # Create flat buffer and scatter-add same_bounds contributions
+                corrected_flat_same = torch.zeros(
+                    batch_size * num_atoms,
+                    device=probs.device,
+                    dtype=probs.dtype
+                )
+                corrected_flat_same.scatter_add_(0, flat_target_idx_same, same_probs_values)
 
-                    # Create corrected row: start with zeros
-                    corrected_row = torch.zeros_like(projected_probs[batch_idx])
+                # ===================================================================
+                # Step 2: Handle non-same_bounds atoms (regular projection)
+                # ===================================================================
+                # Create mask for non-same_bounds atoms in rows that need correction
+                non_same_in_corrected_rows = (~same_bounds) & rows_with_same_bounds.unsqueeze(1)
 
-                    # GRADIENT FLOW FIX: Use scatter_add_ instead of Python loops
-                    # Add probability mass for all same_bounds atoms to their exact positions
-                    # Extract target indices and probabilities as tensors
-                    target_indices = upper_bound_before_adjust[batch_idx, same_atom_indices]
-                    probs_to_add = probs[batch_idx, same_atom_indices]
-                    # Use scatter_add_ to maintain gradient flow (no .item() on probs!)
-                    corrected_row.scatter_add_(0, target_indices, probs_to_add)
+                if torch.any(non_same_in_corrected_rows):
+                    # Extract indices for non-same atoms
+                    non_same_batch_idx = batch_indices_grid[non_same_in_corrected_rows]
+                    non_same_atom_idx = atom_indices_grid[non_same_in_corrected_rows]
 
-                    # For non-same_bounds atoms, keep the projected probabilities
-                    # These were correctly handled by scatter_add above
-                    non_same_mask = ~same_atoms_mask
-                    non_same_indices = non_same_mask.nonzero(as_tuple=False).squeeze(-1)
+                    # Get lower and upper bounds for these atoms
+                    non_same_lower_idx = lower_bound[non_same_in_corrected_rows]
+                    non_same_upper_idx = upper_bound[non_same_in_corrected_rows]
+                    non_same_lower_probs = lower_prob[non_same_in_corrected_rows]
+                    non_same_upper_probs = upper_prob[non_same_in_corrected_rows]
 
-                    if non_same_indices.numel() > 0:
-                        # Ensure non_same_indices is 1D
-                        if non_same_indices.dim() == 0:
-                            non_same_indices = non_same_indices.unsqueeze(0)
+                    # Convert to flat indices
+                    flat_lower_idx = non_same_batch_idx * num_atoms + non_same_lower_idx
+                    flat_upper_idx = non_same_batch_idx * num_atoms + non_same_upper_idx
 
-                        # GRADIENT FLOW FIX: Use scatter_add_ for non-same bounds atoms
-                        # Add lower probabilities
-                        lower_indices = lower_bound[batch_idx, non_same_indices]
-                        lower_probs = lower_prob[batch_idx, non_same_indices]
-                        corrected_row.scatter_add_(0, lower_indices, lower_probs)
+                    # Scatter-add non-same_bounds contributions
+                    corrected_flat_same.scatter_add_(0, flat_lower_idx, non_same_lower_probs)
+                    corrected_flat_same.scatter_add_(0, flat_upper_idx, non_same_upper_probs)
 
-                        # Add upper probabilities
-                        upper_indices = upper_bound[batch_idx, non_same_indices]
-                        upper_probs = upper_prob[batch_idx, non_same_indices]
-                        corrected_row.scatter_add_(0, upper_indices, upper_probs)
+                # Reshape flat buffer back to 2D
+                corrected_probs_2d = corrected_flat_same.view(batch_size, num_atoms)
 
-                    # Normalize the corrected row
-                    row_sum = corrected_row.sum()
-                    if row_sum > 1e-6:
-                        corrected_row = corrected_row / row_sum
-                    else:
-                        # Fallback: uniform distribution
-                        corrected_row = torch.ones_like(corrected_row) / num_atoms
+                # ===================================================================
+                # Step 3: Normalize corrected rows
+                # ===================================================================
+                # Compute row sums for normalization
+                row_sums = corrected_probs_2d.sum(dim=1, keepdim=True)
+                # Avoid division by zero
+                row_sums_safe = row_sums.clamp(min=1e-6)
+                corrected_probs_normalized = corrected_probs_2d / row_sums_safe
 
-                    # Replace the row (gradient flows through this assignment)
-                    projected_probs[batch_idx] = corrected_row
+                # Handle degenerate cases (rows with near-zero sum)
+                degenerate_rows = (row_sums < 1e-6).squeeze(1)
+                if torch.any(degenerate_rows):
+                    uniform_dist = torch.ones(num_atoms, device=probs.device, dtype=probs.dtype) / num_atoms
+                    corrected_probs_normalized[degenerate_rows] = uniform_dist
+
+                # ===================================================================
+                # Step 4: Selectively replace rows using masking (100% differentiable)
+                # ===================================================================
+                # Use where to conditionally replace rows - preserves gradients!
+                rows_mask = rows_with_same_bounds.unsqueeze(1)  # [batch, 1]
+                projected_probs = torch.where(
+                    rows_mask,
+                    corrected_probs_normalized,
+                    projected_probs
+                )
 
         return projected_probs
 

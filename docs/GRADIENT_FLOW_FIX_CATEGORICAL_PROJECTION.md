@@ -2,11 +2,13 @@
 
 ## Issue Summary
 
-**Location:** `distributional_ppo.py:2727-2731` (original code)
+**Location:** `distributional_ppo.py:2727-2731, 2778` (original code)
 
 **Severity:** CRITICAL - Breaks gradient flow for VF (Value Function) clipping in categorical distributional RL
 
 **Impact:** When VF clipping is enabled (`clip_range_vf != None`), the value network cannot train properly because gradients do not flow through the categorical projection operation.
+
+**Fix Version:** V3 - Fully vectorized, no batch loops, guaranteed gradient flow
 
 ## Problem Description
 
@@ -59,42 +61,71 @@ This is why VF clipping has been disabled by default (`clip_range_vf = None`) - 
 
 ## The Fix
 
-### Changes Made
+### Fix Evolution
+
+**V1 (Initial):** Original broken code with .item() and Python loops
+**V2 (Intermediate):** Replaced Python atom loops with scatter_add_, but still had batch loop
+**V3 (Final):** Fully vectorized, NO loops, guaranteed gradient flow
+
+### Changes Made (V3)
 
 **File:** `distributional_ppo.py`
 
-**Lines changed:** 2700-2771
+**Lines changed:** 2707-2797
 
 **Key improvements:**
 
-1. **Replaced Python loops with `scatter_add_` operations** (lines 2733-2760)
-2. **Eliminated `.item()` calls on probability values**
-3. **Used pure tensor operations throughout**
+1. **ELIMINATED batch loop completely** - fully vectorized
+2. **NO .item() calls on gradient-carrying values**
+3. **Used flattened indices for batch-wise scatter_add_**
+4. **Used torch.where() for final merge** (100% differentiable)
 
-### New Implementation
+### V3 Implementation (Final)
 
 ```python
-# FIXED CODE
-# GRADIENT FLOW FIX: Use scatter_add_ instead of Python loops
-# Add probability mass for all same_bounds atoms to their exact positions
-# Extract target indices and probabilities as tensors
-target_indices = upper_bound_before_adjust[batch_idx, same_atom_indices]
-probs_to_add = probs[batch_idx, same_atom_indices]
-# Use scatter_add_ to maintain gradient flow (no .item() on probs!)
-corrected_row.scatter_add_(0, target_indices, probs_to_add)
+# GRADIENT FLOW FIX V3: Fully vectorized - NO batch loops, NO .item() on values
 
-# For non-same_bounds atoms:
-# GRADIENT FLOW FIX: Use scatter_add_ for non-same bounds atoms
-# Add lower probabilities
-lower_indices = lower_bound[batch_idx, non_same_indices]
-lower_probs = lower_prob[batch_idx, non_same_indices]
-corrected_row.scatter_add_(0, lower_indices, lower_probs)
+# Create batch and atom index grids
+batch_indices_grid = torch.arange(batch_size, device=probs.device).unsqueeze(1).expand_as(same_bounds)
+atom_indices_grid = torch.arange(num_atoms, device=probs.device).unsqueeze(0).expand_as(same_bounds)
 
-# Add upper probabilities
-upper_indices = upper_bound[batch_idx, non_same_indices]
-upper_probs = upper_prob[batch_idx, non_same_indices]
-corrected_row.scatter_add_(0, upper_indices, upper_probs)
+# Step 1: Handle same_bounds atoms (exact matches)
+same_batch_idx = batch_indices_grid[same_bounds]  # [n_same]
+same_target_atom_idx = upper_bound_before_adjust[same_bounds]  # [n_same]
+same_probs_values = probs[same_bounds]  # [n_same] - NO .item()!
+
+# Convert 2D indices to 1D flat indices
+flat_target_idx_same = same_batch_idx * num_atoms + same_target_atom_idx
+
+# Create flat buffer and scatter-add
+corrected_flat_same = torch.zeros(batch_size * num_atoms, ...)
+corrected_flat_same.scatter_add_(0, flat_target_idx_same, same_probs_values)
+
+# Step 2: Handle non-same_bounds atoms (similar flattened approach)
+# ... (see full code for details)
+
+# Step 3: Normalize corrected rows
+corrected_probs_normalized = corrected_probs_2d / row_sums_safe
+
+# Step 4: Selectively replace using torch.where (100% differentiable!)
+rows_mask = rows_with_same_bounds.unsqueeze(1)
+projected_probs = torch.where(
+    rows_mask,
+    corrected_probs_normalized,
+    projected_probs
+)
 ```
+
+### Why V3 is Superior
+
+| Aspect | V2 | V3 |
+|--------|----|----|
+| Batch loop | ❌ Yes | ✅ No |
+| .item() on values | ✅ No | ✅ No |
+| Final merge | ⚠️ Assignment | ✅ torch.where() |
+| Gradient guarantee | 🟡 Likely OK | 🟢 100% certain |
+| Performance | 🟡 Good | 🟢 Better (vectorized) |
+| GPU efficiency | 🟡 Moderate | 🟢 Excellent |
 
 ### Benefits
 

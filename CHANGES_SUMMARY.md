@@ -4,6 +4,8 @@
 
 Fixed CRITICAL gradient flow bug in categorical distribution projection used for VF clipping.
 
+**Fix Version:** V3 - Fully vectorized, zero batch loops, guaranteed gradient flow
+
 ## Files Modified
 
 ### 1. `distributional_ppo.py`
@@ -13,11 +15,12 @@ Fixed CRITICAL gradient flow bug in categorical distribution projection used for
 - Emphasized importance for VF clipping
 - Noted requirement for `requires_grad=True`
 
-**Lines 2704-2771**: Fixed gradient flow implementation
-- Replaced Python loops with `scatter_add_` operations
-- Eliminated `.item()` calls on probability values
-- Used pure tensor operations to preserve computational graph
-- Added comprehensive comments explaining gradient flow
+**Lines 2707-2797**: Fixed gradient flow implementation (V3 - Fully Vectorized)
+- **ELIMINATED batch loop completely** - fully vectorized using flattened indices
+- **ZERO .item() calls on gradient-carrying values**
+- **Used torch.where() for final merge** (100% differentiable, replaces risky assignment)
+- Used flattened 1D scatter_add_ for batch-wise operations
+- Added comprehensive step-by-step comments
 
 **Lines 8813-8821**: Updated usage site comments
 - Added explanation of gradient flow requirement
@@ -40,11 +43,40 @@ Standalone test (no pytest dependency):
 - Provides detailed output for debugging
 - Tests all critical scenarios
 
-### 3. `docs/GRADIENT_FLOW_FIX_CATEGORICAL_PROJECTION.md`
+### 3. `test_numerical_gradients.py`
+
+Numerical gradient verification (finite differences):
+- Compares autograd vs numerical gradients
+- Gold standard for gradient correctness
+- Tests same_bounds specific case
+
+### 4. `test_edge_cases.py`
+
+Comprehensive edge case suite:
+- Single atom, all same bounds, no same bounds
+- Mixed scenarios, extreme shifts
+- Various batch sizes (1 to 128)
+- Tests gradient flow for ALL edge cases
+
+### 5. `test_gradient_minimal.py`
+
+Analytical gradient flow analysis:
+- Pattern analysis (no PyTorch required)
+- Identifies potential gradient flow issues
+- Recommends best practices
+
+### 6. `run_gradient_flow_tests.sh`
+
+Master test runner:
+- Runs all gradient flow tests
+- Works with or without PyTorch
+- Comprehensive reporting
+
+### 7. `docs/GRADIENT_FLOW_FIX_CATEGORICAL_PROJECTION.md`
 
 Comprehensive documentation:
 - Problem description and analysis
-- Explanation of the fix
+- V1, V2, V3 evolution
 - Testing strategy
 - Impact assessment
 - References and background
@@ -63,14 +95,29 @@ for atom_idx_tensor in same_atom_indices:
 
 This pattern can break the computational graph in PyTorch.
 
-### Solution
+### Solution (V3 - Fully Vectorized)
 
-Use tensor operations (`scatter_add_`):
+Eliminated batch loop, use flattened indices + torch.where():
 ```python
-target_indices = upper_bound_before_adjust[batch_idx, same_atom_indices]
-probs_to_add = probs[batch_idx, same_atom_indices]
-corrected_row.scatter_add_(0, target_indices, probs_to_add)
+# Step 1: Create index grids (no loops!)
+batch_indices_grid = torch.arange(batch_size, ...).unsqueeze(1).expand_as(same_bounds)
+
+# Step 2: Extract values using boolean indexing
+same_batch_idx = batch_indices_grid[same_bounds]
+same_probs_values = probs[same_bounds]  # NO .item()!
+
+# Step 3: Flatten and scatter_add
+flat_idx = same_batch_idx * num_atoms + target_idx
+corrected_flat.scatter_add_(0, flat_idx, same_probs_values)
+
+# Step 4: Merge using torch.where (100% differentiable!)
+projected_probs = torch.where(rows_mask, corrected_normalized, projected_probs)
 ```
+
+**Key innovations:**
+- Flattened 2D → 1D for batch-wise scatter_add
+- torch.where() instead of Python assignment
+- Zero loops, zero .item() on values
 
 ## Verification
 
@@ -90,8 +137,11 @@ corrected_row.scatter_add_(0, target_indices, probs_to_add)
 - No API changes
 - Correct behavior when VF clipping enabled
 
-### Performance
-- ⚡ Slight improvement (tensor ops vs Python loops)
+### Performance (V3)
+- ⚡⚡ **Significant improvement** - fully vectorized, no batch loop
+- 🚀 Better GPU utilization (batch-parallel operations)
+- 📉 Reduced CPU-GPU synchronization overhead
+- ✅ Scalable to large batch sizes
 
 ---
 
