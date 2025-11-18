@@ -2604,6 +2604,113 @@ class DistributionalPPO(RecurrentPPO):
         # Normalize by alpha to get CVaR
         return expectation / alpha
 
+    def _project_categorical_distribution(
+        self,
+        probs: torch.Tensor,
+        source_atoms: torch.Tensor,
+        target_atoms: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Project a categorical distribution from source atoms to target atoms.
+
+        This implements the C51 projection algorithm to redistribute probability mass
+        when atoms are shifted. Used for VF clipping in categorical distributional RL.
+
+        Args:
+            probs: Probability distribution over source atoms, shape [batch, num_atoms]
+            source_atoms: Source atom values, shape [num_atoms] or broadcastable
+            target_atoms: Target atom values (fixed grid), shape [num_atoms] or broadcastable
+
+        Returns:
+            Projected probability distribution over target atoms, shape [batch, num_atoms]
+        """
+        batch_size = probs.shape[0]
+        num_atoms = probs.shape[1]
+
+        # Ensure atoms are properly shaped for broadcasting
+        if source_atoms.dim() == 1:
+            source_atoms = source_atoms.view(1, -1)
+        if target_atoms.dim() == 1:
+            target_atoms = target_atoms.view(1, -1)
+
+        # Validate num_atoms to prevent division by zero
+        if num_atoms <= 1:
+            return probs  # No projection needed for single atom
+
+        # Compute atom spacing for target grid
+        v_min = float(target_atoms.min().item())
+        v_max = float(target_atoms.max().item())
+        delta_z = (v_max - v_min) / float(num_atoms - 1)
+
+        # Handle degenerate case where all atoms are the same
+        if abs(delta_z) < 1e-6:
+            # All probability mass goes to a single atom
+            projected_probs = torch.zeros_like(probs)
+            projected_probs[:, 0] = 1.0
+            return projected_probs
+
+        # Project each source atom position to target grid
+        # b[i] represents where source_atoms[i] falls in the target grid
+        # Clamp to target support [v_min, v_max]
+        clamped_sources = source_atoms.clamp(v_min, v_max)
+        b = (clamped_sources - v_min) / delta_z
+
+        # Protect against non-finite values
+        b_safe = torch.where(torch.isfinite(b), b, torch.zeros_like(b))
+
+        # Find lower and upper target atoms for each source atom
+        lower_bound = b_safe.floor().long().clamp(min=0, max=num_atoms - 1)
+        upper_bound = b_safe.ceil().long().clamp(min=0, max=num_atoms - 1)
+
+        # Handle same_bounds case (when source atom exactly matches target atom)
+        same_bounds = lower_bound == upper_bound
+        upper_bound_before_adjust = upper_bound.clone()
+        adjust_mask = same_bounds & (lower_bound > 0)
+        lower_bound = torch.where(adjust_mask, lower_bound - 1, lower_bound)
+        lower_bound = torch.clamp(lower_bound, 0, num_atoms - 1)
+        upper_bound = torch.clamp(lower_bound + 1, 0, num_atoms - 1)
+
+        # Initialize projected distribution
+        projected_probs = torch.zeros_like(probs)
+
+        # Compute probability mass for lower and upper atoms
+        # Linear interpolation based on distance from b to bounds
+        lower_prob = (upper_bound.to(torch.float32) - b) * probs
+        upper_prob = (b - lower_bound.to(torch.float32)) * probs
+
+        # Clamp probabilities to be non-negative
+        lower_prob = lower_prob.clamp(min=0.0)
+        upper_prob = upper_prob.clamp(min=0.0)
+
+        # Scatter-add probability mass to target atoms
+        # We need to iterate over source atoms and accumulate to target atoms
+        for i in range(num_atoms):
+            lower_idx = lower_bound[:, i]
+            upper_idx = upper_bound[:, i]
+
+            # Add lower probability mass
+            projected_probs.scatter_add_(1, lower_idx.view(-1, 1), lower_prob[:, i:i+1])
+            # Add upper probability mass
+            projected_probs.scatter_add_(1, upper_idx.view(-1, 1), upper_prob[:, i:i+1])
+
+        # Normalize to ensure valid probability distribution
+        normaliser = projected_probs.sum(dim=1, keepdim=True).clamp_min(1e-6)
+        projected_probs = projected_probs / normaliser
+
+        # Fix up same_bounds cases to put all mass at the exact matching atom
+        if torch.any(same_bounds):
+            for i in range(num_atoms):
+                same_mask = same_bounds[:, i]
+                if same_mask.any():
+                    batch_indices = same_mask.nonzero(as_tuple=False).squeeze(1)
+                    target_idx = upper_bound_before_adjust[batch_indices, i]
+                    # Zero out the row for these batch indices
+                    projected_probs[batch_indices] = 0.0
+                    # Put all mass at the matching atom
+                    projected_probs[batch_indices, target_idx] = probs[batch_indices, i]
+
+        return projected_probs
+
     def _enforce_optimizer_lr_bounds(
         self,
         *,
@@ -8507,10 +8614,101 @@ class DistributionalPPO(RecurrentPPO):
                         else:
                             log_predictions_selected = log_predictions
                             target_distribution_selected = target_distribution
+                        # CRITICAL FIX: Compute unclipped cross-entropy loss
+                        # PPO VF clipping for categorical: max(loss(pred, target), loss(clip(pred), target))
                         critic_loss_unclipped = -(
                             target_distribution_selected * log_predictions_selected
                         ).sum(dim=1).mean()
-                        critic_loss = critic_loss_unclipped / self._critic_ce_normalizer
+
+                        # Apply VF clipping if enabled
+                        if clip_range_vf_value is not None:
+                            if old_values_raw_tensor is None:
+                                raise RuntimeError(
+                                    "clip_range_vf requires old value predictions "
+                                    "(distributional_ppo.py::_train_step::categorical)"
+                                )
+
+                            # Compute mean value from predicted distribution
+                            mean_values_norm_full = (pred_probs_fp32 * self.policy.atoms).sum(
+                                dim=1, keepdim=True
+                            )
+                            mean_values_raw_full = self._to_raw_returns(mean_values_norm_full)
+
+                            # Clip mean value in raw space
+                            clip_delta = float(clip_range_vf_value)
+                            old_values_raw_aligned = old_values_raw_tensor
+                            while old_values_raw_aligned.dim() < mean_values_raw_full.dim():
+                                old_values_raw_aligned = old_values_raw_aligned.unsqueeze(-1)
+
+                            mean_values_raw_clipped = torch.clamp(
+                                mean_values_raw_full,
+                                min=old_values_raw_aligned - clip_delta,
+                                max=old_values_raw_aligned + clip_delta,
+                            )
+
+                            # Convert clipped mean back to normalized space
+                            if self.normalize_returns:
+                                mean_values_norm_clipped = (
+                                    (mean_values_raw_clipped - ret_mu_tensor) / ret_std_tensor
+                                ).clamp(self._value_norm_clip_min, self._value_norm_clip_max)
+                            else:
+                                mean_values_norm_clipped = (
+                                    (mean_values_raw_clipped / float(base_scale_safe))
+                                    * self._value_target_scale_effective
+                                )
+                                if self._value_clip_limit_scaled is not None:
+                                    mean_values_norm_clipped = torch.clamp(
+                                        mean_values_norm_clipped,
+                                        min=-self._value_clip_limit_scaled,
+                                        max=self._value_clip_limit_scaled,
+                                    )
+
+                            # Compute delta in normalized space
+                            delta_norm = mean_values_norm_clipped - mean_values_norm_full
+
+                            # Shift atoms by delta to create clipped distribution support
+                            atoms_original = self.policy.atoms  # Shape: [num_atoms]
+                            atoms_shifted = atoms_original + delta_norm.squeeze(-1)  # Broadcast delta
+
+                            # Project predicted probabilities from shifted atoms back to original atoms
+                            # This redistributes probability mass according to C51 projection
+                            pred_probs_clipped = self._project_categorical_distribution(
+                                probs=pred_probs_fp32,
+                                source_atoms=atoms_shifted,
+                                target_atoms=atoms_original,
+                            )
+
+                            # Ensure valid probability distribution
+                            pred_probs_clipped = torch.clamp(pred_probs_clipped, min=1e-8)
+                            pred_probs_clipped = pred_probs_clipped / pred_probs_clipped.sum(
+                                dim=1, keepdim=True
+                            )
+
+                            # Compute log probabilities for clipped distribution
+                            log_predictions_clipped = torch.log(pred_probs_clipped)
+
+                            # Select valid indices if needed
+                            if valid_indices is not None:
+                                log_predictions_clipped_selected = log_predictions_clipped[
+                                    valid_indices
+                                ]
+                            else:
+                                log_predictions_clipped_selected = log_predictions_clipped
+
+                            # CRITICAL FIX: Use UNCLIPPED target with clipped predictions
+                            # PPO VF clipping: max(loss(pred, target), loss(clip(pred), target))
+                            critic_loss_clipped = -(
+                                target_distribution_selected * log_predictions_clipped_selected
+                            ).sum(dim=1).mean()
+
+                            # Take maximum of unclipped and clipped loss (PPO VF clipping)
+                            critic_loss = torch.max(critic_loss_unclipped, critic_loss_clipped)
+                        else:
+                            # No VF clipping
+                            critic_loss = critic_loss_unclipped
+
+                        # Apply normalizer
+                        critic_loss = critic_loss / self._critic_ce_normalizer
 
                         with torch.no_grad():
 
