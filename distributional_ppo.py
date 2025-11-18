@@ -4660,6 +4660,7 @@ class DistributionalPPO(RecurrentPPO):
         cvar_use_constraint: bool = False,
         cvar_limit: float = -2.0,
         cvar_lambda_lr: float = 1e-2,
+        cvar_use_predicted_for_dual: bool = True,
         cvar_use_penalty: bool = True,
         cvar_penalty_cap: float = 0.7,
         v_range_ema_alpha: float = 0.01,
@@ -5022,6 +5023,9 @@ class DistributionalPPO(RecurrentPPO):
         self.cvar_lambda_lr = float(kwargs_local.pop("cvar_lambda_lr", cvar_lambda_lr))
         if self.cvar_lambda_lr < 0.0:
             raise ValueError("'cvar_lambda_lr' must be non-negative")
+        self.cvar_use_predicted_for_dual = bool(
+            kwargs_local.pop("cvar_use_predicted_for_dual", cvar_use_predicted_for_dual)
+        )
         self.cvar_use_penalty = bool(
             kwargs_local.pop("cvar_use_penalty", cvar_use_penalty)
         )
@@ -5039,6 +5043,8 @@ class DistributionalPPO(RecurrentPPO):
 
         self._cvar_empirical_ema: Optional[float] = None
         self._cvar_violation_ema: Optional[float] = None
+        self._cvar_predicted_last_raw: Optional[float] = None
+        self._cvar_predicted_last_unit: Optional[float] = None
         self._last_rollout_reward_raw: Optional[np.ndarray] = None
         self._last_rollout_reward_costs: Optional[np.ndarray] = None
         self._last_rollout_clip_bounds: Optional[np.ndarray] = None
@@ -7107,9 +7113,49 @@ class DistributionalPPO(RecurrentPPO):
         cvar_gap_value = float(cvar_gap_tensor.item())
         cvar_gap_unit_tensor = cvar_limit_unit_tensor - cvar_empirical_unit_tensor
         cvar_gap_unit_value = float(cvar_gap_unit_tensor.item())
+
+        # CRITICAL FIX: Use predicted CVaR for dual update to match constraint gradient
+        # This ensures mathematical consistency in Lagrangian dual ascent method.
+        # Reference: Nocedal & Wright (2006), "Numerical Optimization", Chapter 17
+        # Reference: Achiam et al. (2017), "Constrained Policy Optimization"
+        if self.cvar_use_constraint and self.cvar_use_predicted_for_dual:
+            # Use predicted CVaR from previous iteration for dual update
+            # On first iteration, fall back to empirical CVaR
+            if self._cvar_predicted_last_unit is not None:
+                cvar_for_dual_unit = float(self._cvar_predicted_last_unit)
+                cvar_for_dual_raw = float(self._cvar_predicted_last_raw)
+                cvar_gap_for_dual_unit = cvar_limit_unit_value - cvar_for_dual_unit
+                cvar_gap_for_dual_raw = cvar_limit_raw_value - cvar_for_dual_raw
+                dual_update_source = "predicted"
+            else:
+                # First iteration: use empirical as fallback
+                cvar_for_dual_unit = cvar_empirical_unit_value
+                cvar_for_dual_raw = cvar_empirical_value
+                cvar_gap_for_dual_unit = cvar_gap_unit_value
+                cvar_gap_for_dual_raw = cvar_gap_value
+                dual_update_source = "empirical_fallback"
+        else:
+            # Legacy behavior: use empirical CVaR (mathematically inconsistent but backward compatible)
+            cvar_for_dual_unit = cvar_empirical_unit_value
+            cvar_for_dual_raw = cvar_empirical_value
+            cvar_gap_for_dual_unit = cvar_gap_unit_value
+            cvar_gap_for_dual_raw = cvar_gap_value
+            dual_update_source = "empirical_legacy"
+
         self._cvar_lambda = self._bounded_dual_update(
-            float(self._cvar_lambda), float(self.cvar_lambda_lr), cvar_gap_unit_value
+            float(self._cvar_lambda), float(self.cvar_lambda_lr), cvar_gap_for_dual_unit
         )
+
+        # Log dual update source and CVaR values for debugging
+        self.logger.record("debug/cvar_dual_update_source", dual_update_source)
+        self.logger.record("debug/cvar_for_dual_raw", cvar_for_dual_raw)
+        self.logger.record("debug/cvar_for_dual_unit", cvar_for_dual_unit)
+        self.logger.record("debug/cvar_gap_for_dual_raw", cvar_gap_for_dual_raw)
+        self.logger.record("debug/cvar_gap_for_dual_unit", cvar_gap_for_dual_unit)
+        if self._cvar_predicted_last_unit is not None:
+            self.logger.record("debug/cvar_predicted_last_raw", float(self._cvar_predicted_last_raw))
+            self.logger.record("debug/cvar_predicted_last_unit", float(self._cvar_predicted_last_unit))
+
         # Remove .detach() to allow gradients to flow through constraint term
         cvar_violation_unit_tensor = torch.clamp(cvar_gap_unit_tensor, min=0.0)
         cvar_violation_unit_value = float(cvar_violation_unit_tensor.item())
@@ -9768,6 +9814,12 @@ class DistributionalPPO(RecurrentPPO):
         self._n_updates += epochs_completed
         self._update_calls += 1
         self._global_update_step += 1
+
+        # Save predicted CVaR for next iteration's dual update
+        # This ensures mathematical consistency in Lagrangian dual ascent
+        if self.cvar_use_constraint and self.cvar_use_predicted_for_dual:
+            self._cvar_predicted_last_raw = cvar_raw_value
+            self._cvar_predicted_last_unit = cvar_unit_value
 
         avg_policy_entropy = (
             policy_entropy_sum / float(policy_entropy_count)
