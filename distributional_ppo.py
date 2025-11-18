@@ -2616,13 +2616,20 @@ class DistributionalPPO(RecurrentPPO):
         This implements the C51 projection algorithm to redistribute probability mass
         when atoms are shifted. Used for VF clipping in categorical distributional RL.
 
+        GRADIENT FLOW: This function maintains gradient flow through all operations,
+        which is CRITICAL when used for VF clipping. The projected probabilities are
+        used in the loss computation, so gradients must backpropagate to the input probs.
+        All operations use tensor scatter/gather to preserve the computational graph.
+
         Args:
             probs: Probability distribution over source atoms, shape [batch, num_atoms]
+                   MUST have requires_grad=True when used for VF clipping
             source_atoms: Source atom values, shape [num_atoms] or broadcastable
             target_atoms: Target atom values (fixed grid), shape [num_atoms] or broadcastable
 
         Returns:
             Projected probability distribution over target atoms, shape [batch, num_atoms]
+            Gradients flow back to probs through this projection.
         """
         batch_size = probs.shape[0]
         num_atoms = probs.shape[1]
@@ -2701,6 +2708,7 @@ class DistributionalPPO(RecurrentPPO):
         # When source atom exactly matches a target atom, the scatter_add logic above
         # may incorrectly distribute mass. We need to correct this.
         # IMPORTANT: Handle multiple same_bounds atoms per batch row correctly!
+        # GRADIENT FLOW FIX V2: Use pure tensor operations to maintain gradient flow
         if torch.any(same_bounds):
             # Find batch rows that have at least one same_bounds atom
             rows_with_same_bounds = same_bounds.any(dim=1)
@@ -2708,9 +2716,12 @@ class DistributionalPPO(RecurrentPPO):
             if rows_with_same_bounds.any():
                 # Process each batch row that needs fixing
                 batch_indices_to_fix = rows_with_same_bounds.nonzero(as_tuple=False).squeeze(-1)
+                if batch_indices_to_fix.dim() == 0:
+                    batch_indices_to_fix = batch_indices_to_fix.unsqueeze(0)
 
                 for batch_idx_tensor in batch_indices_to_fix:
-                    batch_idx = int(batch_idx_tensor.item())
+                    # GRADIENT FLOW: Keep batch_idx as tensor when possible
+                    batch_idx = batch_idx_tensor.item()  # Need int for slicing, but minimize .item() usage
 
                     # Find all atoms with same_bounds in this batch row
                     same_atoms_mask = same_bounds[batch_idx]
@@ -2719,31 +2730,41 @@ class DistributionalPPO(RecurrentPPO):
                     if same_atom_indices.numel() == 0:
                         continue
 
+                    # Ensure same_atom_indices is 1D
+                    if same_atom_indices.dim() == 0:
+                        same_atom_indices = same_atom_indices.unsqueeze(0)
+
                     # Create corrected row: start with zeros
                     corrected_row = torch.zeros_like(projected_probs[batch_idx])
 
+                    # GRADIENT FLOW FIX: Use scatter_add_ instead of Python loops
                     # Add probability mass for all same_bounds atoms to their exact positions
-                    # Use index_put_ to maintain gradient flow
-                    for atom_idx_tensor in same_atom_indices:
-                        atom_idx = int(atom_idx_tensor.item())
-                        target_idx = int(upper_bound_before_adjust[batch_idx, atom_idx].item())
-                        # Use += to accumulate (in case multiple atoms map to same target)
-                        corrected_row[target_idx] = corrected_row[target_idx] + probs[batch_idx, atom_idx]
+                    # Extract target indices and probabilities as tensors
+                    target_indices = upper_bound_before_adjust[batch_idx, same_atom_indices]
+                    probs_to_add = probs[batch_idx, same_atom_indices]
+                    # Use scatter_add_ to maintain gradient flow (no .item() on probs!)
+                    corrected_row.scatter_add_(0, target_indices, probs_to_add)
 
                     # For non-same_bounds atoms, keep the projected probabilities
                     # These were correctly handled by scatter_add above
                     non_same_mask = ~same_atoms_mask
+                    non_same_indices = non_same_mask.nonzero(as_tuple=False).squeeze(-1)
 
-                    # Rebuild: add non-same_bounds atoms using projection
-                    for atom_idx in range(num_atoms):
-                        if non_same_mask[atom_idx]:
-                            lower_idx = int(lower_bound[batch_idx, atom_idx].item())
-                            upper_idx = int(upper_bound[batch_idx, atom_idx].item())
-                            l_prob = lower_prob[batch_idx, atom_idx]
-                            u_prob = upper_prob[batch_idx, atom_idx]
+                    if non_same_indices.numel() > 0:
+                        # Ensure non_same_indices is 1D
+                        if non_same_indices.dim() == 0:
+                            non_same_indices = non_same_indices.unsqueeze(0)
 
-                            corrected_row[lower_idx] = corrected_row[lower_idx] + l_prob
-                            corrected_row[upper_idx] = corrected_row[upper_idx] + u_prob
+                        # GRADIENT FLOW FIX: Use scatter_add_ for non-same bounds atoms
+                        # Add lower probabilities
+                        lower_indices = lower_bound[batch_idx, non_same_indices]
+                        lower_probs = lower_prob[batch_idx, non_same_indices]
+                        corrected_row.scatter_add_(0, lower_indices, lower_probs)
+
+                        # Add upper probabilities
+                        upper_indices = upper_bound[batch_idx, non_same_indices]
+                        upper_probs = upper_prob[batch_idx, non_same_indices]
+                        corrected_row.scatter_add_(0, upper_indices, upper_probs)
 
                     # Normalize the corrected row
                     row_sum = corrected_row.sum()
@@ -2753,7 +2774,7 @@ class DistributionalPPO(RecurrentPPO):
                         # Fallback: uniform distribution
                         corrected_row = torch.ones_like(corrected_row) / num_atoms
 
-                    # Replace the row
+                    # Replace the row (gradient flows through this assignment)
                     projected_probs[batch_idx] = corrected_row
 
         return projected_probs
@@ -8791,6 +8812,8 @@ class DistributionalPPO(RecurrentPPO):
 
                             # Project predicted probabilities from shifted atoms back to original atoms
                             # This redistributes probability mass according to C51 projection
+                            # GRADIENT FLOW: Projection maintains gradients back to pred_probs_fp32
+                            # This is CRITICAL for VF clipping to train the value network properly
                             pred_probs_clipped = self._project_categorical_distribution(
                                 probs=pred_probs_fp32,
                                 source_atoms=atoms_shifted,
