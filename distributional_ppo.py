@@ -597,6 +597,8 @@ class RawRecurrentRolloutBufferSamples(NamedTuple):
     episode_starts: torch.Tensor
     mask: torch.Tensor
     sample_indices: torch.Tensor  # FIX
+    old_value_quantiles: Optional[torch.Tensor]  # For distributional VF clipping (quantile critic)
+    old_value_probs: Optional[torch.Tensor]  # For distributional VF clipping (categorical critic)
 
 
 @dataclass(slots=True)
@@ -1282,6 +1284,9 @@ class RawRecurrentRolloutBuffer(RecurrentRolloutBuffer):
         self.actions_raw = np.zeros_like(self.actions, dtype=self.actions.dtype)
         self.old_log_prob_raw = np.zeros_like(self.log_probs, dtype=self.log_probs.dtype)
         self.seq_start_indices: list[int] = []  # FIX
+        # For distributional VF clipping - initialized on first add()
+        self.value_quantiles: Optional[np.ndarray] = None  # Shape: [buffer_size, n_envs, n_quantiles]
+        self.value_probs: Optional[np.ndarray] = None  # Shape: [buffer_size, n_envs, n_atoms]
 
     @staticmethod
     def _to_numpy(value: Any) -> np.ndarray:
@@ -1295,6 +1300,8 @@ class RawRecurrentRolloutBuffer(RecurrentRolloutBuffer):
         lstm_states: RNNStates,
         actions_raw: Any,
         log_prob_raw: Any,
+        value_quantiles: Optional[Any] = None,
+        value_probs: Optional[Any] = None,
         **kwargs: Any,
     ) -> None:
         if actions_raw is None or log_prob_raw is None:
@@ -1312,6 +1319,28 @@ class RawRecurrentRolloutBuffer(RecurrentRolloutBuffer):
         log_prob_raw_np = np.reshape(log_prob_raw_np, self.old_log_prob_raw[pos].shape)
         self.old_log_prob_raw[pos] = log_prob_raw_np.astype(self.old_log_prob_raw.dtype, copy=False)
 
+        # Store quantiles for distributional VF clipping (quantile critic)
+        if value_quantiles is not None:
+            quantiles_np = self._to_numpy(value_quantiles)
+            if self.value_quantiles is None:
+                # Initialize on first add
+                self.value_quantiles = np.zeros(
+                    (self.buffer_size, self.n_envs, quantiles_np.shape[-1]),
+                    dtype=np.float32
+                )
+            self.value_quantiles[pos] = quantiles_np.astype(np.float32, copy=False)
+
+        # Store probs for distributional VF clipping (categorical critic)
+        if value_probs is not None:
+            probs_np = self._to_numpy(value_probs)
+            if self.value_probs is None:
+                # Initialize on first add
+                self.value_probs = np.zeros(
+                    (self.buffer_size, self.n_envs, probs_np.shape[-1]),
+                    dtype=np.float32
+                )
+            self.value_probs[pos] = probs_np.astype(np.float32, copy=False)
+
     def get(
         self, batch_size: Optional[int] = None
     ) -> Generator[RawRecurrentRolloutBufferSamples, None, None]:
@@ -1321,7 +1350,7 @@ class RawRecurrentRolloutBuffer(RecurrentRolloutBuffer):
             for tensor in ["hidden_states_pi", "cell_states_pi", "hidden_states_vf", "cell_states_vf"]:
                 self.__dict__[tensor] = self.__dict__[tensor].swapaxes(1, 2)
 
-            for tensor in [
+            tensor_list = [
                 "observations",
                 "actions",
                 "values",
@@ -1335,7 +1364,14 @@ class RawRecurrentRolloutBuffer(RecurrentRolloutBuffer):
                 "episode_starts",
                 "actions_raw",
                 "old_log_prob_raw",
-            ]:
+            ]
+            # Add distributional tensors if present
+            if self.value_quantiles is not None:
+                tensor_list.append("value_quantiles")
+            if self.value_probs is not None:
+                tensor_list.append("value_probs")
+
+            for tensor in tensor_list:
                 self.__dict__[tensor] = self.swap_and_flatten(self.__dict__[tensor])
             self.generator_ready = True
 
@@ -1440,6 +1476,17 @@ class RawRecurrentRolloutBuffer(RecurrentRolloutBuffer):
         mask = _to_tensor(mask_np, force_float32=True)
         old_log_prob_raw = _to_tensor(old_log_prob_raw_np, convert_floats=True)
 
+        # Extract distributional data if present
+        old_value_quantiles = None
+        if self.value_quantiles is not None:
+            old_value_quantiles_np = self.pad_and_flatten(self.value_quantiles[batch_inds])
+            old_value_quantiles = _to_tensor(old_value_quantiles_np, convert_floats=True)
+
+        old_value_probs = None
+        if self.value_probs is not None:
+            old_value_probs_np = self.pad_and_flatten(self.value_probs[batch_inds])
+            old_value_probs = _to_tensor(old_value_probs_np, convert_floats=True)
+
         return RawRecurrentRolloutBufferSamples(
             observations=observations,
             actions=actions,
@@ -1453,6 +1500,8 @@ class RawRecurrentRolloutBuffer(RecurrentRolloutBuffer):
             actions_raw=actions_raw,
             old_log_prob_raw=old_log_prob_raw,
             sample_indices=sample_indices,
+            old_value_quantiles=old_value_quantiles,
+            old_value_probs=old_value_probs,
         )
 
 
@@ -6603,6 +6652,14 @@ class DistributionalPPO(RecurrentPPO):
             clip_bound_buffer[step_pos] = clip_bound_step
             clip_cap_buffer[step_pos] = clip_hard_cap_step
 
+            # Prepare distributional data for VF clipping
+            value_quantiles_for_buffer = None
+            value_probs_for_buffer = None
+            if self._use_quantile_value:
+                value_quantiles_for_buffer = value_quantiles.detach()
+            else:
+                value_probs_for_buffer = probs.detach()
+
             rollout_buffer.add(
                 self._last_obs,
                 actions_np,
@@ -6613,6 +6670,8 @@ class DistributionalPPO(RecurrentPPO):
                 lstm_states=self._last_lstm_states,
                 actions_raw=raw_actions_tensor,
                 log_prob_raw=old_log_prob_raw_tensor,
+                value_quantiles=value_quantiles_for_buffer,
+                value_probs=value_probs_for_buffer,
             )
 
             buffer_index = (rollout_buffer.pos - 1) % buffer_size
@@ -8775,11 +8834,24 @@ class DistributionalPPO(RecurrentPPO):
                                 quantiles_centered = quantiles_shifted - value_pred_norm_after_vf
                                 current_variance = (quantiles_centered ** 2).mean(dim=1, keepdim=True)
 
-                                # Estimate old variance (rough approximation)
-                                # In practice, we'd need to store old quantiles for exact calculation
-                                # Here we use a heuristic: assume similar shape, scale by mean change
-                                old_quantiles_centered = quantiles_fp32 - value_pred_norm_full
-                                old_variance = (old_quantiles_centered ** 2).mean(dim=1, keepdim=True)
+                                # Compute old variance from stored old quantiles
+                                if rollout_data.old_value_quantiles is not None:
+                                    # Use actual old quantiles from rollout buffer
+                                    old_quantiles_norm = rollout_data.old_value_quantiles.to(
+                                        device=quantiles_fp32.device,
+                                        dtype=quantiles_fp32.dtype
+                                    )
+                                    # Old mean from old_values
+                                    old_mean_norm = rollout_data.old_values.to(
+                                        device=quantiles_fp32.device,
+                                        dtype=quantiles_fp32.dtype
+                                    ).unsqueeze(-1)
+                                    old_quantiles_centered = old_quantiles_norm - old_mean_norm
+                                    old_variance = (old_quantiles_centered ** 2).mean(dim=1, keepdim=True)
+                                else:
+                                    # Fallback: rough approximation (should not happen in normal operation)
+                                    old_quantiles_centered = quantiles_fp32 - value_pred_norm_full
+                                    old_variance = (old_quantiles_centered ** 2).mean(dim=1, keepdim=True)
 
                                 # Constrain variance to not exceed factor^2 * old_variance
                                 # variance_ratio = new_var / old_var
@@ -8986,13 +9058,27 @@ class DistributionalPPO(RecurrentPPO):
                                 atoms_centered = atoms_original - current_mean
                                 current_variance = ((atoms_centered ** 2) * pred_probs_fp32).sum(dim=1, keepdim=True)
 
-                                # Estimate old variance (approximate from mean)
-                                # Ideally we'd store old probs, but use heuristic here
-                                # Assume similar distribution shape, scaled by relative mean change
-                                old_mean_norm = (old_values_raw_aligned - ret_mu_tensor) / ret_std_tensor if self.normalize_returns else old_values_raw_aligned
-                                old_atoms_centered_approx = atoms_original - old_mean_norm.squeeze(-1)
-                                # Use uniform distribution as rough prior for old variance
-                                old_variance_approx = (old_atoms_centered_approx ** 2).mean()
+                                # Compute old variance from stored old probabilities
+                                if rollout_data.old_value_probs is not None:
+                                    # Use actual old probabilities from rollout buffer
+                                    old_probs_norm = rollout_data.old_value_probs.to(
+                                        device=pred_probs_fp32.device,
+                                        dtype=pred_probs_fp32.dtype
+                                    )
+                                    # Old mean from old_values
+                                    old_mean_norm = rollout_data.old_values.to(
+                                        device=pred_probs_fp32.device,
+                                        dtype=pred_probs_fp32.dtype
+                                    )
+                                    old_atoms_centered = atoms_original - old_mean_norm.squeeze(-1)
+                                    # Proper weighted variance using old probabilities
+                                    old_variance_approx = ((old_atoms_centered ** 2) * old_probs_norm).sum(dim=1, keepdim=True)
+                                else:
+                                    # Fallback: rough approximation (should not happen in normal operation)
+                                    old_mean_norm = (old_values_raw_aligned - ret_mu_tensor) / ret_std_tensor if self.normalize_returns else old_values_raw_aligned
+                                    old_atoms_centered_approx = atoms_original - old_mean_norm.squeeze(-1)
+                                    # Use uniform distribution as rough prior for old variance
+                                    old_variance_approx = (old_atoms_centered_approx ** 2).mean()
 
                                 # Constrain variance
                                 # variance_ratio = new_var / old_var <= factor^2
