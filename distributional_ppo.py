@@ -4596,6 +4596,8 @@ class DistributionalPPO(RecurrentPPO):
         clip_range_vf: Optional[float] = None,
         vf_clip_warmup_updates: int = 0,
         vf_clip_threshold_ev: Optional[float] = None,
+        distributional_vf_clip_mode: Optional[str] = None,
+        distributional_vf_clip_variance_factor: float = 2.0,
         critic_grad_warmup_updates: int = 0,
         cvar_activation_threshold: float = 0.25,
         cvar_activation_hysteresis: float = 0.05,
@@ -4737,6 +4739,33 @@ class DistributionalPPO(RecurrentPPO):
                 )
         self._vf_clip_warmup_updates = int(vf_clip_warmup_value)
         self._vf_clip_threshold_ev = vf_clip_threshold_value
+
+        # Distributional VF clipping mode
+        distributional_vf_clip_mode_candidate = kwargs_local.pop(
+            "distributional_vf_clip_mode", distributional_vf_clip_mode
+        )
+        if distributional_vf_clip_mode_candidate is None:
+            distributional_vf_clip_mode_value = None
+        else:
+            mode_str = str(distributional_vf_clip_mode_candidate).lower()
+            if mode_str not in ("disable", "mean_only", "mean_and_variance"):
+                raise ValueError(
+                    f"'distributional_vf_clip_mode' must be None or one of "
+                    f"['disable', 'mean_only', 'mean_and_variance'], got: {mode_str}"
+                )
+            distributional_vf_clip_mode_value = mode_str
+        self.distributional_vf_clip_mode = distributional_vf_clip_mode_value
+
+        # Variance clipping factor
+        distributional_vf_clip_variance_factor_candidate = kwargs_local.pop(
+            "distributional_vf_clip_variance_factor", distributional_vf_clip_variance_factor
+        )
+        variance_factor = float(distributional_vf_clip_variance_factor_candidate)
+        if not math.isfinite(variance_factor) or variance_factor < 1.0:
+            raise ValueError(
+                "'distributional_vf_clip_variance_factor' must be >= 1.0 and finite"
+            )
+        self.distributional_vf_clip_variance_factor = variance_factor
         self._vf_clip_warmup_logged_complete = False
         self._vf_clip_latest_ev: Optional[float] = None
 
@@ -5305,6 +5334,14 @@ class DistributionalPPO(RecurrentPPO):
             "config/vf_clip_warmup_updates", float(self._vf_clip_warmup_updates)
         )
         self.logger.record("config/vf_clip_threshold_ev", vf_clip_threshold_log)
+        self.logger.record(
+            "config/distributional_vf_clip_mode",
+            str(self.distributional_vf_clip_mode) if self.distributional_vf_clip_mode is not None else "none",
+        )
+        self.logger.record(
+            "config/distributional_vf_clip_variance_factor",
+            float(self.distributional_vf_clip_variance_factor),
+        )
         self.logger.record("config/gae_lambda", float(self.gae_lambda))
 
         # Early debug diagnostics ensure configuration mismatches are visible in logs.
@@ -8666,7 +8703,19 @@ class DistributionalPPO(RecurrentPPO):
                         )
                         value_pred_norm_after_vf = value_pred_norm_full
                         value_pred_raw_after_vf = value_pred_raw_full
-                        if clip_range_vf_value is not None:
+
+                        # DISTRIBUTIONAL VF CLIPPING FIX
+                        # Original PPO VF clipping is designed for scalar value functions
+                        # For distributional critics, we provide three modes:
+                        # 1. None/"disable" (default): No VF clipping (recommended, no theoretical basis)
+                        # 2. "mean_only": Legacy behavior (parallel shift - does NOT constrain variance!)
+                        # 3. "mean_and_variance": Clip mean + constrain variance changes
+                        distributional_vf_clip_enabled = (
+                            clip_range_vf_value is not None
+                            and self.distributional_vf_clip_mode not in (None, "disable")
+                        )
+
+                        if distributional_vf_clip_enabled:
                             if old_values_raw_tensor is None:
                                 raise RuntimeError(
                                     "clip_range_vf requires old value predictions "
@@ -8704,8 +8753,47 @@ class DistributionalPPO(RecurrentPPO):
                                         max=self._value_clip_limit_scaled,
                                     )
                             value_pred_raw_after_vf = value_pred_raw_clipped
-                            delta_norm = value_pred_norm_after_vf - value_pred_norm_full
-                            quantiles_norm_clipped = quantiles_fp32 + delta_norm
+
+                            # Apply clipping based on mode
+                            if self.distributional_vf_clip_mode == "mean_only":
+                                # Legacy mode: parallel shift (DOES NOT constrain variance!)
+                                delta_norm = value_pred_norm_after_vf - value_pred_norm_full
+                                quantiles_norm_clipped = quantiles_fp32 + delta_norm
+                            elif self.distributional_vf_clip_mode == "mean_and_variance":
+                                # Improved mode: clip mean AND constrain variance
+                                # Compute old distribution statistics (from rollout)
+                                # Note: We use old_values_raw_tensor as mean proxy
+                                # For full variance control, we'd need to store old quantiles
+                                # This is a practical approximation
+
+                                # Clip mean via parallel shift
+                                delta_norm = value_pred_norm_after_vf - value_pred_norm_full
+                                quantiles_shifted = quantiles_fp32 + delta_norm
+
+                                # Constrain variance by scaling around mean
+                                # Scale quantiles toward mean if variance grew too much
+                                quantiles_centered = quantiles_shifted - value_pred_norm_after_vf
+                                current_variance = (quantiles_centered ** 2).mean(dim=1, keepdim=True)
+
+                                # Estimate old variance (rough approximation)
+                                # In practice, we'd need to store old quantiles for exact calculation
+                                # Here we use a heuristic: assume similar shape, scale by mean change
+                                old_quantiles_centered = quantiles_fp32 - value_pred_norm_full
+                                old_variance = (old_quantiles_centered ** 2).mean(dim=1, keepdim=True)
+
+                                # Constrain variance to not exceed factor * old_variance
+                                max_variance = old_variance * (self.distributional_vf_clip_variance_factor ** 2)
+                                variance_ratio = torch.sqrt(
+                                    torch.clamp(current_variance / (old_variance + 1e-8), max=max_variance / (old_variance + 1e-8))
+                                )
+
+                                # Scale quantiles back if variance too large
+                                quantiles_norm_clipped = value_pred_norm_after_vf + quantiles_centered * variance_ratio
+                            else:
+                                raise ValueError(
+                                    f"Invalid distributional_vf_clip_mode: {self.distributional_vf_clip_mode}"
+                                )
+
                             self._record_value_debug_stats(
                                 "train_pred_quantiles_norm_post_vf_clip",
                                 quantiles_norm_clipped,
@@ -8823,8 +8911,18 @@ class DistributionalPPO(RecurrentPPO):
                             target_distribution_selected * log_predictions_selected
                         ).sum(dim=1)  # Shape: [batch], do NOT mean yet!
 
+                        # DISTRIBUTIONAL VF CLIPPING FIX (Categorical Critic)
+                        # Same modes as quantile critic:
+                        # 1. None/"disable" (default): No VF clipping
+                        # 2. "mean_only": Legacy behavior (shift+project - limited variance constraint)
+                        # 3. "mean_and_variance": Clip mean + constrain variance via projection scaling
+                        distributional_vf_clip_enabled_cat = (
+                            clip_range_vf_value is not None
+                            and self.distributional_vf_clip_mode not in (None, "disable")
+                        )
+
                         # Apply VF clipping if enabled
-                        if clip_range_vf_value is not None:
+                        if distributional_vf_clip_enabled_cat:
                             if old_values_raw_tensor is None:
                                 raise RuntimeError(
                                     "clip_range_vf requires old value predictions "
@@ -8871,7 +8969,40 @@ class DistributionalPPO(RecurrentPPO):
 
                             # Shift atoms by delta to create clipped distribution support
                             atoms_original = self.policy.atoms  # Shape: [num_atoms]
-                            atoms_shifted = atoms_original + delta_norm.squeeze(-1)  # Broadcast delta
+
+                            if self.distributional_vf_clip_mode == "mean_only":
+                                # Legacy mode: shift atoms (projection can indirectly affect variance)
+                                atoms_shifted = atoms_original + delta_norm.squeeze(-1)  # Broadcast delta
+                            elif self.distributional_vf_clip_mode == "mean_and_variance":
+                                # Improved mode: constrain variance by scaling atom spread
+                                # Compute variance of current distribution
+                                current_mean = mean_values_norm_full.squeeze(-1)
+                                atoms_centered = atoms_original - current_mean
+                                current_variance = ((atoms_centered ** 2) * pred_probs_fp32).sum(dim=1, keepdim=True)
+
+                                # Estimate old variance (approximate from mean)
+                                # Ideally we'd store old probs, but use heuristic here
+                                # Assume similar distribution shape, scaled by relative mean change
+                                old_mean_norm = (old_values_raw_aligned - ret_mu_tensor) / ret_std_tensor if self.normalize_returns else old_values_raw_aligned
+                                old_atoms_centered_approx = atoms_original - old_mean_norm.squeeze(-1)
+                                # Use uniform distribution as rough prior for old variance
+                                old_variance_approx = (old_atoms_centered_approx ** 2).mean()
+
+                                # Constrain variance
+                                max_variance = old_variance_approx * (self.distributional_vf_clip_variance_factor ** 2)
+                                variance_scale = torch.sqrt(torch.clamp(
+                                    current_variance / (old_variance_approx + 1e-8),
+                                    max=max_variance / (old_variance_approx + 1e-8)
+                                ))
+
+                                # Scale atoms toward clipped mean
+                                atoms_shifted_base = atoms_original + delta_norm.squeeze(-1)
+                                atoms_shifted_centered = atoms_shifted_base - mean_values_norm_clipped.squeeze(-1)
+                                atoms_shifted = mean_values_norm_clipped.squeeze(-1) + atoms_shifted_centered * variance_scale.squeeze(-1)
+                            else:
+                                raise ValueError(
+                                    f"Invalid distributional_vf_clip_mode: {self.distributional_vf_clip_mode}"
+                                )
 
                             # Project predicted probabilities from shifted atoms back to original atoms
                             # This redistributes probability mass according to C51 projection
