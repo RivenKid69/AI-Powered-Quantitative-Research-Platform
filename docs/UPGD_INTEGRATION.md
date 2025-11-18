@@ -4,6 +4,8 @@
 
 This document describes the integration of UPGD (Utility-based Perturbed Gradient Descent) optimizers into TradingBot2. UPGD is a continual learning optimizer designed to mitigate catastrophic forgetting and maintain plasticity in deep neural networks.
 
+**IMPORTANT**: As of the latest version, **AdaptiveUPGD is now the default optimizer** for all DistributionalPPO models. This provides improved continual learning performance out of the box.
+
 ## Reference
 
 **Paper**: Elsayed, M., & Mahmood, A. R. (2024). Addressing Loss of Plasticity and Catastrophic Forgetting in Continual Learning. In Proceedings of the 12th International Conference on Learning Representations (ICLR).
@@ -73,17 +75,56 @@ UPGD with AdamW-style decoupled weight decay for better regularization.
 
 ## Integration with DistributionalPPO
 
-### Basic Usage
+### Default Usage (AdaptiveUPGD)
+
+**NEW**: AdaptiveUPGD is now the default optimizer. Simply create a model without specifying an optimizer:
 
 ```python
 from distributional_ppo import DistributionalPPO
 
-# Use string identifier
+# Uses AdaptiveUPGD by default (NEW!)
 model = DistributionalPPO(
     "MlpPolicy",
     env,
-    optimizer_class="upgd",  # or "adaptive_upgd", "upgdw"
+)
+
+# You can customize AdaptiveUPGD parameters via optimizer_kwargs
+model = DistributionalPPO(
+    "MlpPolicy",
+    env,
+    optimizer_kwargs={
+        "lr": 3e-4,
+        "sigma": 0.001,
+        "beta_utility": 0.999,
+    },
+)
+```
+
+### Switching to Other Optimizers
+
+You can still explicitly select other optimizers if needed:
+
+```python
+# Use AdamW (previous default)
+model = DistributionalPPO(
+    "MlpPolicy",
+    env,
+    optimizer_class="adamw",
+)
+
+# Use basic UPGD
+model = DistributionalPPO(
+    "MlpPolicy",
+    env,
+    optimizer_class="upgd",
     optimizer_kwargs={"lr": 3e-4, "sigma": 0.001},
+)
+
+# Use UPGDW (AdamW-style)
+model = DistributionalPPO(
+    "MlpPolicy",
+    env,
+    optimizer_class="upgdw",
 )
 
 # Or use direct class reference
@@ -99,14 +140,24 @@ model = DistributionalPPO(
 
 ### Recommended Configurations
 
-#### For Standard Training (AdaptiveUPGD)
+#### For Standard Training (Default AdaptiveUPGD)
 ```python
+# Default configuration (recommended for most use cases)
 model = DistributionalPPO(
     "MlpPolicy",
     env,
-    optimizer_class="adaptive_upgd",
+    # No need to specify optimizer_class - uses AdaptiveUPGD by default
+    # Default parameters are already optimized for RL:
+    # lr=<from learning_rate parameter>, weight_decay=0.001,
+    # beta_utility=0.999, beta1=0.9, beta2=0.999, sigma=0.001
+)
+
+# Custom AdaptiveUPGD parameters
+model = DistributionalPPO(
+    "MlpPolicy",
+    env,
+    learning_rate=3e-4,          # Learning rate
     optimizer_kwargs={
-        "lr": 3e-4,              # Learning rate
         "weight_decay": 0.001,   # L2 regularization
         "beta_utility": 0.999,   # Utility EMA decay
         "beta1": 0.9,            # First moment
@@ -311,19 +362,42 @@ from test_upgd_quick import run_all_tests
 run_all_tests()
 ```
 
-## Migration from AdamW
+## Default Optimizer Change
 
-UPGDW is a drop-in replacement for AdamW:
+**BREAKING CHANGE**: The default optimizer has changed from AdamW to AdaptiveUPGD for improved continual learning performance.
 
+### Migration Guide
+
+#### If you want the old behavior (AdamW):
 ```python
-# Before (AdamW)
+# Explicitly specify AdamW
 model = DistributionalPPO(
     "MlpPolicy",
     env,
-    # Uses AdamW by default
+    optimizer_class="adamw",
+)
+```
+
+#### If you want the new behavior (AdaptiveUPGD - now default):
+```python
+# Simply omit optimizer_class (NEW default)
+model = DistributionalPPO(
+    "MlpPolicy",
+    env,
+    # AdaptiveUPGD used automatically
 )
 
-# After (UPGDW)
+# Or be explicit
+model = DistributionalPPO(
+    "MlpPolicy",
+    env,
+    optimizer_class="adaptive_upgd",
+)
+```
+
+#### Using UPGDW as AdamW replacement:
+```python
+# UPGDW provides AdamW-style interface with UPGD benefits
 model = DistributionalPPO(
     "MlpPolicy",
     env,
@@ -338,17 +412,17 @@ model = DistributionalPPO(
 
 ## Best Practices
 
-1. **Start with AdaptiveUPGD**: Best all-around performance for RL tasks
+1. **Use the default AdaptiveUPGD**: Now enabled by default for best all-around performance in RL tasks with continual learning
 
-2. **Tune sigma carefully**: Start with 0.001, adjust based on task
-   - More non-stationarity → higher sigma
-   - More stability needed → lower sigma
+2. **Tune sigma carefully**: Start with default 0.001, adjust based on task
+   - More non-stationarity → higher sigma (e.g., 0.01)
+   - More stability needed → lower sigma (e.g., 0.0001)
 
 3. **Use with CVaR optimization**: UPGD complements CVaR constraints well
    ```python
    model = DistributionalPPO(
        ...,
-       optimizer_class="adaptive_upgd",
+       # optimizer_class not needed - uses AdaptiveUPGD by default
        cvar_use_constraint=True,
        cvar_limit=-1.0,
    )
@@ -356,7 +430,9 @@ model = DistributionalPPO(
 
 4. **Monitor utility statistics**: Track utility distribution to understand weight importance
 
-5. **Consider continual learning**: UPGD shines in non-stationary environments
+5. **Leverage continual learning**: UPGD shines in non-stationary environments like trading
+
+6. **Fallback to AdamW if needed**: If UPGD optimizers are not available, the system automatically falls back to AdamW with a warning
 
 ## Architecture Details
 
