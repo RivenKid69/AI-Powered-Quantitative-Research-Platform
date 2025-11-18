@@ -2426,6 +2426,71 @@ class DistributionalPPO(RecurrentPPO):
 
         return target_distribution
 
+    def _reproject_categorical_distribution(
+        self,
+        probs: torch.Tensor,
+        atoms: torch.Tensor,
+        delta: torch.Tensor,
+    ) -> torch.Tensor:
+        """Reproject categorical distribution after shifting atoms by delta.
+
+        This implements VF clipping for categorical distributions analogous to
+        the quantile approach: shift all atoms by delta (preserving distribution shape),
+        then reproject probabilities back to original atoms using C51 projection.
+
+        Args:
+            probs: Predicted probabilities over atoms, shape [batch, num_atoms]
+            atoms: Original atom values, shape [num_atoms] or [1, num_atoms]
+            delta: Delta to shift atoms by, shape [batch, 1]
+
+        Returns:
+            Reprojected probabilities over original atoms, shape [batch, num_atoms]
+        """
+        # Ensure atoms has batch dimension
+        if atoms.dim() == 1:
+            atoms = atoms.unsqueeze(0)  # [1, num_atoms]
+
+        # Shift atoms: this conceptually shifts the entire distribution
+        atoms_shifted = atoms + delta  # [batch, num_atoms]
+
+        # Now we need to reproject probabilities from atoms_shifted back to original atoms
+        # Using C51 projection algorithm
+        v_min = atoms[0, 0].item()
+        v_max = atoms[0, -1].item()
+        num_atoms = atoms.shape[1]
+        delta_z = (v_max - v_min) / max(num_atoms - 1, 1) if num_atoms > 1 else 1.0
+
+        # Initialize reprojected distribution
+        reprojected = torch.zeros_like(probs)
+
+        # For each shifted atom, distribute its probability to original atoms
+        for j in range(num_atoms):
+            # Get the shifted atom values for all batches
+            shifted_atom = atoms_shifted[:, j]  # [batch]
+
+            # Find which original atoms this shifted atom falls between
+            # b = (shifted_atom - v_min) / delta_z
+            b = (shifted_atom - v_min) / delta_z
+            lower_bound = torch.floor(b).long().clamp(0, num_atoms - 1)
+            upper_bound = (lower_bound + 1).clamp(0, num_atoms - 1)
+
+            # Compute interpolation weights
+            # If lower == upper, put all probability on that atom
+            lower_weight = (upper_bound.float() - b).clamp(0.0, 1.0)
+            upper_weight = (b - lower_bound.float()).clamp(0.0, 1.0)
+
+            # Distribute probability from j-th shifted atom
+            prob_j = probs[:, j].unsqueeze(1)  # [batch, 1]
+
+            # Scatter to lower and upper bounds
+            reprojected.scatter_add_(1, lower_bound.unsqueeze(1), prob_j * lower_weight.unsqueeze(1))
+            reprojected.scatter_add_(1, upper_bound.unsqueeze(1), prob_j * upper_weight.unsqueeze(1))
+
+        # Renormalize to ensure valid probability distribution
+        reprojected = reprojected / reprojected.sum(dim=1, keepdim=True).clamp_min(1e-8)
+
+        return reprojected
+
     def _quantile_levels_tensor(self, device: torch.device) -> torch.Tensor:
         levels = getattr(self.policy, "quantile_levels", None)
         if levels is None:
@@ -8693,9 +8758,17 @@ class DistributionalPPO(RecurrentPPO):
                                         max=self._value_clip_limit_scaled,
                                     )
 
-                            # Build clipped prediction distribution from clipped mean values
-                            pred_distribution_clipped = self._build_support_distribution(
-                                mean_values_norm_clipped_for_loss, value_logits_fp32
+                            # CRITICAL FIX: Apply VF clipping by shifting atoms and reprojecting
+                            # This preserves distribution shape (analogous to quantile approach)
+                            # Compute delta in normalized space
+                            delta_norm = mean_values_norm_clipped_for_loss - mean_values_norm_for_clip
+
+                            # Reproject predicted probabilities after atom shift
+                            # This shifts the entire distribution by delta while preserving shape
+                            pred_distribution_clipped = self._reproject_categorical_distribution(
+                                probs=pred_probs_fp32,
+                                atoms=self.policy.atoms,
+                                delta=delta_norm,
                             )
                             log_predictions_clipped = torch.log(pred_distribution_clipped.clamp(min=1e-8))
 
