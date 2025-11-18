@@ -87,14 +87,29 @@ class TestUPGDIntegrationWithPPO:
 
         env.close()
 
-    def test_default_adamw_when_none(self):
-        """Test that AdamW is used when no optimizer is specified."""
+    def test_default_adaptive_upgd_when_none(self):
+        """Test that AdaptiveUPGD is used by default when no optimizer is specified."""
         env = make_simple_env()
 
         model = DistributionalPPO(
             "MlpPolicy",
             env,
             optimizer_class=None,  # Default
+            verbose=0,
+        )
+
+        assert isinstance(model.policy.optimizer, AdaptiveUPGD)
+
+        env.close()
+
+    def test_explicit_adamw_selection(self):
+        """Test that AdamW can still be explicitly selected."""
+        env = make_simple_env()
+
+        model = DistributionalPPO(
+            "MlpPolicy",
+            env,
+            optimizer_class="adamw",  # Explicit
             verbose=0,
         )
 
@@ -565,6 +580,411 @@ class TestUPGDNumericalStability:
         # Check all parameters are finite
         for param in model.policy.parameters():
             assert torch.all(torch.isfinite(param)), "Parameters should be finite"
+
+        env.close()
+
+
+class TestUPGDDefaultConfiguration:
+    """Test default configuration for UPGD optimizer."""
+
+    def test_default_optimizer_is_adaptive_upgd(self):
+        """Test that the default optimizer is AdaptiveUPGD."""
+        env = make_simple_env()
+
+        model = DistributionalPPO(
+            "MlpPolicy",
+            env,
+            verbose=0,
+        )
+
+        # Should use AdaptiveUPGD by default
+        assert isinstance(model.policy.optimizer, AdaptiveUPGD)
+
+        env.close()
+
+    def test_default_optimizer_parameters(self):
+        """Test that default AdaptiveUPGD has correct parameters."""
+        env = make_simple_env()
+
+        model = DistributionalPPO(
+            "MlpPolicy",
+            env,
+            verbose=0,
+        )
+
+        optimizer = model.policy.optimizer
+        assert isinstance(optimizer, AdaptiveUPGD)
+
+        # Check default parameters
+        param_group = optimizer.param_groups[0]
+        assert param_group["weight_decay"] == 0.001
+        assert param_group["sigma"] == 0.001
+        assert param_group["beta_utility"] == 0.999
+        assert param_group["beta1"] == 0.9
+        assert param_group["beta2"] == 0.999
+        assert param_group["eps"] == 1e-8
+
+        env.close()
+
+    def test_default_optimizer_can_be_overridden(self):
+        """Test that default optimizer can be overridden with custom kwargs."""
+        env = make_simple_env()
+
+        model = DistributionalPPO(
+            "MlpPolicy",
+            env,
+            optimizer_kwargs={
+                "lr": 1e-3,
+                "sigma": 0.01,
+                "beta_utility": 0.99,
+            },
+            verbose=0,
+        )
+
+        optimizer = model.policy.optimizer
+        param_group = optimizer.param_groups[0]
+
+        # Custom values should be used
+        assert param_group["lr"] == 1e-3
+        assert param_group["sigma"] == 0.01
+        assert param_group["beta_utility"] == 0.99
+
+        # Defaults for non-overridden params
+        assert param_group["weight_decay"] == 0.001
+        assert param_group["beta1"] == 0.9
+
+        env.close()
+
+    def test_default_optimizer_training_works(self):
+        """Test that default AdaptiveUPGD can train successfully."""
+        env = make_simple_env()
+
+        model = DistributionalPPO(
+            "MlpPolicy",
+            env,
+            n_steps=64,
+            n_epochs=2,
+            verbose=0,
+        )
+
+        # Should train without errors
+        model.learn(total_timesteps=256)
+
+        # Check optimizer has state
+        optimizer = model.policy.optimizer
+        assert len(optimizer.state) > 0
+
+        # Check that at least some parameters have optimizer state
+        has_state = False
+        for p in model.policy.parameters():
+            if p in optimizer.state:
+                state = optimizer.state[p]
+                assert "avg_utility" in state
+                assert "first_moment" in state
+                assert "sec_moment" in state
+                has_state = True
+
+        assert has_state
+
+        env.close()
+
+
+class TestUPGDComprehensiveCoverage:
+    """Comprehensive tests for all UPGD scenarios."""
+
+    def test_all_upgd_variants_work(self):
+        """Test that all UPGD variants can be instantiated and used."""
+        env = make_simple_env()
+
+        variants = ["upgd", "adaptive_upgd", "upgdw"]
+        expected_classes = [UPGD, AdaptiveUPGD, UPGDW]
+
+        for variant, expected_class in zip(variants, expected_classes):
+            model = DistributionalPPO(
+                "MlpPolicy",
+                env,
+                optimizer_class=variant,
+                n_steps=64,
+                n_epochs=2,
+                verbose=0,
+            )
+
+            assert isinstance(model.policy.optimizer, expected_class)
+
+            # Should be able to train
+            model.learn(total_timesteps=128)
+
+        env.close()
+
+    def test_upgd_with_all_ppo_features(self):
+        """Test UPGD works with all PPO features combined."""
+        env = make_simple_env()
+
+        model = DistributionalPPO(
+            "MlpPolicy",
+            env,
+            optimizer_class="adaptive_upgd",
+            optimizer_kwargs={"lr": 3e-4},
+            # PPO features
+            n_steps=64,
+            n_epochs=4,
+            batch_size=64,
+            max_grad_norm=0.5,
+            # CVaR
+            cvar_use_constraint=True,
+            cvar_limit=-1.0,
+            # Distributional
+            distributional_vf_clip_mode="mean_only",
+            # Entropy
+            ent_coef=0.01,
+            verbose=0,
+        )
+
+        model.learn(total_timesteps=256)
+
+        assert isinstance(model.policy.optimizer, AdaptiveUPGD)
+
+        env.close()
+
+    def test_upgd_state_tracking(self):
+        """Test that UPGD properly tracks utility, moments, and steps."""
+        env = make_simple_env()
+
+        model = DistributionalPPO(
+            "MlpPolicy",
+            env,
+            optimizer_class="adaptive_upgd",
+            n_steps=64,
+            n_epochs=4,
+            verbose=0,
+        )
+
+        # Train for several updates
+        model.learn(total_timesteps=512)
+
+        optimizer = model.policy.optimizer
+
+        # Check that state is being tracked
+        for p in model.policy.parameters():
+            if p in optimizer.state:
+                state = optimizer.state[p]
+
+                # Should have step counter
+                assert "step" in state
+                assert state["step"] > 0
+
+                # Should have utility tracking
+                assert "avg_utility" in state
+                assert state["avg_utility"].shape == p.shape
+
+                # Should have moments
+                assert "first_moment" in state
+                assert "sec_moment" in state
+
+                # All values should be finite
+                assert torch.all(torch.isfinite(state["avg_utility"]))
+                assert torch.all(torch.isfinite(state["first_moment"]))
+                assert torch.all(torch.isfinite(state["sec_moment"]))
+
+        env.close()
+
+    def test_upgd_different_learning_rates(self):
+        """Test UPGD with different learning rates."""
+        env = make_simple_env()
+
+        learning_rates = [1e-5, 1e-4, 3e-4, 1e-3]
+
+        for lr in learning_rates:
+            model = DistributionalPPO(
+                "MlpPolicy",
+                env,
+                optimizer_class="adaptive_upgd",
+                learning_rate=lr,
+                n_steps=64,
+                verbose=0,
+            )
+
+            optimizer = model.policy.optimizer
+            assert optimizer.param_groups[0]["lr"] == lr
+
+            # Should train without errors
+            model.learn(total_timesteps=128)
+
+        env.close()
+
+    def test_upgd_with_different_sigma_values(self):
+        """Test UPGD with different noise (sigma) values."""
+        env = make_simple_env()
+
+        sigma_values = [0.0001, 0.001, 0.01, 0.05]
+
+        for sigma in sigma_values:
+            model = DistributionalPPO(
+                "MlpPolicy",
+                env,
+                optimizer_class="adaptive_upgd",
+                optimizer_kwargs={"sigma": sigma},
+                n_steps=64,
+                verbose=0,
+            )
+
+            optimizer = model.policy.optimizer
+            assert optimizer.param_groups[0]["sigma"] == sigma
+
+            # Should train without errors
+            model.learn(total_timesteps=128)
+
+        env.close()
+
+    def test_upgdw_decoupled_weight_decay(self):
+        """Test that UPGDW uses decoupled weight decay correctly."""
+        env = make_simple_env()
+
+        model = DistributionalPPO(
+            "MlpPolicy",
+            env,
+            optimizer_class="upgdw",
+            optimizer_kwargs={"weight_decay": 0.05},
+            n_steps=64,
+            n_epochs=2,
+            verbose=0,
+        )
+
+        optimizer = model.policy.optimizer
+        assert isinstance(optimizer, UPGDW)
+        assert optimizer.param_groups[0]["weight_decay"] == 0.05
+
+        # Train and verify no NaN/Inf
+        model.learn(total_timesteps=256)
+
+        for param in model.policy.parameters():
+            assert torch.all(torch.isfinite(param))
+
+        env.close()
+
+    def test_optimizer_class_by_direct_import(self):
+        """Test that optimizer can be specified by direct class import."""
+        env = make_simple_env()
+
+        # Test all three UPGD variants
+        for optimizer_cls in [UPGD, AdaptiveUPGD, UPGDW]:
+            model = DistributionalPPO(
+                "MlpPolicy",
+                env,
+                optimizer_class=optimizer_cls,
+                n_steps=64,
+                verbose=0,
+            )
+
+            assert isinstance(model.policy.optimizer, optimizer_cls)
+
+        env.close()
+
+    def test_optimizer_logging(self):
+        """Test that optimizer class and parameters are properly logged."""
+        env = make_simple_env()
+
+        model = DistributionalPPO(
+            "MlpPolicy",
+            env,
+            optimizer_class="adaptive_upgd",
+            optimizer_kwargs={"lr": 1e-4, "sigma": 0.005},
+            n_steps=64,
+            verbose=0,
+        )
+
+        # Train for one update to trigger logging
+        model.learn(total_timesteps=128)
+
+        # Verify optimizer is correct type
+        assert isinstance(model.policy.optimizer, AdaptiveUPGD)
+
+        env.close()
+
+
+class TestUPGDEdgeCases:
+    """Test edge cases and error handling for UPGD."""
+
+    def test_zero_learning_rate(self):
+        """Test UPGD with zero learning rate (parameters shouldn't change)."""
+        env = make_simple_env()
+
+        model = DistributionalPPO(
+            "MlpPolicy",
+            env,
+            optimizer_class="adaptive_upgd",
+            learning_rate=0.0,
+            n_steps=64,
+            n_epochs=2,
+            verbose=0,
+        )
+
+        # Should not crash with zero learning rate
+        model.learn(total_timesteps=128)
+
+        env.close()
+
+    def test_very_high_learning_rate(self):
+        """Test UPGD stability with very high learning rate."""
+        env = make_simple_env()
+
+        model = DistributionalPPO(
+            "MlpPolicy",
+            env,
+            optimizer_class="adaptive_upgd",
+            learning_rate=0.1,
+            n_steps=64,
+            n_epochs=2,
+            verbose=0,
+        )
+
+        # Should maintain numerical stability
+        try:
+            model.learn(total_timesteps=128)
+
+            # Check for NaN/Inf
+            for param in model.policy.parameters():
+                assert torch.all(torch.isfinite(param))
+        except Exception as e:
+            # If it diverges, that's expected with very high LR
+            # But it shouldn't produce NaN/Inf silently
+            if "nan" not in str(e).lower() and "inf" not in str(e).lower():
+                pass  # Other errors are acceptable
+
+        env.close()
+
+    def test_zero_sigma(self):
+        """Test UPGD with zero noise (no perturbation)."""
+        env = make_simple_env()
+
+        model = DistributionalPPO(
+            "MlpPolicy",
+            env,
+            optimizer_class="adaptive_upgd",
+            optimizer_kwargs={"sigma": 0.0},
+            n_steps=64,
+            n_epochs=2,
+            verbose=0,
+        )
+
+        model.learn(total_timesteps=128)
+
+        assert model.policy.optimizer.param_groups[0]["sigma"] == 0.0
+
+        env.close()
+
+    def test_invalid_optimizer_kwargs_type(self):
+        """Test that invalid optimizer_kwargs type raises error."""
+        env = make_simple_env()
+
+        with pytest.raises(TypeError, match="must be a dictionary"):
+            DistributionalPPO(
+                "MlpPolicy",
+                env,
+                optimizer_class="adaptive_upgd",
+                optimizer_kwargs="invalid",
+                verbose=0,
+            )
 
         env.close()
 

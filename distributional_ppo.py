@@ -2916,8 +2916,17 @@ class DistributionalPPO(RecurrentPPO):
         optimizer_spec = getattr(self, "_optimizer_class", None)
 
         if optimizer_spec is None:
-            # Default to AdamW
-            return torch.optim.AdamW
+            # Default to AdaptiveUPGD for continual learning
+            try:
+                from optimizers import AdaptiveUPGD
+                return AdaptiveUPGD
+            except ImportError:
+                # Fallback to AdamW if UPGD optimizers are not available
+                logger.warning(
+                    "AdaptiveUPGD optimizer not available, falling back to AdamW. "
+                    "Install optimizers module for improved continual learning performance."
+                )
+                return torch.optim.AdamW
 
         if isinstance(optimizer_spec, str):
             # String-based lookup
@@ -2975,18 +2984,24 @@ class DistributionalPPO(RecurrentPPO):
             kwargs.setdefault("betas", (0.9, 0.999))
             kwargs.setdefault("eps", 1e-8)
         elif optimizer_name in ("UPGD", "AdaptiveUPGD", "UPGDW"):
-            # UPGD-specific defaults
-            kwargs.setdefault("weight_decay", 0.001)
-            kwargs.setdefault("sigma", 0.001)
-
+            # UPGD-specific defaults optimized for RL continual learning
+            # These defaults provide a good balance between learning and stability
             if optimizer_name == "UPGD":
+                kwargs.setdefault("weight_decay", 0.001)
+                kwargs.setdefault("sigma", 0.001)
                 kwargs.setdefault("beta_utility", 0.999)
             elif optimizer_name == "AdaptiveUPGD":
+                # AdaptiveUPGD: Recommended for most deep RL applications
+                kwargs.setdefault("weight_decay", 0.001)
+                kwargs.setdefault("sigma", 0.001)
                 kwargs.setdefault("beta_utility", 0.999)
                 kwargs.setdefault("beta1", 0.9)
                 kwargs.setdefault("beta2", 0.999)
                 kwargs.setdefault("eps", 1e-8)
             elif optimizer_name == "UPGDW":
+                # UPGDW: AdamW-style decoupled weight decay
+                kwargs.setdefault("weight_decay", 0.01)
+                kwargs.setdefault("sigma", 0.001)
                 kwargs.setdefault("betas", (0.9, 0.999))
                 kwargs.setdefault("eps", 1e-8)
         elif optimizer_name == "Adam":
