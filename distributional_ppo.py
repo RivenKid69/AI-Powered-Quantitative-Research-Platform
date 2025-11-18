@@ -3537,6 +3537,7 @@ class DistributionalPPO(RecurrentPPO):
         cvar_penalty_cap_value: float,
         predicted_cvar_violation_unit_value: float = 0.0,
         constraint_term_value: float = 0.0,
+        predicted_cvar_gap_unit_value: float = 0.0,
     ) -> None:
         """Emit CVaR telemetry in both raw fraction and normalised units."""
 
@@ -3576,6 +3577,16 @@ class DistributionalPPO(RecurrentPPO):
         self.logger.record("train/constraint_term", float(constraint_term_value))
         self.logger.record("debug/predicted_cvar_violation_unit", float(predicted_cvar_violation_unit_value))
         self.logger.record("debug/constraint_term", float(constraint_term_value))
+        # CRITICAL FIX: Track both empirical and predicted CVaR gaps for Lagrangian consistency monitoring
+        # The dual variable λ is now updated using predicted_cvar_gap (same as gradient), not empirical gap.
+        # Monitoring the mismatch helps detect value function calibration issues.
+        self.logger.record("train/cvar_gap_empirical_unit", float(cvar_gap_unit_value))
+        self.logger.record("train/cvar_gap_predicted_unit", float(predicted_cvar_gap_unit_value))
+        cvar_gap_mismatch = float(cvar_gap_unit_value) - float(predicted_cvar_gap_unit_value)
+        self.logger.record("train/cvar_gap_mismatch_unit", cvar_gap_mismatch)
+        self.logger.record("debug/cvar_gap_empirical_unit", float(cvar_gap_unit_value))
+        self.logger.record("debug/cvar_gap_predicted_unit", float(predicted_cvar_gap_unit_value))
+        self.logger.record("debug/cvar_gap_mismatch_unit", cvar_gap_mismatch)
 
     def _limit_mean_step(self, old_value: float, proposed: float, reference_std: float) -> float:
         max_rel_step = float(self._value_scale_max_rel_step)
@@ -7107,9 +7118,12 @@ class DistributionalPPO(RecurrentPPO):
         cvar_gap_value = float(cvar_gap_tensor.item())
         cvar_gap_unit_tensor = cvar_limit_unit_tensor - cvar_empirical_unit_tensor
         cvar_gap_unit_value = float(cvar_gap_unit_tensor.item())
-        self._cvar_lambda = self._bounded_dual_update(
-            float(self._cvar_lambda), float(self.cvar_lambda_lr), cvar_gap_unit_value
-        )
+        # CRITICAL FIX: Dual variable update MOVED to after training loop (line ~9715)
+        # to use predicted CVaR instead of empirical CVaR for Lagrangian consistency.
+        # The dual update now uses the same CVaR measurement (predicted) that drives
+        # the constraint gradient, following standard Lagrangian dual ascent methods.
+        # Reference: Boyd & Vandenberghe (2004), "Convex Optimization", Section 5.5.5
+        # Reference: Nocedal & Wright (2006), "Numerical Optimization", Chapter 17
         # Remove .detach() to allow gradients to flow through constraint term
         cvar_violation_unit_tensor = torch.clamp(cvar_gap_unit_tensor, min=0.0)
         cvar_violation_unit_value = float(cvar_violation_unit_tensor.item())
@@ -9713,6 +9727,18 @@ class DistributionalPPO(RecurrentPPO):
                 constraint_term_value = bucket_constraint_term_value
                 total_loss_value = bucket_total_loss_value
 
+                # CRITICAL FIX: Update dual variable λ using PREDICTED CVaR for Lagrangian consistency
+                # This ensures the dual update and primal gradient use the same constraint measurement.
+                # Standard Lagrangian dual ascent: λ_{k+1} = [λ_k + α * c(θ_{k+1})]₊
+                # where c(θ) = limit - CVaR(θ) is the constraint violation (positive means violation).
+                # Using predicted CVaR from value function maintains consistency with gradient flow.
+                # Reference: Boyd & Vandenberghe (2004), "Convex Optimization", Section 5.5.5
+                # Reference: Nocedal & Wright (2006), "Numerical Optimization", Chapter 17.2
+                predicted_cvar_gap_unit = cvar_limit_unit_value - cvar_unit_value
+                self._cvar_lambda = self._bounded_dual_update(
+                    float(self._cvar_lambda), float(self.cvar_lambda_lr), predicted_cvar_gap_unit
+                )
+
                 if bucket_value_logits_fp32 is not None:
                     value_logits_final = bucket_value_logits_fp32
 
@@ -10049,6 +10075,8 @@ class DistributionalPPO(RecurrentPPO):
             self._cvar_violation_ema if self._cvar_violation_ema is not None else cvar_violation
         )
         self.logger.record("train/value_ce_loss", critic_loss_value)
+        # Compute predicted CVaR gap for telemetry (matches dual update calculation)
+        predicted_cvar_gap_unit = cvar_limit_unit_value - cvar_unit_value
         self._record_cvar_logs(
             cvar_raw_value=cvar_raw_value,
             cvar_unit_value=cvar_unit_value,
@@ -10078,6 +10106,7 @@ class DistributionalPPO(RecurrentPPO):
             else 0.0,
             predicted_cvar_violation_unit_value=predicted_cvar_violation_unit_value,
             constraint_term_value=constraint_term_value,
+            predicted_cvar_gap_unit_value=predicted_cvar_gap_unit,
         )
         if reward_costs_fraction_value is not None:
             self.logger.record(

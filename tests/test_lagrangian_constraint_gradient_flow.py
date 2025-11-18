@@ -135,64 +135,77 @@ class TestLagrangianConstraintGradientFlow(unittest.TestCase):
             "Constraint term must be logged to train/constraint_term"
         )
 
-    def test_dual_update_still_uses_empirical_cvar(self):
+    def test_dual_update_uses_predicted_cvar(self):
         """
-        Verify that dual update for lambda still uses empirical CVaR.
+        Verify that dual update for lambda NOW uses predicted CVaR (CRITICAL FIX).
 
-        This is CORRECT: dual update should use empirical statistics,
-        while constraint term in loss should use predicted CVaR.
+        UPDATED: After the CVaR-Lagrangian consistency fix, the dual update
+        now correctly uses predicted CVaR (same as constraint gradient) instead
+        of empirical CVaR. This maintains mathematical consistency in Lagrangian
+        dual ascent methods.
+
+        Reference: Boyd & Vandenberghe (2004), Nocedal & Wright (2006)
         """
         with open('distributional_ppo.py', 'r') as f:
             code = f.read()
 
-        # Check that _bounded_dual_update is called with cvar_gap_unit_value
-        # (which is computed from empirical CVaR)
+        # Check that _bounded_dual_update is called AFTER training loop
+        # (not before) to use predicted CVaR
         self.assertIn(
             "self._cvar_lambda = self._bounded_dual_update",
             code,
             "Dual update must be present"
         )
 
-        # Check that cvar_violation_unit_tensor is still computed
-        # (for dual update purposes)
+        # Check that predicted_cvar_gap_unit is computed for dual update
+        self.assertIn(
+            "predicted_cvar_gap_unit = cvar_limit_unit_value - cvar_unit_value",
+            code,
+            "Predicted CVaR gap must be computed for dual update"
+        )
+
+        # Check that empirical violation is still computed (for telemetry)
         self.assertIn(
             "cvar_violation_unit_tensor = torch.clamp(cvar_gap_unit_tensor, min=0.0)",
             code,
-            "Empirical violation must still be computed for dual update"
+            "Empirical violation must still be computed for telemetry"
         )
 
     def test_mathematical_correctness_reference(self):
         """
         Verify that the implementation includes proper mathematical references.
+
+        UPDATED: After the CVaR-Lagrangian consistency fix, references appear
+        in TWO locations:
+        1. Near the old dual update location (explaining the move)
+        2. Near the new dual update location (after training loop)
+        3. Near the constraint gradient code
         """
         with open('distributional_ppo.py', 'r') as f:
             code = f.read()
 
-        # Check for Nocedal & Wright reference
-        self.assertIn(
-            "Nocedal & Wright",
-            code,
+        # Check for Nocedal & Wright reference (should appear multiple times now)
+        nocedal_count = code.count("Nocedal & Wright")
+        self.assertGreaterEqual(
+            nocedal_count,
+            1,
             "Code must reference Nocedal & Wright for mathematical justification"
         )
 
-        # Check that the reference is in the constraint section
-        constraint_section_start = code.find("if self.cvar_use_constraint:")
-        ref_position = code.find("Nocedal & Wright")
-
-        self.assertGreater(
-            ref_position,
-            0,
-            "Reference to Nocedal & Wright must exist"
+        # Check for Boyd & Vandenberghe reference
+        boyd_count = code.count("Boyd & Vandenberghe")
+        self.assertGreaterEqual(
+            boyd_count,
+            1,
+            "Code must reference Boyd & Vandenberghe for Lagrangian methods"
         )
 
-        # Check that reference is near the constraint code (within 500 chars)
-        if constraint_section_start != -1:
-            distance = abs(ref_position - constraint_section_start)
-            self.assertLess(
-                distance,
-                1000,
-                "Reference should be near constraint implementation"
-            )
+        # Check that CRITICAL FIX comments are present
+        self.assertIn(
+            "CRITICAL FIX",
+            code,
+            "Code must include CRITICAL FIX comments explaining the change"
+        )
 
     def test_tensor_creation_uses_explicit_device_dtype(self):
         """
