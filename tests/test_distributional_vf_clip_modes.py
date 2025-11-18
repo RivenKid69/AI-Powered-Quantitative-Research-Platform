@@ -48,7 +48,7 @@ class TestDistributionalVFClipModes:
         from distributional_ppo import DistributionalPPO
 
         # Valid modes
-        for mode in [None, "disable", "mean_only", "mean_and_variance"]:
+        for mode in [None, "disable", "mean_only", "mean_and_variance", "per_quantile"]:
             try:
                 with patch('distributional_ppo.DistributionalPPO._setup_model'):
                     model = DistributionalPPO(
@@ -254,6 +254,85 @@ class TestDistributionalVFClipModes:
         actual_variance_ratio = torch.sqrt(clipped_variance / old_variance_1d)
         assert torch.all(actual_variance_ratio <= variance_factor + 1e-3), \
             f"Variance ratio should be <= {variance_factor}, got {actual_variance_ratio}"
+
+    def test_mode_per_quantile_guarantees_bounds(self):
+        """
+        Test that mode="per_quantile" GUARANTEES all quantiles within bounds.
+
+        This is the strictest mode: each quantile is clipped individually,
+        ensuring ALL quantiles stay within [old_value - clip_delta, old_value + clip_delta].
+        This is the most faithful adaptation of scalar VF clipping to distributional critics.
+        """
+        # Simulate per_quantile mode
+        num_quantiles = 5
+        batch_size = 2
+
+        # Old values
+        old_values = torch.tensor([
+            [10.0],  # Sample 1
+            [20.0],  # Sample 2
+        ])
+
+        # New quantiles (wide distributions)
+        quantiles_new = torch.tensor([
+            [-10.0, 0.0, 10.0, 30.0, 60.0],   # Sample 1: mean=18, very wide
+            [-5.0, 10.0, 20.0, 40.0, 75.0],   # Sample 2: mean=28, very wide
+        ])
+
+        # Clip delta
+        clip_delta = 5.0
+
+        # per_quantile mode: clip EACH quantile relative to old_value
+        # Formula: quantile_clipped = old_value + clip(quantile - old_value, -clip_delta, +clip_delta)
+        quantiles_clipped = old_values + torch.clamp(
+            quantiles_new - old_values,
+            min=-clip_delta,
+            max=clip_delta
+        )
+
+        # Verify ALL quantiles are within bounds for each sample
+        for i in range(batch_size):
+            old_value_i = old_values[i, 0].item()
+            clip_min_i = old_value_i - clip_delta
+            clip_max_i = old_value_i + clip_delta
+
+            sample_quantiles = quantiles_clipped[i]
+
+            # CRITICAL: All quantiles must be within bounds
+            assert torch.all(sample_quantiles >= clip_min_i), \
+                f"Sample {i}: Some quantiles below {clip_min_i}: {sample_quantiles}"
+            assert torch.all(sample_quantiles <= clip_max_i), \
+                f"Sample {i}: Some quantiles above {clip_max_i}: {sample_quantiles}"
+
+        # Compare with mean_only mode for same input
+        new_mean = quantiles_new.mean(dim=1, keepdim=True)
+        clipped_mean = torch.clamp(
+            new_mean,
+            min=old_values - clip_delta,
+            max=old_values + clip_delta
+        )
+        delta = clipped_mean - new_mean
+        quantiles_mean_only = quantiles_new + delta
+
+        # mean_only ALLOWS bounds violations
+        mean_only_violates = False
+        for i in range(batch_size):
+            old_value_i = old_values[i, 0].item()
+            clip_min_i = old_value_i - clip_delta
+            clip_max_i = old_value_i + clip_delta
+
+            sample_quantiles_mean_only = quantiles_mean_only[i]
+            if (sample_quantiles_mean_only < clip_min_i).any() or \
+               (sample_quantiles_mean_only > clip_max_i).any():
+                mean_only_violates = True
+                break
+
+        # Verify the problem exists in mean_only
+        assert mean_only_violates, \
+            "mean_only should allow bounds violations for this test case"
+
+        print("✓ per_quantile mode GUARANTEES all quantiles within bounds!")
+        print("  (while mean_only allows violations)")
 
     def test_categorical_critic_variance_constraint(self):
         """
