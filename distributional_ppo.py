@@ -2697,17 +2697,64 @@ class DistributionalPPO(RecurrentPPO):
         normaliser = projected_probs.sum(dim=1, keepdim=True).clamp_min(1e-6)
         projected_probs = projected_probs / normaliser
 
-        # Fix up same_bounds cases to put all mass at the exact matching atom
+        # CRITICAL FIX: Fix up same_bounds cases to put all mass at exact matching atoms
+        # When source atom exactly matches a target atom, the scatter_add logic above
+        # may incorrectly distribute mass. We need to correct this.
+        # IMPORTANT: Handle multiple same_bounds atoms per batch row correctly!
         if torch.any(same_bounds):
-            for i in range(num_atoms):
-                same_mask = same_bounds[:, i]
-                if same_mask.any():
-                    batch_indices = same_mask.nonzero(as_tuple=False).squeeze(1)
-                    target_idx = upper_bound_before_adjust[batch_indices, i]
-                    # Zero out the row for these batch indices
-                    projected_probs[batch_indices] = 0.0
-                    # Put all mass at the matching atom
-                    projected_probs[batch_indices, target_idx] = probs[batch_indices, i]
+            # Find batch rows that have at least one same_bounds atom
+            rows_with_same_bounds = same_bounds.any(dim=1)
+
+            if rows_with_same_bounds.any():
+                # Process each batch row that needs fixing
+                batch_indices_to_fix = rows_with_same_bounds.nonzero(as_tuple=False).squeeze(-1)
+
+                for batch_idx_tensor in batch_indices_to_fix:
+                    batch_idx = int(batch_idx_tensor.item())
+
+                    # Find all atoms with same_bounds in this batch row
+                    same_atoms_mask = same_bounds[batch_idx]
+                    same_atom_indices = same_atoms_mask.nonzero(as_tuple=False).squeeze(-1)
+
+                    if same_atom_indices.numel() == 0:
+                        continue
+
+                    # Create corrected row: start with zeros
+                    corrected_row = torch.zeros_like(projected_probs[batch_idx])
+
+                    # Add probability mass for all same_bounds atoms to their exact positions
+                    # Use index_put_ to maintain gradient flow
+                    for atom_idx_tensor in same_atom_indices:
+                        atom_idx = int(atom_idx_tensor.item())
+                        target_idx = int(upper_bound_before_adjust[batch_idx, atom_idx].item())
+                        # Use += to accumulate (in case multiple atoms map to same target)
+                        corrected_row[target_idx] = corrected_row[target_idx] + probs[batch_idx, atom_idx]
+
+                    # For non-same_bounds atoms, keep the projected probabilities
+                    # These were correctly handled by scatter_add above
+                    non_same_mask = ~same_atoms_mask
+
+                    # Rebuild: add non-same_bounds atoms using projection
+                    for atom_idx in range(num_atoms):
+                        if non_same_mask[atom_idx]:
+                            lower_idx = int(lower_bound[batch_idx, atom_idx].item())
+                            upper_idx = int(upper_bound[batch_idx, atom_idx].item())
+                            l_prob = lower_prob[batch_idx, atom_idx]
+                            u_prob = upper_prob[batch_idx, atom_idx]
+
+                            corrected_row[lower_idx] = corrected_row[lower_idx] + l_prob
+                            corrected_row[upper_idx] = corrected_row[upper_idx] + u_prob
+
+                    # Normalize the corrected row
+                    row_sum = corrected_row.sum()
+                    if row_sum > 1e-6:
+                        corrected_row = corrected_row / row_sum
+                    else:
+                        # Fallback: uniform distribution
+                        corrected_row = torch.ones_like(corrected_row) / num_atoms
+
+                    # Replace the row
+                    projected_probs[batch_idx] = corrected_row
 
         return projected_probs
 
