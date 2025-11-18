@@ -8918,12 +8918,8 @@ class DistributionalPPO(RecurrentPPO):
                             critic_loss_per_sample_after_vf = critic_loss_unclipped_per_sample
                             critic_loss = critic_loss_per_sample_after_vf.mean()
 
-                        # Apply normalizer (to both scalar and per-sample losses)
+                        # Apply normalizer to critic loss
                         critic_loss = critic_loss / self._critic_ce_normalizer
-                        # Save per-sample losses for potential additional VF clipping below
-                        critic_loss_per_sample_normalized = (
-                            critic_loss_per_sample_after_vf / self._critic_ce_normalizer
-                        )
 
                         with torch.no_grad():
 
@@ -9073,72 +9069,25 @@ class DistributionalPPO(RecurrentPPO):
                         )
                         cvar_raw = self._to_raw_returns(predicted_cvar).mean()
 
-                        if clip_range_vf_value is not None:
-                            # Recompute clipped predictions WITH gradients for PPO value clipping
-                            # (The no_grad block above only computes statistics)
-                            mean_values_norm_for_clip = (pred_probs_fp32 * self.policy.atoms).sum(dim=1, keepdim=True)
-                            mean_values_unscaled_for_clip = self._to_raw_returns(mean_values_norm_for_clip)
-
-                            clip_delta = float(clip_range_vf_value)
-                            old_values_raw_aligned = old_values_raw_tensor
-                            while old_values_raw_aligned.dim() < mean_values_unscaled_for_clip.dim():
-                                old_values_raw_aligned = old_values_raw_aligned.unsqueeze(-1)
-
-                            mean_values_unscaled_clipped_for_loss = torch.clamp(
-                                mean_values_unscaled_for_clip,
-                                min=old_values_raw_aligned - clip_delta,
-                                max=old_values_raw_aligned + clip_delta,
-                            )
-
-                            if self.normalize_returns:
-                                mean_values_norm_clipped_for_loss = (
-                                    (mean_values_unscaled_clipped_for_loss - ret_mu_tensor) / ret_std_tensor
-                                ).clamp(self._value_norm_clip_min, self._value_norm_clip_max)
-                            else:
-                                mean_values_norm_clipped_for_loss = (
-                                    (mean_values_unscaled_clipped_for_loss / float(base_scale_safe))
-                                    * self._value_target_scale_effective
-                                )
-                                if self._value_clip_limit_scaled is not None:
-                                    mean_values_norm_clipped_for_loss = torch.clamp(
-                                        mean_values_norm_clipped_for_loss,
-                                        min=-self._value_clip_limit_scaled,
-                                        max=self._value_clip_limit_scaled,
-                                    )
-
-                            # Build clipped prediction distribution from clipped mean values
-                            pred_distribution_clipped = self._build_support_distribution(
-                                mean_values_norm_clipped_for_loss, value_logits_fp32
-                            )
-                            log_predictions_clipped = torch.log(pred_distribution_clipped.clamp(min=1e-8))
-
-                            # CRITICAL FIX: Use UNCLIPPED target distribution with clipped predictions
-                            # PPO VF clipping: max(loss(pred, target), loss(clip(pred), target))
-                            # Target must remain unchanged in both loss terms
-                            if valid_indices is not None:
-                                log_predictions_clipped_selected = log_predictions_clipped[valid_indices]
-                                # Use the unclipped target_distribution_selected computed earlier
-                            else:
-                                log_predictions_clipped_selected = log_predictions_clipped
-                                # Use the unclipped target_distribution_selected computed earlier
-
-                            # CRITICAL FIX V2: Correct PPO VF clipping with per-sample losses
-                            # Compute per-sample loss for this alternative clipping method
-                            critic_loss_alt_clipped_per_sample = -(
-                                target_distribution_selected * log_predictions_clipped_selected
-                            ).sum(dim=1)  # Shape: [batch], do NOT mean yet!
-                            critic_loss_alt_clipped_per_sample = (
-                                critic_loss_alt_clipped_per_sample / self._critic_ce_normalizer
-                            )
-
-                            # Element-wise max with previously computed per-sample losses, then mean
-                            # This correctly implements PPO VF clipping: mean(max(...))
-                            critic_loss = torch.mean(
-                                torch.max(
-                                    critic_loss_per_sample_normalized,
-                                    critic_loss_alt_clipped_per_sample,
-                                )
-                            )
+                        # CRITICAL FIX: Removed second VF clipping block that created triple max
+                        # Previously, there were TWO VF clipping methods applied sequentially:
+                        #   1. First method (lines 8827-8915): _project_categorical_distribution
+                        #   2. Second method (REMOVED): _build_support_distribution
+                        # This created: mean(max(max(L_unclipped, L_clipped1), L_clipped2))
+                        #             = mean(max(L_unclipped, L_clipped1, L_clipped2))  # TRIPLE MAX!
+                        # Correct PPO requires: mean(max(L_unclipped, L_clipped))  # DOUBLE MAX
+                        #
+                        # The first method (_project_categorical_distribution) is theoretically
+                        # superior for distributional RL because it:
+                        #   - Preserves distribution shape and uncertainty information
+                        #   - Maintains proper gradient flow through projection
+                        #   - Shifts atoms and projects back to original grid (C51 algorithm)
+                        #
+                        # The second method (_build_support_distribution) would collapse the
+                        # distribution to a point mass (dirac delta), losing uncertainty.
+                        #
+                        # Reference: Bellemare et al. (2017), "A Distributional Perspective on RL"
+                        # Reference: Schulman et al. (2017), "Proximal Policy Optimization"
 
                     cvar_unit_tensor = (cvar_raw - cvar_offset_tensor) / cvar_scale_tensor
                     cvar_loss = -cvar_unit_tensor
