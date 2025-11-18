@@ -2,7 +2,11 @@
 
 ## Summary
 
-Fixed a critical mathematical error in the quantile regression loss implementation that caused inverted asymmetry coefficients. This bug affected all distributional RL training using the quantile critic.
+Fixed a critical mathematical error in the quantile regression loss implementation that caused inverted asymmetry coefficients.
+
+**⚠️ IMPORTANT: This fix is DISABLED BY DEFAULT for backward compatibility.**
+
+To enable the fix, set `policy.use_fixed_quantile_loss_asymmetry = True`.
 
 ## Problem Description
 
@@ -81,6 +85,29 @@ This asymmetry ensures:
 - Low quantiles (`τ < 0.5`) penalize **overestimation** more → conservative predictions
 - High quantiles (`τ > 0.5`) penalize **underestimation** more → aggressive predictions
 - Median (`τ = 0.5`) penalizes both equally → unbiased predictions
+
+## How to Enable the Fix
+
+The fix is **disabled by default** to ensure backward compatibility with existing models and experiments.
+
+To enable the corrected formula:
+
+```python
+# In your policy configuration or network architecture
+policy.use_fixed_quantile_loss_asymmetry = True
+```
+
+Or when creating a custom policy:
+
+```python
+class CustomQuantilePolicy:
+    def __init__(self):
+        self.uses_quantile_value_head = True
+        self.quantile_huber_kappa = 1.0
+        self.use_fixed_quantile_loss_asymmetry = True  # Enable fix
+```
+
+**Recommendation:** Enable this fix for **all new training runs**. Only keep it disabled if you need exact reproducibility with old (buggy) models.
 
 ## The Fix
 
