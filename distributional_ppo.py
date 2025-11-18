@@ -2906,6 +2906,99 @@ class DistributionalPPO(RecurrentPPO):
 
         return projected_probs
 
+    def _get_optimizer_class(self) -> Type[torch.optim.Optimizer]:
+        """
+        Get the optimizer class to use based on configuration.
+
+        Returns:
+            Optimizer class to instantiate
+        """
+        optimizer_spec = getattr(self, "_optimizer_class", None)
+
+        if optimizer_spec is None:
+            # Default to AdamW
+            return torch.optim.AdamW
+
+        if isinstance(optimizer_spec, str):
+            # String-based lookup
+            optimizer_map = {
+                "adamw": torch.optim.AdamW,
+                "adam": torch.optim.Adam,
+                "sgd": torch.optim.SGD,
+                "upgd": None,  # Will be imported below
+                "adaptive_upgd": None,
+                "upgdw": None,
+            }
+
+            optimizer_key = optimizer_spec.lower()
+            if optimizer_key not in optimizer_map:
+                raise ValueError(
+                    f"Unknown optimizer '{optimizer_spec}'. "
+                    f"Available: {list(optimizer_map.keys())}"
+                )
+
+            # Import UPGD optimizers if needed
+            if optimizer_key in ("upgd", "adaptive_upgd", "upgdw"):
+                try:
+                    from optimizers import UPGD, AdaptiveUPGD, UPGDW
+                    optimizer_map["upgd"] = UPGD
+                    optimizer_map["adaptive_upgd"] = AdaptiveUPGD
+                    optimizer_map["upgdw"] = UPGDW
+                except ImportError as e:
+                    raise ImportError(
+                        f"UPGD optimizers not available. "
+                        f"Please ensure optimizers module is installed. Error: {e}"
+                    )
+
+            return optimizer_map[optimizer_key]
+        else:
+            # Direct class reference
+            return optimizer_spec
+
+    def _get_optimizer_kwargs(self) -> dict:
+        """
+        Get optimizer keyword arguments based on configuration.
+
+        Returns:
+            Dictionary of keyword arguments for optimizer initialization
+        """
+        # Start with user-provided kwargs
+        kwargs = dict(getattr(self, "_optimizer_kwargs", {}))
+
+        # Get optimizer class to determine defaults
+        optimizer_cls = self._get_optimizer_class()
+        optimizer_name = optimizer_cls.__name__ if hasattr(optimizer_cls, '__name__') else str(optimizer_cls)
+
+        # Set defaults based on optimizer type
+        if optimizer_name == "AdamW":
+            kwargs.setdefault("weight_decay", 0.0)
+            kwargs.setdefault("betas", (0.9, 0.999))
+            kwargs.setdefault("eps", 1e-8)
+        elif optimizer_name in ("UPGD", "AdaptiveUPGD", "UPGDW"):
+            # UPGD-specific defaults
+            kwargs.setdefault("weight_decay", 0.001)
+            kwargs.setdefault("sigma", 0.001)
+
+            if optimizer_name == "UPGD":
+                kwargs.setdefault("beta_utility", 0.999)
+            elif optimizer_name == "AdaptiveUPGD":
+                kwargs.setdefault("beta_utility", 0.999)
+                kwargs.setdefault("beta1", 0.9)
+                kwargs.setdefault("beta2", 0.999)
+                kwargs.setdefault("eps", 1e-8)
+            elif optimizer_name == "UPGDW":
+                kwargs.setdefault("betas", (0.9, 0.999))
+                kwargs.setdefault("eps", 1e-8)
+        elif optimizer_name == "Adam":
+            kwargs.setdefault("weight_decay", 0.0)
+            kwargs.setdefault("betas", (0.9, 0.999))
+            kwargs.setdefault("eps", 1e-8)
+        elif optimizer_name == "SGD":
+            kwargs.setdefault("momentum", 0.0)
+            kwargs.setdefault("weight_decay", 0.0)
+
+        return kwargs
+
     def _enforce_optimizer_lr_bounds(
         self,
         *,
@@ -4720,6 +4813,8 @@ class DistributionalPPO(RecurrentPPO):
         optimizer_lr_min: Optional[float] = None,
         scheduler_min_lr: Optional[float] = None,
         optimizer_lr_max: Optional[float] = None,
+        optimizer_class: Optional[Union[str, Type[torch.optim.Optimizer]]] = None,
+        optimizer_kwargs: Optional[dict] = None,
         ev_reserve_apply_mask: bool = True,
         **kwargs: Any,
     ) -> None:
@@ -4898,10 +4993,28 @@ class DistributionalPPO(RecurrentPPO):
             optimizer_lr_max_value = float("inf")
         else:
             optimizer_lr_max_value = float(optimizer_lr_max_candidate)
-            if optimizer_lr_max_value <= 0.0:
-                raise ValueError("'optimizer_lr_max' must be positive when provided")
-            if not math.isfinite(optimizer_lr_max_value):
-                optimizer_lr_max_value = float("inf")
+            if not math.isfinite(optimizer_lr_max_value) or optimizer_lr_max_value <= 0.0:
+                raise ValueError("'optimizer_lr_max' must be a positive finite value when provided")
+
+        # UPGD optimizer configuration
+        optimizer_class_candidate = kwargs_local.pop("optimizer_class", optimizer_class)
+        optimizer_kwargs_candidate = kwargs_local.pop("optimizer_kwargs", optimizer_kwargs)
+
+        self._optimizer_class: Optional[Union[str, Type[torch.optim.Optimizer]]] = None
+        self._optimizer_kwargs: dict = {}
+
+        if optimizer_class_candidate is not None:
+            if isinstance(optimizer_class_candidate, str):
+                # String-based selection: "upgd", "adaptive_upgd", "upgdw", "adamw"
+                self._optimizer_class = optimizer_class_candidate.lower()
+            else:
+                # Direct class reference
+                self._optimizer_class = optimizer_class_candidate
+
+        if optimizer_kwargs_candidate is not None:
+            if not isinstance(optimizer_kwargs_candidate, Mapping):
+                raise TypeError("'optimizer_kwargs' must be a dictionary")
+            self._optimizer_kwargs = dict(optimizer_kwargs_candidate)
 
         if math.isfinite(optimizer_lr_max_value) and optimizer_lr_max_value < optimizer_lr_min_value:
             optimizer_lr_max_value = optimizer_lr_min_value
@@ -5538,12 +5651,18 @@ class DistributionalPPO(RecurrentPPO):
                 }
             )
         if param_groups:
-            self.policy.optimizer = torch.optim.AdamW(
+            # Create optimizer based on configuration
+            optimizer_cls = self._get_optimizer_class()
+            optimizer_kwargs = self._get_optimizer_kwargs()
+
+            self.policy.optimizer = optimizer_cls(
                 param_groups,
-                weight_decay=0.0,
-                betas=(0.9, 0.999),
-                eps=1e-8,
+                **optimizer_kwargs
             )
+
+            # Log optimizer configuration
+            optimizer_name = optimizer_cls.__name__ if hasattr(optimizer_cls, '__name__') else str(optimizer_cls)
+            self.logger.record("config/optimizer_class", optimizer_name)
             self.logger.record(
                 "train/optimizer_lr_groups",
                 [float(group.get("lr", 0.0)) for group in param_groups],
