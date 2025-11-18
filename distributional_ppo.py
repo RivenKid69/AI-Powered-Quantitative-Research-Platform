@@ -8918,12 +8918,8 @@ class DistributionalPPO(RecurrentPPO):
                             critic_loss_per_sample_after_vf = critic_loss_unclipped_per_sample
                             critic_loss = critic_loss_per_sample_after_vf.mean()
 
-                        # Apply normalizer (to both scalar and per-sample losses)
+                        # Apply normalizer to critic loss
                         critic_loss = critic_loss / self._critic_ce_normalizer
-                        # Save per-sample losses for potential additional VF clipping below
-                        critic_loss_per_sample_normalized = (
-                            critic_loss_per_sample_after_vf / self._critic_ce_normalizer
-                        )
 
                         with torch.no_grad():
 
