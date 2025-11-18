@@ -6448,6 +6448,9 @@ class DistributionalPPO(RecurrentPPO):
         while n_steps < n_rollout_steps:
             raw_actions_tensor: Optional[torch.Tensor] = None
             old_log_prob_raw_tensor: Optional[torch.Tensor] = None
+            value_quantiles: Optional[torch.Tensor] = None
+            value_logits: Optional[torch.Tensor] = None
+            probs: Optional[torch.Tensor] = None
 
             with torch.no_grad():
                 obs_tensor = self.policy.obs_to_tensor(self._last_obs)[0]
