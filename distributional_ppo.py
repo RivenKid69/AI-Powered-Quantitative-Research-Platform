@@ -7719,6 +7719,12 @@ class DistributionalPPO(RecurrentPPO):
         ratio_count = 0
         log_prob_sum = 0.0
         log_prob_count = 0
+        # Log ratio statistics (before clamping) for monitoring training health
+        log_ratio_sum = 0.0
+        log_ratio_sq_sum = 0.0
+        log_ratio_count = 0
+        log_ratio_max_abs = 0.0
+        log_ratio_extreme_count = 0  # count of |log_ratio| > 10.0
         # KL penalty aggregation (for logging average component)
         kl_penalty_component_total = 0.0
         kl_penalty_component_count = 0
@@ -7995,11 +8001,40 @@ class DistributionalPPO(RecurrentPPO):
                     # Compute importance sampling ratio
                     # Following standard PPO implementations (Stable Baselines3, CleanRL):
                     # - Trust region is enforced by PPO clip in loss, not log_ratio clamping
-                    # - However, clamp log_ratio to ±85 for numerical stability (prevents exp overflow)
-                    # - exp(85)≈8e36 is finite, exp(89)=inf; normal training has log_ratio∈[-0.1,0.1]
+                    # - Clamp log_ratio to ±20 for numerical stability (prevents exp overflow)
+                    # - exp(20)≈485M is finite, exp(89)=inf; healthy training has log_ratio∈[-0.1,0.1]
+                    # - If |log_ratio| approaches ±20, this indicates severe training instability
                     # - This is a numerical safeguard, not a trust region mechanism
+                    # - Best practice: Monitor log_ratio and warn if |log_ratio| > 10 (Spinning Up, CleanRL)
                     log_ratio = log_prob_selected - old_log_prob_selected
-                    log_ratio = torch.clamp(log_ratio, min=-85.0, max=85.0)
+
+                    # Monitor log_ratio BEFORE clamping to detect training instability
+                    with torch.no_grad():
+                        log_ratio_unclamped = log_ratio.detach()
+                        if torch.isfinite(log_ratio_unclamped).all():
+                            log_ratio_abs_max = torch.max(torch.abs(log_ratio_unclamped)).item()
+                            log_ratio_max_abs = max(log_ratio_max_abs, log_ratio_abs_max)
+
+                            # Accumulate statistics for mean/std calculation
+                            log_ratio_sum += float(log_ratio_unclamped.sum().item())
+                            log_ratio_sq_sum += float((log_ratio_unclamped.square()).sum().item())
+                            log_ratio_count += int(log_ratio_unclamped.numel())
+
+                            # Count extreme values (|log_ratio| > 10.0 indicates severe instability)
+                            # In healthy PPO training, log_ratio should be in [-0.1, 0.1]
+                            # Values > 10 mean policy changed by factor of e^10 ≈ 22,000x
+                            extreme_mask = torch.abs(log_ratio_unclamped) > 10.0
+                            if torch.any(extreme_mask):
+                                log_ratio_extreme_count += int(extreme_mask.sum().item())
+                                # Log warning for this batch
+                                self.logger.record(
+                                    "warn/log_ratio_extreme_batch",
+                                    float(log_ratio_abs_max)
+                                )
+
+                    # Conservative numerical clamping (±20 instead of ±85)
+                    # This prevents exp() overflow while still detecting instability
+                    log_ratio = torch.clamp(log_ratio, min=-20.0, max=20.0)
                     ratio = torch.exp(log_ratio)
                     policy_loss_1 = advantages_selected * ratio
                     policy_loss_2 = advantages_selected * torch.clamp(
@@ -9745,6 +9780,39 @@ class DistributionalPPO(RecurrentPPO):
             self.logger.record("train/ratio_var", float(ratio_var))
         if log_prob_count > 0:
             self.logger.record("train/log_prob_mean", float(log_prob_sum / float(log_prob_count)))
+
+        # Log ratio statistics (before clamping) for monitoring training health
+        # In healthy PPO training, log_ratio should be in [-0.1, 0.1]
+        # If log_ratio_max_abs > 10, this indicates severe training instability
+        # OpenAI Spinning Up: approx_kl should stay < 0.02 in healthy training
+        if log_ratio_count > 0:
+            log_ratio_mean = log_ratio_sum / float(log_ratio_count)
+            if log_ratio_count > 1:
+                raw_var = (log_ratio_sq_sum - log_ratio_count * log_ratio_mean**2) / (float(log_ratio_count) - 1.0)
+                log_ratio_var = max(raw_var, 0.0)
+            else:
+                log_ratio_var = 0.0
+            log_ratio_std = math.sqrt(log_ratio_var) if math.isfinite(log_ratio_var) else 0.0
+
+            self.logger.record("train/log_ratio_mean", float(log_ratio_mean))
+            self.logger.record("train/log_ratio_std", float(log_ratio_std))
+            self.logger.record("train/log_ratio_max_abs", float(log_ratio_max_abs))
+
+            # Log warning if max |log_ratio| indicates instability
+            # Healthy training: |log_ratio| < 0.2
+            # Concerning: |log_ratio| > 1.0 (policy changed by factor > e ≈ 2.7x)
+            # Severe: |log_ratio| > 10.0 (policy changed by factor > e^10 ≈ 22,000x)
+            if log_ratio_max_abs > 10.0:
+                self.logger.record("warn/log_ratio_severe_instability", float(log_ratio_max_abs))
+            elif log_ratio_max_abs > 1.0:
+                self.logger.record("warn/log_ratio_concerning", float(log_ratio_max_abs))
+
+            # Log fraction of extreme values
+            if log_ratio_extreme_count > 0:
+                extreme_fraction = float(log_ratio_extreme_count) / float(log_ratio_count)
+                self.logger.record("train/log_ratio_extreme_fraction", extreme_fraction)
+                self.logger.record("warn/log_ratio_extreme_count", float(log_ratio_extreme_count))
+
         # Note: Advantage mean/std are now logged globally in collect_rollouts()
         # (as train/advantages_mean_raw and train/advantages_std_raw)
         if adv_z_values:

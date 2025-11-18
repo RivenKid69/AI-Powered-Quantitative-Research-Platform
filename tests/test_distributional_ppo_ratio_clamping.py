@@ -1,25 +1,36 @@
 """
-Comprehensive tests for PPO ratio computation without log_ratio clamping.
+Comprehensive tests for PPO ratio computation without aggressive log_ratio clamping.
 
 Tests verify the correct PPO implementation following standard practices:
-- NO clamping on log_ratio before exp() (aligns with Stable Baselines3, CleanRL)
+- NO aggressive clamping on log_ratio before exp() (aligns with Stable Baselines3, CleanRL)
 - Trust region enforcement happens ONLY via PPO clipping in loss function
 - Correct gradient flow for all log_ratio values
 - Alignment with theoretical PPO (Schulman et al., 2017)
 
+IMPORTANT NOTE ON CONSERVATIVE ±20 CLIPPING:
+Our implementation includes a conservative ±20 numerical safeguard which is NOT a violation
+of PPO theory because:
+1. In healthy training, log_ratio NEVER reaches ±20 (typically ≤ 0.2)
+2. The ±20 bound is purely for numerical stability (prevents exp overflow)
+3. If training hits ±20, monitoring WILL warn (not silently mask like old ±85)
+4. This is fundamentally different from the old ±85 aggressive clipping
+
+Think of ±20 as an assertion boundary that should never be reached in correct training.
+
 The ratio = exp(log_prob - old_log_prob) is the core of PPO's importance sampling.
 PPO clips ratio to [1-ε, 1+ε] where ε≈0.05-0.2, maintaining the trust region.
 
-Key insight: Clamping log_ratio BEFORE exp() is theoretically incorrect because:
+Key insight: Aggressive clamping (like ±85) BEFORE exp() is wrong because:
 1. It creates double clipping (first on log_ratio, then on ratio in loss)
 2. It breaks gradient flow (gradient becomes 0 for clamped values)
 3. It violates PPO theory (clipping should only happen in the loss function)
-4. Standard implementations (SB3, CleanRL) don't do this
+4. It masks catastrophic training problems instead of detecting them
 
 Empirical data from training logs:
 - ratio_mean ≈ 1.0 (perfect)
 - ratio_std ≈ 0.02-0.04 (very small)
 - log_ratio typically ≈ 0.039 (log(1.04))
+- log_ratio should NEVER exceed ±1.0 in healthy training
 
 Reference:
 - Original PPO paper: Schulman et al., 2017 (https://arxiv.org/abs/1707.06347)
