@@ -4797,10 +4797,10 @@ class DistributionalPPO(RecurrentPPO):
             distributional_vf_clip_mode_value = None
         else:
             mode_str = str(distributional_vf_clip_mode_candidate).lower()
-            if mode_str not in ("disable", "mean_only", "mean_and_variance"):
+            if mode_str not in ("disable", "mean_only", "mean_and_variance", "per_quantile"):
                 raise ValueError(
                     f"'distributional_vf_clip_mode' must be None or one of "
-                    f"['disable', 'mean_only', 'mean_and_variance'], got: {mode_str}"
+                    f"['disable', 'mean_only', 'mean_and_variance', 'per_quantile'], got: {mode_str}"
                 )
             distributional_vf_clip_mode_value = mode_str
         self.distributional_vf_clip_mode = distributional_vf_clip_mode_value
@@ -8768,10 +8768,11 @@ class DistributionalPPO(RecurrentPPO):
 
                         # DISTRIBUTIONAL VF CLIPPING FIX
                         # Original PPO VF clipping is designed for scalar value functions
-                        # For distributional critics, we provide three modes:
+                        # For distributional critics, we provide four modes:
                         # 1. None/"disable" (default): No VF clipping (recommended, no theoretical basis)
                         # 2. "mean_only": Legacy behavior (parallel shift - does NOT constrain variance!)
                         # 3. "mean_and_variance": Clip mean + constrain variance changes
+                        # 4. "per_quantile": Clip EACH quantile individually (strictest, guarantees bounds)
                         distributional_vf_clip_enabled = (
                             clip_range_vf_value is not None
                             and self.distributional_vf_clip_mode not in (None, "disable")
@@ -8870,6 +8871,44 @@ class DistributionalPPO(RecurrentPPO):
 
                                 # Scale quantiles back if variance too large
                                 quantiles_norm_clipped = value_pred_norm_after_vf + quantiles_centered * std_ratio
+                            elif self.distributional_vf_clip_mode == "per_quantile":
+                                # Per-quantile mode: clip EACH quantile individually relative to old_value
+                                # Formula: quantile_clipped = old_value + clip(quantile - old_value, -ε, +ε)
+                                # This GUARANTEES all quantiles stay within [old_value - ε, old_value + ε]
+                                # This is the strictest interpretation of VF clipping for distributional critics
+                                # and most closely matches the original PPO VF clipping semantics.
+
+                                # Convert quantiles to raw space for clipping
+                                quantiles_raw = self._to_raw_returns(quantiles_fp32)
+
+                                # Clip each quantile in raw space relative to old_values_raw_aligned
+                                # old_values_raw_aligned is already aligned to quantiles shape
+                                quantiles_raw_clipped = old_values_raw_aligned + torch.clamp(
+                                    quantiles_raw - old_values_raw_aligned,
+                                    min=-clip_delta,
+                                    max=clip_delta
+                                )
+
+                                # Convert clipped quantiles back to normalized space
+                                if self.normalize_returns:
+                                    quantiles_norm_clipped = (
+                                        (quantiles_raw_clipped - ret_mu_tensor) / ret_std_tensor
+                                    ).clamp(self._value_norm_clip_min, self._value_norm_clip_max)
+                                else:
+                                    quantiles_norm_clipped = (
+                                        (quantiles_raw_clipped / float(base_scale_safe))
+                                        * self._value_target_scale_effective
+                                    )
+                                    if self._value_clip_limit_scaled is not None:
+                                        quantiles_norm_clipped = torch.clamp(
+                                            quantiles_norm_clipped,
+                                            min=-self._value_clip_limit_scaled,
+                                            max=self._value_clip_limit_scaled,
+                                        )
+
+                                # Update value_pred_norm_after_vf to match clipped mean
+                                value_pred_norm_after_vf = quantiles_norm_clipped.mean(dim=1, keepdim=True)
+                                value_pred_raw_after_vf = self._to_raw_returns(value_pred_norm_after_vf)
                             else:
                                 raise ValueError(
                                     f"Invalid distributional_vf_clip_mode: {self.distributional_vf_clip_mode}"
@@ -8997,6 +9036,7 @@ class DistributionalPPO(RecurrentPPO):
                         # 1. None/"disable" (default): No VF clipping
                         # 2. "mean_only": Legacy behavior (shift+project - limited variance constraint)
                         # 3. "mean_and_variance": Clip mean + constrain variance via projection scaling
+                        # 4. "per_quantile": Clip atoms to stay within bounds (strictest, guarantees bounds)
                         distributional_vf_clip_enabled_cat = (
                             clip_range_vf_value is not None
                             and self.distributional_vf_clip_mode not in (None, "disable")
@@ -9097,6 +9137,54 @@ class DistributionalPPO(RecurrentPPO):
                                 atoms_shifted_base = atoms_original + delta_norm.squeeze(-1)
                                 atoms_shifted_centered = atoms_shifted_base - mean_values_norm_clipped.squeeze(-1)
                                 atoms_shifted = mean_values_norm_clipped.squeeze(-1) + atoms_shifted_centered * variance_scale.squeeze(-1)
+                            elif self.distributional_vf_clip_mode == "per_quantile":
+                                # Per-quantile mode for categorical: clip each atom individually
+                                # For categorical critics with fixed atoms, we clip the entire atom support
+                                # to stay within [old_value - clip_delta, old_value + clip_delta]
+                                # This ensures the distribution cannot extend beyond the clipping bounds
+
+                                # Convert atoms to raw space (atoms are shared across batch, shape [num_atoms])
+                                atoms_raw = self._to_raw_returns(atoms_original.unsqueeze(0)).squeeze(0)
+
+                                # For each sample in batch, clip atoms relative to old_values_raw
+                                # We need to handle batch dimension properly
+                                # old_values_raw_aligned has shape [batch, 1], atoms_raw has shape [num_atoms]
+                                # Result should be [batch, num_atoms]
+
+                                # Broadcast clipping: each sample gets its own clipped atom range
+                                old_values_raw_broadcast = old_values_raw_aligned  # [batch, 1]
+                                atoms_raw_broadcast = atoms_raw.unsqueeze(0)  # [1, num_atoms]
+
+                                # Clip each atom relative to old_value for each sample
+                                atoms_raw_clipped_batch = old_values_raw_broadcast + torch.clamp(
+                                    atoms_raw_broadcast - old_values_raw_broadcast,
+                                    min=-clip_delta,
+                                    max=clip_delta
+                                )  # [batch, num_atoms]
+
+                                # Convert clipped atoms back to normalized space
+                                if self.normalize_returns:
+                                    atoms_shifted_batch = (
+                                        (atoms_raw_clipped_batch - ret_mu_tensor) / ret_std_tensor
+                                    ).clamp(self._value_norm_clip_min, self._value_norm_clip_max)
+                                else:
+                                    atoms_shifted_batch = (
+                                        (atoms_raw_clipped_batch / float(base_scale_safe))
+                                        * self._value_target_scale_effective
+                                    )
+                                    if self._value_clip_limit_scaled is not None:
+                                        atoms_shifted_batch = torch.clamp(
+                                            atoms_shifted_batch,
+                                            min=-self._value_clip_limit_scaled,
+                                            max=self._value_clip_limit_scaled,
+                                        )
+
+                                # For projection, we need to handle each sample separately
+                                # because each sample has different clipped atoms
+                                # We'll compute the mean of clipped atoms for simplicity
+                                # (In practice, atoms are the same across batch in C51, but after clipping
+                                # they differ per sample due to different old_values)
+                                atoms_shifted = atoms_shifted_batch  # [batch, num_atoms]
                             else:
                                 raise ValueError(
                                     f"Invalid distributional_vf_clip_mode: {self.distributional_vf_clip_mode}"
