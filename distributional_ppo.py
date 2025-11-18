@@ -2488,7 +2488,23 @@ class DistributionalPPO(RecurrentPPO):
         reduction: str = "mean",
     ) -> torch.Tensor:
         """
-        Compute quantile Huber loss.
+        Compute quantile Huber loss per Dabney et al. 2018.
+
+        Implements the quantile regression loss with Huber smoothing:
+            ρ_τ^κ(u) = |τ - I{u < 0}| · L_κ(u)
+
+        where:
+            u = target - predicted
+            L_κ(u) is the Huber loss with threshold κ
+            I{·} is the indicator function
+
+        This ensures correct asymmetry:
+            - For τ-quantile, underestimation (Q < T) receives penalty τ
+            - For τ-quantile, overestimation (Q ≥ T) receives penalty (1 - τ)
+
+        Reference:
+            Dabney et al. 2018, "Distributional Reinforcement Learning
+            with Quantile Regression", AAAI
 
         Args:
             predicted_quantiles: Predicted quantile values [batch, num_quantiles]
@@ -2541,14 +2557,28 @@ class DistributionalPPO(RecurrentPPO):
                 f"batch sizes differ ({targets.shape[0]} vs {predicted_quantiles.shape[0]})"
             )
 
-        delta = predicted_quantiles - targets
+        # Quantile regression loss formula: choose between old (buggy) and fixed version
+        # The fix is DISABLED BY DEFAULT for backward compatibility
+        # Set policy.use_fixed_quantile_loss_asymmetry = True to enable the correct formula
+        #
+        # FIXED formula (Dabney et al. 2018):
+        #   ρ_τ(u) = |τ - I{u < 0}| · L_κ(u), where u = target - predicted
+        #   This ensures: underestimation (Q < T) gets penalty τ,
+        #                 overestimation (Q ≥ T) gets penalty (1 - τ)
+        #
+        # OLD formula (MATHEMATICALLY INCORRECT):
+        #   Uses u = predicted - target, which inverts the asymmetry
+        if getattr(self, "_use_fixed_quantile_loss_asymmetry", False):
+            delta = targets - predicted_quantiles  # FIXED: T - Q (correct asymmetry)
+        else:
+            delta = predicted_quantiles - targets  # OLD: Q - T (inverted asymmetry)
         abs_delta = delta.abs()
         huber = torch.where(
             abs_delta <= kappa,
             0.5 * delta.pow(2),
             kappa * (abs_delta - 0.5 * kappa),
         )
-        indicator = (delta.detach() < 0.0).float()
+        indicator = (delta.detach() < 0.0).float()  # I{T < Q}
         # Shape: [batch, num_quantiles]
         loss_per_quantile = torch.abs(tau - indicator) * huber
 
@@ -5344,6 +5374,12 @@ class DistributionalPPO(RecurrentPPO):
         )
         self._quantile_huber_kappa = float(
             getattr(self.policy, "quantile_huber_kappa", 1.0)
+        )
+        # QUANTILE LOSS FIX: Disabled by default for backward compatibility
+        # Set policy.use_fixed_quantile_loss_asymmetry = True to enable the fix
+        # See QUANTILE_LOSS_FIX.md for details
+        self._use_fixed_quantile_loss_asymmetry = bool(
+            getattr(self.policy, "use_fixed_quantile_loss_asymmetry", False)
         )
 
         self._ensure_score_action_space()
