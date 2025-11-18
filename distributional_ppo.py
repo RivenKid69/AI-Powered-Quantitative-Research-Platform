@@ -2433,8 +2433,28 @@ class DistributionalPPO(RecurrentPPO):
         return levels.to(device=device, dtype=torch.float32)
 
     def _quantile_huber_loss(
-        self, predicted_quantiles: torch.Tensor, targets: torch.Tensor
+        self,
+        predicted_quantiles: torch.Tensor,
+        targets: torch.Tensor,
+        reduction: str = "mean",
     ) -> torch.Tensor:
+        """
+        Compute quantile Huber loss.
+
+        Args:
+            predicted_quantiles: Predicted quantile values [batch, num_quantiles]
+            targets: Target returns [batch, 1]
+            reduction: Specifies the reduction to apply to the output:
+                - 'none': no reduction will be applied (returns per-sample loss)
+                - 'mean': the sum of the output will be divided by the number of elements
+                - 'sum': the output will be summed
+
+        Returns:
+            Loss tensor (scalar if reduction='mean'/'sum', [batch] if reduction='none')
+        """
+        if reduction not in ("none", "mean", "sum"):
+            raise ValueError(f"Invalid reduction mode: {reduction}")
+
         kappa = max(float(self._quantile_huber_kappa), 1e-6)
         tau = self._quantile_levels_tensor(predicted_quantiles.device).view(1, -1)
         # ``targets`` is expected to be shaped ``[batch, 1]`` while
@@ -2480,8 +2500,19 @@ class DistributionalPPO(RecurrentPPO):
             kappa * (abs_delta - 0.5 * kappa),
         )
         indicator = (delta.detach() < 0.0).float()
-        loss = torch.abs(tau - indicator) * huber
-        return loss.mean()
+        # Shape: [batch, num_quantiles]
+        loss_per_quantile = torch.abs(tau - indicator) * huber
+
+        # Reduce over quantile dimension first, then apply batch reduction
+        # This gives per-sample loss: [batch]
+        loss_per_sample = loss_per_quantile.mean(dim=1)
+
+        if reduction == "none":
+            return loss_per_sample
+        elif reduction == "mean":
+            return loss_per_sample.mean()
+        else:  # reduction == "sum"
+            return loss_per_sample.sum()
 
     def _cvar_from_quantiles(self, predicted_quantiles: torch.Tensor) -> torch.Tensor:
         alpha = float(self.cvar_alpha)
@@ -8613,10 +8644,14 @@ class DistributionalPPO(RecurrentPPO):
                         targets_norm_for_loss = target_returns_norm_raw_selected.reshape(-1, 1)
                         # FIX: Target should NOT be clipped for VF clipping
 
-                        critic_loss_unclipped = self._quantile_huber_loss(
-                            quantiles_for_loss, targets_norm_for_loss
+                        # CRITICAL: Compute per-sample losses for correct VF clipping
+                        # PPO VF clipping MUST use mean(max(L_unclipped, L_clipped))
+                        # NOT max(mean(L_unclipped), mean(L_clipped))
+                        critic_loss_unclipped_per_sample = self._quantile_huber_loss(
+                            quantiles_for_loss, targets_norm_for_loss, reduction="none"
                         )
-                        critic_loss = critic_loss_unclipped
+                        # Default: use unclipped loss (will be replaced if VF clipping enabled)
+                        critic_loss = critic_loss_unclipped_per_sample.mean()
                         value_pred_norm_full = quantiles_fp32.mean(dim=1, keepdim=True)
                         value_pred_norm_pre_clip = value_pred_norm_full.clone()
                         self._record_value_debug_stats(
@@ -8688,12 +8723,22 @@ class DistributionalPPO(RecurrentPPO):
                             else:
                                 quantiles_norm_clipped_for_loss = quantiles_norm_clipped
                             quantiles_for_ev = quantiles_norm_clipped_for_loss
-                            # CRITICAL FIX: Use unclipped target with clipped predictions
-                            # PPO VF clipping: max(loss(pred, target), loss(clip(pred), target))
-                            critic_loss_clipped = self._quantile_huber_loss(
-                                quantiles_norm_clipped_for_loss, targets_norm_for_loss  # Use UNCLIPPED target
+                            # CRITICAL FIX V2: Correct PPO VF clipping implementation
+                            # PPO paper requires: L_VF = mean(max(L_unclipped, L_clipped))
+                            # where max is element-wise over batch, NOT max of two scalars!
+                            # This ensures proper gradient flow on per-sample basis.
+                            critic_loss_clipped_per_sample = self._quantile_huber_loss(
+                                quantiles_norm_clipped_for_loss,
+                                targets_norm_for_loss,  # Use UNCLIPPED target
+                                reduction="none",
                             )
-                            critic_loss = torch.max(critic_loss_unclipped, critic_loss_clipped)
+                            # Element-wise max, then mean (NOT max of means!)
+                            critic_loss = torch.mean(
+                                torch.max(
+                                    critic_loss_unclipped_per_sample,
+                                    critic_loss_clipped_per_sample,
+                                )
+                            )
                         else:
                             self._record_value_debug_stats(
                                 "train_pred_mean_raw_post_vf_clip",
@@ -8771,11 +8816,12 @@ class DistributionalPPO(RecurrentPPO):
                         else:
                             log_predictions_selected = log_predictions
                             target_distribution_selected = target_distribution
-                        # CRITICAL FIX: Compute unclipped cross-entropy loss
-                        # PPO VF clipping for categorical: max(loss(pred, target), loss(clip(pred), target))
-                        critic_loss_unclipped = -(
+                        # CRITICAL FIX V2: Compute per-sample cross-entropy loss
+                        # PPO VF clipping MUST use mean(max(L_unclipped, L_clipped))
+                        # NOT max(mean(L_unclipped), mean(L_clipped))
+                        critic_loss_unclipped_per_sample = -(
                             target_distribution_selected * log_predictions_selected
-                        ).sum(dim=1).mean()
+                        ).sum(dim=1)  # Shape: [batch], do NOT mean yet!
 
                         # Apply VF clipping if enabled
                         if clip_range_vf_value is not None:
@@ -8854,20 +8900,30 @@ class DistributionalPPO(RecurrentPPO):
                             else:
                                 log_predictions_clipped_selected = log_predictions_clipped
 
-                            # CRITICAL FIX: Use UNCLIPPED target with clipped predictions
-                            # PPO VF clipping: max(loss(pred, target), loss(clip(pred), target))
-                            critic_loss_clipped = -(
+                            # CRITICAL FIX V2: Use UNCLIPPED target with clipped predictions
+                            # Correct PPO VF clipping: mean(max(L_unclipped, L_clipped))
+                            # where max is element-wise, NOT scalar max!
+                            critic_loss_clipped_per_sample = -(
                                 target_distribution_selected * log_predictions_clipped_selected
-                            ).sum(dim=1).mean()
+                            ).sum(dim=1)  # Shape: [batch], do NOT mean yet!
 
-                            # Take maximum of unclipped and clipped loss (PPO VF clipping)
-                            critic_loss = torch.max(critic_loss_unclipped, critic_loss_clipped)
+                            # Element-wise max, then mean (NOT max of means!)
+                            critic_loss_per_sample_after_vf = torch.max(
+                                critic_loss_unclipped_per_sample,
+                                critic_loss_clipped_per_sample,
+                            )
+                            critic_loss = torch.mean(critic_loss_per_sample_after_vf)
                         else:
-                            # No VF clipping
-                            critic_loss = critic_loss_unclipped
+                            # No VF clipping: use unclipped loss
+                            critic_loss_per_sample_after_vf = critic_loss_unclipped_per_sample
+                            critic_loss = critic_loss_per_sample_after_vf.mean()
 
-                        # Apply normalizer
+                        # Apply normalizer (to both scalar and per-sample losses)
                         critic_loss = critic_loss / self._critic_ce_normalizer
+                        # Save per-sample losses for potential additional VF clipping below
+                        critic_loss_per_sample_normalized = (
+                            critic_loss_per_sample_after_vf / self._critic_ce_normalizer
+                        )
 
                         with torch.no_grad():
 
@@ -9066,11 +9122,23 @@ class DistributionalPPO(RecurrentPPO):
                                 log_predictions_clipped_selected = log_predictions_clipped
                                 # Use the unclipped target_distribution_selected computed earlier
 
-                            critic_loss_clipped = -(
-                                target_distribution_selected * log_predictions_clipped_selected  # Use UNCLIPPED target
-                            ).sum(dim=1).mean()
-                            critic_loss_clipped = critic_loss_clipped / self._critic_ce_normalizer
-                            critic_loss = torch.max(critic_loss, critic_loss_clipped)
+                            # CRITICAL FIX V2: Correct PPO VF clipping with per-sample losses
+                            # Compute per-sample loss for this alternative clipping method
+                            critic_loss_alt_clipped_per_sample = -(
+                                target_distribution_selected * log_predictions_clipped_selected
+                            ).sum(dim=1)  # Shape: [batch], do NOT mean yet!
+                            critic_loss_alt_clipped_per_sample = (
+                                critic_loss_alt_clipped_per_sample / self._critic_ce_normalizer
+                            )
+
+                            # Element-wise max with previously computed per-sample losses, then mean
+                            # This correctly implements PPO VF clipping: mean(max(...))
+                            critic_loss = torch.mean(
+                                torch.max(
+                                    critic_loss_per_sample_normalized,
+                                    critic_loss_alt_clipped_per_sample,
+                                )
+                            )
 
                     cvar_unit_tensor = (cvar_raw - cvar_offset_tensor) / cvar_scale_tensor
                     cvar_loss = -cvar_unit_tensor
