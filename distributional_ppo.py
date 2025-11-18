@@ -2488,7 +2488,23 @@ class DistributionalPPO(RecurrentPPO):
         reduction: str = "mean",
     ) -> torch.Tensor:
         """
-        Compute quantile Huber loss.
+        Compute quantile Huber loss per Dabney et al. 2018.
+
+        Implements the quantile regression loss with Huber smoothing:
+            ρ_τ^κ(u) = |τ - I{u < 0}| · L_κ(u)
+
+        where:
+            u = target - predicted
+            L_κ(u) is the Huber loss with threshold κ
+            I{·} is the indicator function
+
+        This ensures correct asymmetry:
+            - For τ-quantile, underestimation (Q < T) receives penalty τ
+            - For τ-quantile, overestimation (Q ≥ T) receives penalty (1 - τ)
+
+        Reference:
+            Dabney et al. 2018, "Distributional Reinforcement Learning
+            with Quantile Regression", AAAI
 
         Args:
             predicted_quantiles: Predicted quantile values [batch, num_quantiles]
@@ -2541,14 +2557,19 @@ class DistributionalPPO(RecurrentPPO):
                 f"batch sizes differ ({targets.shape[0]} vs {predicted_quantiles.shape[0]})"
             )
 
-        delta = predicted_quantiles - targets
+        # FIXED: Correct quantile regression loss formula from Dabney et al. 2018
+        # ρ_τ(u) = |τ - I{u < 0}| · L_κ(u), where u = target - predicted
+        # This ensures proper asymmetry:
+        # - For τ-quantile, underestimation (Q < T) gets penalty τ
+        # - For τ-quantile, overestimation (Q ≥ T) gets penalty (1 - τ)
+        delta = targets - predicted_quantiles  # CRITICAL: T - Q, not Q - T
         abs_delta = delta.abs()
         huber = torch.where(
             abs_delta <= kappa,
             0.5 * delta.pow(2),
             kappa * (abs_delta - 0.5 * kappa),
         )
-        indicator = (delta.detach() < 0.0).float()
+        indicator = (delta.detach() < 0.0).float()  # I{T < Q}
         # Shape: [batch, num_quantiles]
         loss_per_quantile = torch.abs(tau - indicator) * huber
 
