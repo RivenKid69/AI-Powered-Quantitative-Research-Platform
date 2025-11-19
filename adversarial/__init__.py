@@ -14,8 +14,8 @@ Based on research:
 from adversarial.state_perturbation import (
     PerturbationConfig,
     StatePerturbation,
-    test_loss_fn_policy,
-    test_loss_fn_value,
+    create_policy_loss_fn,
+    create_value_loss_fn,
 )
 from adversarial.sa_ppo import (
     SAPPOConfig,
@@ -32,8 +32,8 @@ __all__ = [
     # State perturbation
     "PerturbationConfig",
     "StatePerturbation",
-    "test_loss_fn_policy",
-    "test_loss_fn_value",
+    "create_policy_loss_fn",
+    "create_value_loss_fn",
     # SA-PPO
     "SAPPOConfig",
     "StateAdversarialPPO",

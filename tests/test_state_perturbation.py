@@ -22,9 +22,37 @@ import numpy as np
 from adversarial.state_perturbation import (
     PerturbationConfig,
     StatePerturbation,
-    test_loss_fn_policy,
-    test_loss_fn_value,
+    create_policy_loss_fn,
+    create_value_loss_fn,
 )
+
+
+# Module-level fixtures that can be used by all test classes
+@pytest.fixture
+def config():
+    """Default perturbation configuration."""
+    return PerturbationConfig(
+        epsilon=0.1,
+        attack_steps=3,
+        attack_lr=0.03,
+        random_init=True,
+        norm_type="linf",
+    )
+
+
+@pytest.fixture
+def perturbation(config):
+    """StatePerturbation instance."""
+    return StatePerturbation(config)
+
+
+@pytest.fixture
+def dummy_loss_fn():
+    """Dummy loss function for testing."""
+    def loss_fn(state):
+        # Simple loss: sum of squares
+        return (state ** 2).sum()
+    return loss_fn
 
 
 class TestPerturbationConfig:
@@ -96,30 +124,6 @@ class TestPerturbationConfig:
 
 class TestStatePerturbation:
     """Tests for StatePerturbation class."""
-
-    @pytest.fixture
-    def config(self):
-        """Default perturbation configuration."""
-        return PerturbationConfig(
-            epsilon=0.1,
-            attack_steps=3,
-            attack_lr=0.03,
-            random_init=True,
-            norm_type="linf",
-        )
-
-    @pytest.fixture
-    def perturbation(self, config):
-        """StatePerturbation instance."""
-        return StatePerturbation(config)
-
-    @pytest.fixture
-    def dummy_loss_fn(self):
-        """Dummy loss function for testing."""
-        def loss_fn(state):
-            # Simple loss: sum of squares
-            return (state ** 2).sum()
-        return loss_fn
 
     def test_initialization(self, config):
         """Test StatePerturbation initialization."""
@@ -384,8 +388,9 @@ class TestStatePerturbation:
         perturbation._update_stats(delta)
 
         assert perturbation._attack_count == 1
-        # Max absolute value is 0.2
-        assert abs(perturbation._total_perturbation_norm - 0.2) < 1e-6
+        # Max per sample: [0.2, 0.15], mean = 0.175
+        expected_norm = (0.2 + 0.15) / 2
+        assert abs(perturbation._total_perturbation_norm - expected_norm) < 1e-6
 
     def test_update_stats_l2(self):
         """Test _update_stats with L2 norm."""
@@ -437,17 +442,17 @@ class TestStatePerturbation:
 class TestLossFunctions:
     """Tests for helper loss functions."""
 
-    def test_test_loss_fn_policy_placeholder(self):
-        """Test test_loss_fn_policy (placeholder for integration tests)."""
+    def test_create_policy_loss_fn_placeholder(self):
+        """Test create_policy_loss_fn (placeholder for integration tests)."""
         # This function is designed for integration with actual models
         # Here we just verify it exists and can be called
-        assert callable(test_loss_fn_policy)
+        assert callable(create_policy_loss_fn)
 
-    def test_test_loss_fn_value_placeholder(self):
-        """Test test_loss_fn_value (placeholder for integration tests)."""
+    def test_create_value_loss_fn_placeholder(self):
+        """Test create_value_loss_fn (placeholder for integration tests)."""
         # This function is designed for integration with actual models
         # Here we just verify it exists and can be called
-        assert callable(test_loss_fn_value)
+        assert callable(create_value_loss_fn)
 
 
 class TestEdgeCases:

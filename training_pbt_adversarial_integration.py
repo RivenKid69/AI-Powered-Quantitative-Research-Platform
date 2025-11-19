@@ -110,10 +110,12 @@ def load_pbt_adversarial_config(config_path: str) -> PBTAdversarialConfig:
         )
 
     # Parse Adversarial config
-    adversarial_enabled = data.get("adversarial", {}).get("enabled", True)
+    # Only enable if adversarial key exists in YAML or use default
+    adversarial_data = data.get("adversarial", {})
+    adversarial_enabled = adversarial_data.get("enabled", True) if adversarial_data else False
     adversarial_config = None
-    if adversarial_enabled:
-        adv_data = data["adversarial"]
+    if adversarial_enabled and adversarial_data:
+        adv_data = adversarial_data
 
         # Parse perturbation config
         pert_data = adv_data.get("perturbation", {})

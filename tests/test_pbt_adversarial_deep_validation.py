@@ -112,21 +112,13 @@ class TestEdgeCases:
         assert delta.shape == state.shape
 
     def test_population_size_one(self):
-        """Test PBT with population size of 1."""
-        config = PBTConfig(
-            population_size=1,
-            hyperparams=[HyperparamConfig(name="lr", min_value=1e-5, max_value=1e-3)],
-        )
-
-        scheduler = PBTScheduler(config, seed=42)
-        population = scheduler.initialize_population()
-
-        assert len(population) == 1
-
-        # Should not crash on exploitation/exploration
-        member = population[0]
-        scheduler.update_performance(member, 0.5, 1)
-        new_state, new_hp = scheduler.exploit_and_explore(member)
+        """Test PBT rejects population size of 1 (minimum is 2)."""
+        # Population size must be >= 2 for PBT to work
+        with pytest.raises(ValueError, match="population_size must be >= 2"):
+            config = PBTConfig(
+                population_size=1,
+                hyperparams=[HyperparamConfig(name="lr", min_value=1e-5, max_value=1e-3)],
+            )
 
     def test_very_large_population(self):
         """Test PBT with very large population."""

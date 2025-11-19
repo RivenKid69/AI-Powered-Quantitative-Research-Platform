@@ -33,8 +33,8 @@ from adversarial import (
     PBTConfig,
     HyperparamConfig,
     PBTScheduler,
-    test_loss_fn_policy,
-    test_loss_fn_value,
+    create_policy_loss_fn,
+    create_value_loss_fn,
 )
 from training_pbt_adversarial_integration import (
     PBTAdversarialConfig,
