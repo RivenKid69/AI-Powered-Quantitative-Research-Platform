@@ -168,7 +168,8 @@ class VarianceGradientScaler:
         grad_norm = (sum(grad_norms_sq) ** 0.5)
 
         # Compute mean and variance of gradient values
-        all_grads = torch.cat(grad_values)
+        # FIXED: Use abs() for both mean and variance for mathematical consistency
+        all_grads = torch.cat(grad_values)  # grad_values already contains abs values
         grad_mean = all_grads.mean().item()
         grad_var = all_grads.var().item()
 
@@ -204,7 +205,7 @@ class VarianceGradientScaler:
     @torch.no_grad()
     def get_normalized_variance(self) -> float:
         """
-        Compute normalized gradient variance: Var[g] / (E[|g|]^2 + eps)
+        Compute normalized gradient variance: Var[|g|] / (E[|g|]^2 + eps)
 
         This metric is scale-invariant and indicates the relative variability
         of gradients. Higher values suggest more unstable gradients.
@@ -215,13 +216,24 @@ class VarianceGradientScaler:
         if self._grad_var_ema is None or self._grad_mean_ema is None:
             return 0.0
 
-        # Bias correction
-        bias_correction = 1.0 - self.beta ** (self._step_count + 1)
+        # FIXED: Bias correction using correct step count (without +1)
+        # since step_count is incremented AFTER update_statistics in step()
+        bias_correction = 1.0 - self.beta ** self._step_count if self._step_count > 0 else 1.0
         var_corrected = self._grad_var_ema / bias_correction
         mean_corrected = self._grad_mean_ema / bias_correction
 
-        # Normalized variance
-        normalized_var = var_corrected / (mean_corrected ** 2 + self.eps)
+        # Normalized variance with numerical stability
+        # Ensure denominator is not too small
+        denominator = max(mean_corrected ** 2, 1e-12) + self.eps
+        normalized_var = var_corrected / denominator
+
+        # FIXED: Protection against inf/nan
+        if not (normalized_var >= 0.0 and normalized_var < float('inf')):
+            return 0.0
+
+        # FIXED: Clip extreme values to prevent numerical issues
+        normalized_var = min(normalized_var, 1e6)
+
         return float(normalized_var)
 
     @torch.no_grad()
@@ -242,6 +254,12 @@ class VarianceGradientScaler:
 
         normalized_var = self.get_normalized_variance()
         scaling_factor = 1.0 / (1.0 + self.alpha * normalized_var)
+
+        # FIXED: Ensure scaling factor is in valid range and not too small
+        # Prevent gradients from becoming zero
+        scaling_factor = max(scaling_factor, 1e-4)
+        scaling_factor = min(scaling_factor, 1.0)
+
         return float(scaling_factor)
 
     @torch.no_grad()
@@ -275,8 +293,9 @@ class VarianceGradientScaler:
         Should be called after optimizer.step() to update statistics
         and log metrics.
         """
-        self.update_statistics()
+        # FIXED: Increment step count BEFORE update for correct bias correction
         self._step_count += 1
+        self.update_statistics()
 
         # Log metrics
         if self._grad_norm_ema is not None:
