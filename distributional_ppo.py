@@ -37,12 +37,14 @@ try:  # pragma: no cover - import shim for script vs package usage
         WinRateStats,
         extract_episode_win_payload,
     )
+    from variance_gradient_scaler import VarianceGradientScaler
 except ImportError:  # pragma: no cover - fallback when imported as package module
     from .winrate_stats import (  # type: ignore[import-not-found]
         WinRateAccumulator,
         WinRateStats,
         extract_episode_win_payload,
     )
+    from .variance_gradient_scaler import VarianceGradientScaler  # type: ignore[import-not-found]
 
 
 logger = logging.getLogger(__name__)
@@ -4831,6 +4833,10 @@ class DistributionalPPO(RecurrentPPO):
         optimizer_class: Optional[Union[str, Type[torch.optim.Optimizer]]] = None,
         optimizer_kwargs: Optional[dict] = None,
         ev_reserve_apply_mask: bool = True,
+        variance_gradient_scaling: bool = False,
+        vgs_beta: float = 0.99,
+        vgs_alpha: float = 0.1,
+        vgs_warmup_steps: int = 100,
         **kwargs: Any,
     ) -> None:
         self._last_lstm_states: Optional[Union[RNNStates, Tuple[torch.Tensor, ...]]] = None
@@ -5686,6 +5692,27 @@ class DistributionalPPO(RecurrentPPO):
         base_logger = getattr(self, "_logger", None)
 
         self._configure_loss_head_weights(loss_head_weights)
+
+        # Initialize Variance Gradient Scaler
+        self._vgs_enabled = bool(variance_gradient_scaling)
+        self._vgs_beta = float(vgs_beta)
+        self._vgs_alpha = float(vgs_alpha)
+        self._vgs_warmup_steps = int(vgs_warmup_steps)
+        self._variance_gradient_scaler: Optional[VarianceGradientScaler] = None
+        if self._vgs_enabled:
+            self._variance_gradient_scaler = VarianceGradientScaler(
+                parameters=self.policy.parameters(),
+                enabled=True,
+                beta=self._vgs_beta,
+                alpha=self._vgs_alpha,
+                warmup_steps=self._vgs_warmup_steps,
+                logger=self.logger,
+            )
+        self.logger.record("config/vgs_enabled", float(self._vgs_enabled))
+        if self._vgs_enabled:
+            self.logger.record("config/vgs_beta", float(self._vgs_beta))
+            self.logger.record("config/vgs_alpha", float(self._vgs_alpha))
+            self.logger.record("config/vgs_warmup_steps", float(self._vgs_warmup_steps))
 
         self._configure_gradient_accumulation(
             microbatch_size=microbatch_size,
@@ -9703,6 +9730,11 @@ class DistributionalPPO(RecurrentPPO):
                 # Note: Advantage statistics are now logged globally in collect_rollouts()
                 # No need for per-group accumulation since we use global normalization
 
+                # Apply Variance Gradient Scaling before gradient clipping
+                if self._variance_gradient_scaler is not None:
+                    vgs_scaling_factor = self._variance_gradient_scaler.scale_gradients()
+                    self.logger.record("train/vgs_scaling_factor_applied", float(vgs_scaling_factor))
+
                 # Handle gradient clipping configuration
                 if self.max_grad_norm is None:
                     max_grad_norm = 0.5
@@ -9747,6 +9779,10 @@ class DistributionalPPO(RecurrentPPO):
                 self._enforce_optimizer_lr_bounds(log_values=False, warn_on_floor=False)
 
                 self.policy.optimizer.step()
+
+                # Update Variance Gradient Scaler statistics after optimizer step
+                if self._variance_gradient_scaler is not None:
+                    self._variance_gradient_scaler.step()
 
                 # Ensure any scheduler is wired to the active optimizer before stepping it.
                 self._rebuild_scheduler_if_needed()
