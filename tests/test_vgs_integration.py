@@ -36,8 +36,8 @@ def make_simple_env():
 class TestVGSInitialization:
     """Test VGS initialization through PPO config."""
 
-    def test_vgs_disabled_by_default(self) -> None:
-        """Test that VGS is disabled by default."""
+    def test_vgs_enabled_by_default(self) -> None:
+        """Test that VGS is enabled by default."""
         env = make_simple_env()
         model = DistributionalPPO(
             "MlpLstmPolicy",
@@ -45,6 +45,52 @@ class TestVGSInitialization:
             value_scale_max_rel_step=0.1,
             n_steps=128,
             batch_size=64,
+        )
+
+        assert hasattr(model, "_vgs_enabled")
+        assert model._vgs_enabled is True
+        assert model._variance_gradient_scaler is not None
+        assert isinstance(model._variance_gradient_scaler, VarianceGradientScaler)
+
+        env.close()
+
+    def test_vgs_default_parameters(self) -> None:
+        """Test that VGS uses correct default parameters."""
+        env = make_simple_env()
+        model = DistributionalPPO(
+            "MlpLstmPolicy",
+            env,
+            value_scale_max_rel_step=0.1,
+            n_steps=128,
+            batch_size=64,
+        )
+
+        # Check default parameter values
+        assert model._vgs_enabled is True
+        assert model._vgs_beta == 0.99
+        assert model._vgs_alpha == 0.1
+        assert model._vgs_warmup_steps == 100
+
+        # Check scaler instance has correct defaults
+        scaler = model._variance_gradient_scaler
+        assert scaler is not None
+        assert scaler.beta == 0.99
+        assert scaler.alpha == 0.1
+        assert scaler.warmup_steps == 100
+        assert scaler.enabled is True
+
+        env.close()
+
+    def test_vgs_can_be_disabled(self) -> None:
+        """Test that VGS can be explicitly disabled."""
+        env = make_simple_env()
+        model = DistributionalPPO(
+            "MlpLstmPolicy",
+            env,
+            value_scale_max_rel_step=0.1,
+            n_steps=128,
+            batch_size=64,
+            variance_gradient_scaling=False,
         )
 
         assert hasattr(model, "_vgs_enabled")
@@ -102,8 +148,37 @@ class TestVGSInitialization:
 class TestVGSTrainingIntegration:
     """Test VGS integration in training loop."""
 
+    def test_training_with_vgs_by_default(self) -> None:
+        """Test that training works with VGS enabled by default."""
+        env = make_simple_env()
+        model = DistributionalPPO(
+            "MlpLstmPolicy",
+            env,
+            value_scale_max_rel_step=0.1,
+            n_steps=128,
+            batch_size=64,
+            n_epochs=2,
+            verbose=0,
+        )
+
+        # VGS should be enabled by default
+        assert model._vgs_enabled is True
+        assert model._variance_gradient_scaler is not None
+
+        # Train for a few steps
+        model.learn(total_timesteps=256, progress_bar=False)
+
+        # Verify VGS statistics have been updated during training
+        scaler = model._variance_gradient_scaler
+        assert scaler._step_count > 0
+        assert scaler._grad_mean_ema is not None
+        assert scaler._grad_var_ema is not None
+        assert scaler._grad_norm_ema is not None
+
+        env.close()
+
     def test_training_with_vgs_enabled(self) -> None:
-        """Test that training works with VGS enabled."""
+        """Test that training works with VGS explicitly enabled."""
         env = make_simple_env()
         model = DistributionalPPO(
             "MlpLstmPolicy",
@@ -209,6 +284,35 @@ class TestVGSTrainingIntegration:
 class TestVGSMetricsAndLogging:
     """Test VGS metrics and logging."""
 
+    def test_vgs_metrics_logged_by_default(self) -> None:
+        """Test that VGS metrics are logged during training by default."""
+        env = make_simple_env()
+        model = DistributionalPPO(
+            "MlpLstmPolicy",
+            env,
+            value_scale_max_rel_step=0.1,
+            n_steps=128,
+            batch_size=64,
+            n_epochs=1,
+            verbose=0,
+        )
+
+        # Train to generate metrics (VGS enabled by default)
+        model.learn(total_timesteps=256, progress_bar=False)
+
+        # Check that VGS metrics exist (they are logged to logger)
+        scaler = model._variance_gradient_scaler
+        assert scaler is not None
+        assert scaler._step_count > 0
+
+        # Verify statistics are being computed
+        assert scaler._grad_mean_ema is not None
+        assert scaler._grad_mean_ema >= 0.0
+        assert scaler._grad_var_ema >= 0.0
+        assert scaler._grad_norm_ema >= 0.0
+
+        env.close()
+
     def test_vgs_metrics_logged(self) -> None:
         """Test that VGS metrics are logged during training."""
         env = make_simple_env()
@@ -269,6 +373,50 @@ class TestVGSMetricsAndLogging:
 
 class TestVGSStatePersistence:
     """Test VGS state persistence."""
+
+    def test_vgs_state_saved_and_loaded_by_default(self, tmp_path) -> None:
+        """Test that VGS state is saved and loaded correctly with default settings."""
+        env = make_simple_env()
+
+        # Create and train model with VGS (default enabled)
+        model1 = DistributionalPPO(
+            "MlpLstmPolicy",
+            env,
+            value_scale_max_rel_step=0.1,
+            n_steps=128,
+            batch_size=64,
+            n_epochs=2,
+            verbose=0,
+        )
+
+        # VGS should be enabled by default
+        assert model1._vgs_enabled is True
+        assert model1._variance_gradient_scaler is not None
+
+        model1.learn(total_timesteps=256, progress_bar=False)
+
+        # Save model
+        save_path = tmp_path / "vgs_model_default.zip"
+        model1.save(save_path)
+
+        # Get VGS state before loading
+        scaler1 = model1._variance_gradient_scaler
+        assert scaler1 is not None
+
+        # Load model
+        model2 = DistributionalPPO.load(save_path, env=env)
+
+        # Verify VGS is still enabled with default params
+        assert model2._vgs_enabled is True
+        assert model2._variance_gradient_scaler is not None
+
+        scaler2 = model2._variance_gradient_scaler
+        # Verify default parameters are preserved
+        assert scaler2.beta == 0.99
+        assert scaler2.alpha == 0.1
+        assert scaler2.warmup_steps == 100
+
+        env.close()
 
     def test_vgs_state_saved_and_loaded(self, tmp_path) -> None:
         """Test that VGS state is saved and loaded correctly."""
@@ -400,6 +548,38 @@ class TestVGSEdgeCases:
 
 class TestVGSGradientScaling:
     """Test actual gradient scaling behavior."""
+
+    def test_vgs_scaling_applied_by_default(self) -> None:
+        """Test that VGS scaling is applied by default."""
+        env = make_simple_env()
+        model = DistributionalPPO(
+            "MlpLstmPolicy",
+            env,
+            value_scale_max_rel_step=0.1,
+            n_steps=128,
+            batch_size=64,
+            n_epochs=2,
+            verbose=0,
+        )
+
+        # Train with default VGS enabled
+        model.learn(total_timesteps=512, progress_bar=False)
+
+        scaler = model._variance_gradient_scaler
+        assert scaler is not None
+        assert scaler._step_count > 0
+
+        # After sufficient training, scaler should have accumulated statistics
+        if scaler._step_count > scaler.warmup_steps:
+            # Verify statistics are reasonable
+            normalized_var = scaler.get_normalized_variance()
+            scaling_factor = scaler.get_scaling_factor()
+
+            assert np.isfinite(normalized_var)
+            assert normalized_var >= 0.0
+            assert 0.0 < scaling_factor <= 1.0
+
+        env.close()
 
     def test_vgs_reduces_gradient_variance(self) -> None:
         """Test that VGS tends to reduce gradient variance over time."""
