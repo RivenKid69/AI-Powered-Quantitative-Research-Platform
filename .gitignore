@@ -83,3 +83,6 @@ data/fear_greed.csv
 upgd_test_report.txt
 upgd_test_results.log
 test_output.log
+pbt_checkpoints/
+test_quick_distppo.py
+/tmp/
