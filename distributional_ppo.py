@@ -4833,7 +4833,7 @@ class DistributionalPPO(RecurrentPPO):
         optimizer_class: Optional[Union[str, Type[torch.optim.Optimizer]]] = None,
         optimizer_kwargs: Optional[dict] = None,
         ev_reserve_apply_mask: bool = True,
-        variance_gradient_scaling: bool = False,
+        variance_gradient_scaling: bool = True,
         vgs_beta: float = 0.99,
         vgs_alpha: float = 0.1,
         vgs_warmup_steps: int = 100,
