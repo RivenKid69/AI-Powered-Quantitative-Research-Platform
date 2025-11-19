@@ -202,15 +202,17 @@ class TestStateAdversarialPPO:
     def test_update_epsilon_schedule(self, sa_ppo):
         """Test epsilon schedule update."""
         sa_ppo.config.adaptive_epsilon = True
+        sa_ppo.config.epsilon_schedule = "linear"  # Use linear schedule
         sa_ppo.config.perturbation.epsilon = 0.1
         sa_ppo.config.epsilon_final = 0.05
-        sa_ppo._update_count = 500
+        sa_ppo._update_count = 500  # Halfway through (max_updates=1000)
 
         initial_epsilon = sa_ppo.config.perturbation.epsilon
         sa_ppo._update_epsilon_schedule()
 
-        # Epsilon should have changed
-        assert sa_ppo.config.perturbation.epsilon != initial_epsilon
+        # With linear schedule at 50% progress: 0.1 + (0.05 - 0.1) * 0.5 = 0.075
+        expected_epsilon = 0.075
+        assert abs(sa_ppo.config.perturbation.epsilon - expected_epsilon) < 1e-6
 
 
 if __name__ == "__main__":

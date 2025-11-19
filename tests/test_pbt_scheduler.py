@@ -435,20 +435,25 @@ class TestPBTScheduler:
     def test_should_exploit_truncation_bottom(self, scheduler):
         """Test exploitation decision with truncation (bottom performer)."""
         scheduler.config.exploit_method = "truncation"
+        scheduler.config.truncation_ratio = 0.5  # Truncate bottom 50%
         scheduler.initialize_population()
 
         # Set performances
         scheduler.population[0].performance = 0.3  # Worst
-        scheduler.population[1].performance = 0.9
+        scheduler.population[1].performance = 0.9  # Best
         scheduler.population[2].performance = 0.7
         scheduler.population[3].performance = 0.5
 
-        # Bottom performer should exploit
+        # With 0.5 ratio: threshold = int(4*0.5) = 2
+        # Ranked: [0.9, 0.7, 0.5, 0.3], worst is at rank 3
+        # Should exploit if rank >= 4-2 = 2, so ranks 2,3 exploit
+        # Member with 0.3 is at rank 3, should exploit
         assert scheduler._should_exploit(scheduler.population[0])
 
     def test_should_exploit_truncation_top(self, scheduler):
         """Test exploitation decision with truncation (top performer)."""
         scheduler.config.exploit_method = "truncation"
+        scheduler.config.truncation_ratio = 0.5  # Truncate bottom 50%
         scheduler.initialize_population()
 
         # Set performances
@@ -457,7 +462,10 @@ class TestPBTScheduler:
         scheduler.population[2].performance = 0.7
         scheduler.population[3].performance = 0.5
 
-        # Top performer should not exploit
+        # With 0.5 ratio: threshold = int(4*0.5) = 2
+        # Ranked: [0.9, 0.7, 0.5, 0.3], best is at rank 0
+        # Should exploit if rank >= 4-2 = 2, so ranks 2,3 exploit
+        # Member with 0.9 is at rank 0, should NOT exploit
         assert not scheduler._should_exploit(scheduler.population[1])
 
     def test_should_exploit_binary_tournament(self, scheduler):
@@ -478,17 +486,20 @@ class TestPBTScheduler:
     def test_select_source_member_truncation(self, scheduler):
         """Test source member selection with truncation."""
         scheduler.config.exploit_method = "truncation"
+        scheduler.config.truncation_ratio = 0.5  # Select from top 50%
         scheduler.initialize_population()
 
         # Set performances
-        scheduler.population[0].performance = 0.3
-        scheduler.population[1].performance = 0.9
-        scheduler.population[2].performance = 0.7
+        scheduler.population[0].performance = 0.3  # Worst
+        scheduler.population[1].performance = 0.9  # Best
+        scheduler.population[2].performance = 0.7  # 2nd best
         scheduler.population[3].performance = 0.5
 
         source = scheduler._select_source_member(scheduler.population[0])
 
-        # Should select from top performers
+        # With 0.5 ratio: threshold = int(4*0.5) = 2
+        # Top 2 members have performance 0.9 and 0.7
+        # Should select from top performers (>= 0.7)
         assert source is not None
         assert source.performance >= 0.7
 

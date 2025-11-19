@@ -288,7 +288,7 @@ class StatePerturbation:
             self._total_perturbation_norm += norm
 
 
-def test_loss_fn_policy(
+def create_policy_loss_fn(
     model: nn.Module,
     states: Tensor,
     actions: Tensor,
@@ -329,7 +329,7 @@ def test_loss_fn_policy(
     return loss_fn
 
 
-def test_loss_fn_value(
+def create_value_loss_fn(
     model: nn.Module,
     states: Tensor,
     returns: Tensor,
