@@ -29,8 +29,8 @@ except ImportError:
 
 
 def make_simple_env():
-    """Create a simple CartPole environment for testing."""
-    return DummyVecEnv([lambda: gym.make("CartPole-v1")])
+    """Create a simple Pendulum environment for testing (continuous action space)."""
+    return DummyVecEnv([lambda: gym.make("Pendulum-v1")])
 
 
 class TestVGSInitialization:
@@ -42,6 +42,7 @@ class TestVGSInitialization:
         model = DistributionalPPO(
             "MlpLstmPolicy",
             env,
+            value_scale_max_rel_step=0.1,
             n_steps=128,
             batch_size=64,
         )
@@ -58,6 +59,7 @@ class TestVGSInitialization:
         model = DistributionalPPO(
             "MlpLstmPolicy",
             env,
+            value_scale_max_rel_step=0.1,
             n_steps=128,
             batch_size=64,
             variance_gradient_scaling=True,
@@ -81,6 +83,7 @@ class TestVGSInitialization:
         model = DistributionalPPO(
             "MlpLstmPolicy",
             env,
+            value_scale_max_rel_step=0.1,
             n_steps=128,
             batch_size=64,
             variance_gradient_scaling=True,
@@ -105,6 +108,7 @@ class TestVGSTrainingIntegration:
         model = DistributionalPPO(
             "MlpLstmPolicy",
             env,
+            value_scale_max_rel_step=0.1,
             n_steps=128,
             batch_size=64,
             n_epochs=2,
@@ -131,6 +135,7 @@ class TestVGSTrainingIntegration:
         model = DistributionalPPO(
             "MlpLstmPolicy",
             env,
+            value_scale_max_rel_step=0.1,
             n_steps=128,
             batch_size=64,
             n_epochs=2,
@@ -153,6 +158,7 @@ class TestVGSTrainingIntegration:
         model = DistributionalPPO(
             "MlpLstmPolicy",
             env,
+            value_scale_max_rel_step=0.1,
             n_steps=128,
             batch_size=64,
             n_epochs=1,
@@ -179,6 +185,7 @@ class TestVGSTrainingIntegration:
         model = DistributionalPPO(
             "MlpLstmPolicy",
             env,
+            value_scale_max_rel_step=0.1,
             n_steps=128,
             batch_size=64,
             n_epochs=2,
@@ -208,6 +215,7 @@ class TestVGSMetricsAndLogging:
         model = DistributionalPPO(
             "MlpLstmPolicy",
             env,
+            value_scale_max_rel_step=0.1,
             n_steps=128,
             batch_size=64,
             n_epochs=1,
@@ -237,6 +245,7 @@ class TestVGSMetricsAndLogging:
         model = DistributionalPPO(
             "MlpLstmPolicy",
             env,
+            value_scale_max_rel_step=0.1,
             n_steps=128,
             batch_size=64,
             n_epochs=2,
@@ -269,6 +278,7 @@ class TestVGSStatePersistence:
         model1 = DistributionalPPO(
             "MlpLstmPolicy",
             env,
+            value_scale_max_rel_step=0.1,
             n_steps=128,
             batch_size=64,
             n_epochs=2,
@@ -315,6 +325,7 @@ class TestVGSEdgeCases:
         model = DistributionalPPO(
             "MlpLstmPolicy",
             env,
+            value_scale_max_rel_step=0.1,
             n_steps=128,
             batch_size=64,
             variance_gradient_scaling=True,
@@ -337,6 +348,7 @@ class TestVGSEdgeCases:
         model = DistributionalPPO(
             "MlpLstmPolicy",
             env,
+            value_scale_max_rel_step=0.1,
             n_steps=128,
             batch_size=64,
             n_epochs=1,
@@ -361,6 +373,7 @@ class TestVGSEdgeCases:
         model = DistributionalPPO(
             "MlpLstmPolicy",
             env,
+            value_scale_max_rel_step=0.1,
             n_steps=128,
             batch_size=64,
             n_epochs=2,
@@ -394,6 +407,7 @@ class TestVGSGradientScaling:
         model = DistributionalPPO(
             "MlpLstmPolicy",
             env,
+            value_scale_max_rel_step=0.1,
             n_steps=128,
             batch_size=64,
             n_epochs=3,
@@ -427,6 +441,7 @@ class TestVGSGradientScaling:
         model = DistributionalPPO(
             "MlpLstmPolicy",
             env,
+            value_scale_max_rel_step=0.1,
             n_steps=128,
             batch_size=64,
             n_epochs=2,

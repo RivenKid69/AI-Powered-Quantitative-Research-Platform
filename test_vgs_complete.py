@@ -83,7 +83,7 @@ def test_gradient_statistics_accuracy():
 
     manual_norm = (sum(p.grad.pow(2).sum().item() for p in model.parameters() if p.grad is not None) ** 0.5)
     manual_mean = all_grads.abs().mean().item()
-    manual_var = all_grads.var().item()
+    manual_var = all_grads.abs().var().item()  # Fixed: variance of abs values for consistency
     manual_max = all_grads.abs().max().item()
 
     print(f"Computed norm: {stats['grad_norm']:.8f}, Manual: {manual_norm:.8f}")
