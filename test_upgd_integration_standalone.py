@@ -324,6 +324,7 @@ def test_06_upgd_with_ppo():
         n_steps=64,
         n_epochs=2,
         batch_size=64,
+        value_scale_max_rel_step=0.1,  # Required parameter
         verbose=0,
     )
 
@@ -361,6 +362,7 @@ def test_07_twin_critics_with_upgd():
         adversarial_training=True,
         n_steps=64,
         n_epochs=2,
+        value_scale_max_rel_step=0.1,  # Required parameter
         verbose=0,
     )
 
@@ -403,6 +405,7 @@ def test_08_full_integration():
         n_epochs=2,
         batch_size=64,
         max_grad_norm=0.5,
+        value_scale_max_rel_step=0.1,  # Required parameter
         verbose=0,
     )
 
