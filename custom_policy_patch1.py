@@ -238,6 +238,10 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
         distributional_flag = critic_cfg.get("distributional")
         self._use_quantile_value_head = bool(distributional_flag)
 
+        # Twin Critics configuration: enables dual value networks for bias reduction
+        twin_critics_flag = critic_cfg.get("use_twin_critics", False)
+        self._use_twin_critics = bool(twin_critics_flag)
+
         if self._use_quantile_value_head:
             self.num_quantiles = _coerce_arch_int(
                 critic_cfg.get("num_quantiles"), 32, "critic.num_quantiles"
@@ -281,8 +285,18 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
         self.dist_head: Optional[nn.Linear] = None
         self.quantile_head: Optional[QuantileValueHead] = None
         self._value_head_module: Optional[nn.Module] = None
+
+        # Twin Critics: second value network for overestimation bias reduction
+        self.dist_head_2: Optional[nn.Linear] = None
+        self.quantile_head_2: Optional[QuantileValueHead] = None
+        self._value_head_module_2: Optional[nn.Module] = None
+
         self._last_value_logits: Optional[torch.Tensor] = None
         self._last_value_quantiles: Optional[torch.Tensor] = None
+        self._last_value_logits_2: Optional[torch.Tensor] = None
+        self._last_value_quantiles_2: Optional[torch.Tensor] = None
+        # Twin Critics: cache latent_vf for loss computation
+        self._last_latent_vf: Optional[torch.Tensor] = None
         self._last_raw_actions: Optional[torch.Tensor] = None
         self._critic_gradient_blocked: bool = False
         self._critic_gradient_scale: float = 1.0
@@ -516,6 +530,9 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
         """
         Создаёт архитектуру сети, используя базовую реализацию SB3, а затем
         заменяет value-голову на дистрибутивную.
+
+        Twin Critics: When use_twin_critics=True, creates a second independent
+        value network to reduce overestimation bias (similar to TD3/SAC approach).
         """
         super()._build(lr_schedule)
 
@@ -529,10 +546,22 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
             # instead of ``dist_head``.
             self.dist_head = None
             self.value_net = self.quantile_head.linear
+
+            # Twin Critics: Create second quantile head with identical architecture
+            if self._use_twin_critics:
+                self.quantile_head_2 = QuantileValueHead(
+                    self.lstm_output_dim, self.num_quantiles, self.quantile_huber_kappa
+                )
+                self._value_head_module_2 = self.quantile_head_2
         else:
             self.dist_head = nn.Linear(self.lstm_output_dim, self.num_atoms)
             self._value_head_module = self.dist_head
             self.value_net = self.dist_head
+
+            # Twin Critics: Create second categorical head with identical architecture
+            if self._use_twin_critics:
+                self.dist_head_2 = nn.Linear(self.lstm_output_dim, self.num_atoms)
+                self._value_head_module_2 = self.dist_head_2
 
         # Во время вызова _build из базового класса рекуррентные слои ещё не созданы,
         # поэтому откладываем настройку оптимизатора до завершения __init__.
@@ -575,6 +604,10 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
         modules.append(self.action_net)
         if self._value_head_module is not None:
             modules.append(self._value_head_module)
+
+        # Twin Critics: include second critic parameters in optimization
+        if self._value_head_module_2 is not None:
+            modules.append(self._value_head_module_2)
 
         params: list[nn.Parameter] = []
         for module in modules:
@@ -866,6 +899,8 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
 
     def _get_value_logits(self, latent_vf: torch.Tensor) -> torch.Tensor:
         """Возвращает логиты распределения/квантили ценностей без агрегации."""
+        # Twin Critics: cache latent_vf for loss computation in train loop
+        self._last_latent_vf = latent_vf
 
         if self._use_quantile_value_head:
             if self.quantile_head is None:
@@ -896,6 +931,57 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
         """
         value_logits = self._get_value_logits(latent_vf)
         return self._value_from_logits(value_logits)
+
+    # ============================================================================
+    # Twin Critics Methods
+    # ============================================================================
+
+    def _get_value_logits_2(self, latent_vf: torch.Tensor) -> torch.Tensor:
+        """Returns second critic value logits/quantiles for Twin Critics."""
+        if not self._use_twin_critics:
+            raise RuntimeError("Second critic is not enabled (use_twin_critics=False)")
+
+        if self._use_quantile_value_head:
+            if self.quantile_head_2 is None:
+                raise RuntimeError("Second quantile value head is not initialised")
+            quantiles = self.quantile_head_2(latent_vf)
+            self._last_value_logits_2 = None
+            self._last_value_quantiles_2 = quantiles
+            return quantiles
+
+        if self.dist_head_2 is None:
+            raise RuntimeError("Second categorical value head is not initialised")
+        value_logits = self.dist_head_2(latent_vf)
+        self._last_value_logits_2 = value_logits
+        self._last_value_quantiles_2 = None
+        return value_logits
+
+    def _get_twin_value_logits(self, latent_vf: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Returns both critics' value logits/quantiles for Twin Critics."""
+        if not self._use_twin_critics:
+            raise RuntimeError("Twin critics are not enabled (use_twin_critics=False)")
+
+        value_logits_1 = self._get_value_logits(latent_vf)
+        value_logits_2 = self._get_value_logits_2(latent_vf)
+        return value_logits_1, value_logits_2
+
+    def _get_min_twin_values(self, latent_vf: torch.Tensor) -> torch.Tensor:
+        """
+        Returns minimum of two critic estimates for Twin Critics.
+
+        This reduces overestimation bias by taking the pessimistic estimate,
+        similar to TD3/SAC algorithms.
+        """
+        if not self._use_twin_critics:
+            # Fall back to single critic if twin critics not enabled
+            return self._get_value_from_latent(latent_vf)
+
+        value_logits_1, value_logits_2 = self._get_twin_value_logits(latent_vf)
+        value_1 = self._value_from_logits(value_logits_1)
+        value_2 = self._value_from_logits(value_logits_2)
+
+        # Take minimum to reduce overestimation bias
+        return torch.min(value_1, value_2)
 
     def _loss_head_weights_for_device(
         self, device: torch.device
@@ -1333,7 +1419,13 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
             latent_vf = self.critic(features)
 
         latent_vf = self.mlp_extractor.forward_critic(latent_vf)
-        return self._get_value_from_latent(latent_vf)
+
+        # Twin Critics: Use minimum of both critics for value prediction
+        # This reduces overestimation bias in advantage computation
+        if self._use_twin_critics:
+            return self._get_min_twin_values(latent_vf)
+        else:
+            return self._get_value_from_latent(latent_vf)
 
     def value_quantiles(
         self,

@@ -2483,6 +2483,99 @@ class DistributionalPPO(RecurrentPPO):
             raise RuntimeError("Quantile levels are not available on the policy")
         return levels.to(device=device, dtype=torch.float32)
 
+    def _twin_critics_loss(
+        self,
+        latent_vf: torch.Tensor,
+        targets: torch.Tensor,
+        reduction: str = "mean",
+        target_distribution: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+        """
+        Compute Twin Critics loss for both value networks.
+
+        Twin Critics (inspired by TD3/SAC) uses two independent value networks
+        to reduce overestimation bias. Both critics are trained with the same targets,
+        but the minimum of their predictions is used for target computation in PPO.
+
+        Args:
+            latent_vf: Latent critic features [batch, latent_dim]
+            targets: Target returns [batch, 1] (for quantile mode) or None (for categorical)
+            reduction: Loss reduction mode ('none', 'mean', 'sum')
+            target_distribution: Target distribution [batch, n_atoms] (for categorical mode only)
+
+        Returns:
+            Tuple of (loss_critic_1, loss_critic_2, min_value_estimates)
+            - loss_critic_1: Loss for first critic
+            - loss_critic_2: Loss for second critic (None if twin critics disabled)
+            - min_value_estimates: Minimum of both predictions (for logging)
+        """
+        policy = self.policy
+        use_twin = getattr(policy, "_use_twin_critics", False)
+        use_quantile = getattr(policy, "_use_quantile_value_head", False)
+
+        # Get first critic predictions
+        value_logits_1 = policy._get_value_logits(latent_vf)
+
+        if use_quantile:
+            # Quantile critic: use Huber loss
+            loss_1 = self._quantile_huber_loss(value_logits_1, targets, reduction=reduction)
+        else:
+            # Categorical critic: use cross-entropy loss
+            if target_distribution is None:
+                raise ValueError("target_distribution required for categorical critic")
+
+            # Compute cross-entropy loss: -sum(target * log(pred))
+            pred_probs_1 = torch.softmax(value_logits_1, dim=1)
+            pred_probs_1 = torch.clamp(pred_probs_1, min=1e-8)
+            pred_probs_1 = pred_probs_1 / pred_probs_1.sum(dim=1, keepdim=True)
+            log_predictions_1 = torch.log(pred_probs_1)
+
+            if reduction == "none":
+                loss_1 = -(target_distribution * log_predictions_1).sum(dim=1)
+            elif reduction == "mean":
+                loss_1 = -(target_distribution * log_predictions_1).sum(dim=1).mean()
+            elif reduction == "sum":
+                loss_1 = -(target_distribution * log_predictions_1).sum()
+            else:
+                raise ValueError(f"Invalid reduction: {reduction}")
+
+        if not use_twin:
+            return loss_1, None, None
+
+        # Get second critic predictions
+        value_logits_2 = policy._get_value_logits_2(latent_vf)
+
+        if use_quantile:
+            # Quantile critic: use Huber loss
+            loss_2 = self._quantile_huber_loss(value_logits_2, targets, reduction=reduction)
+            # For logging: compute minimum value estimates
+            value_est_1 = value_logits_1.mean(dim=-1, keepdim=True)
+            value_est_2 = value_logits_2.mean(dim=-1, keepdim=True)
+            min_values = torch.min(value_est_1, value_est_2)
+        else:
+            # Categorical critic: use cross-entropy loss
+            pred_probs_2 = torch.softmax(value_logits_2, dim=1)
+            pred_probs_2 = torch.clamp(pred_probs_2, min=1e-8)
+            pred_probs_2 = pred_probs_2 / pred_probs_2.sum(dim=1, keepdim=True)
+            log_predictions_2 = torch.log(pred_probs_2)
+
+            if reduction == "none":
+                loss_2 = -(target_distribution * log_predictions_2).sum(dim=1)
+            elif reduction == "mean":
+                loss_2 = -(target_distribution * log_predictions_2).sum(dim=1).mean()
+            elif reduction == "sum":
+                loss_2 = -(target_distribution * log_predictions_2).sum()
+            else:
+                raise ValueError(f"Invalid reduction: {reduction}")
+
+            # For logging: compute minimum value estimates
+            pred_probs_1 = torch.softmax(value_logits_1, dim=1)
+            value_est_1 = (pred_probs_1 * policy.atoms).sum(dim=1, keepdim=True)
+            value_est_2 = (pred_probs_2 * policy.atoms).sum(dim=1, keepdim=True)
+            min_values = torch.min(value_est_1, value_est_2)
+
+        return loss_1, loss_2, min_values
+
     def _quantile_huber_loss(
         self,
         predicted_quantiles: torch.Tensor,
@@ -8989,9 +9082,37 @@ class DistributionalPPO(RecurrentPPO):
                         # CRITICAL: Compute per-sample losses for correct VF clipping
                         # PPO VF clipping MUST use mean(max(L_unclipped, L_clipped))
                         # NOT max(mean(L_unclipped), mean(L_clipped))
-                        critic_loss_unclipped_per_sample = self._quantile_huber_loss(
-                            quantiles_for_loss, targets_norm_for_loss, reduction="none"
-                        )
+
+                        # Twin Critics Integration: Use both critics if enabled
+                        use_twin = getattr(self.policy, '_use_twin_critics', False)
+                        if use_twin:
+                            # Get cached latent_vf from policy forward pass
+                            latent_vf = getattr(self.policy, '_last_latent_vf', None)
+                            if latent_vf is None:
+                                raise RuntimeError("Twin Critics enabled but latent_vf not cached")
+
+                            # Compute losses for both critics
+                            loss_critic_1, loss_critic_2, min_values = self._twin_critics_loss(
+                                latent_vf, targets_norm_for_loss, reduction="none"
+                            )
+
+                            # Average both critic losses for training
+                            critic_loss_unclipped_per_sample = (loss_critic_1 + loss_critic_2) / 2.0
+
+                            # Store losses for logging (accumulate over buckets)
+                            if not hasattr(self, '_twin_critic_1_loss_sum'):
+                                self._twin_critic_1_loss_sum = 0.0
+                                self._twin_critic_2_loss_sum = 0.0
+                                self._twin_critic_loss_count = 0
+                            self._twin_critic_1_loss_sum += float(loss_critic_1.mean().item()) * weight
+                            self._twin_critic_2_loss_sum += float(loss_critic_2.mean().item()) * weight
+                            self._twin_critic_loss_count += weight
+                        else:
+                            # Single critic (original behavior)
+                            critic_loss_unclipped_per_sample = self._quantile_huber_loss(
+                                quantiles_for_loss, targets_norm_for_loss, reduction="none"
+                            )
+
                         # Default: use unclipped loss (will be replaced if VF clipping enabled)
                         critic_loss = critic_loss_unclipped_per_sample.mean()
                         value_pred_norm_full = quantiles_fp32.mean(dim=1, keepdim=True)
@@ -9284,9 +9405,39 @@ class DistributionalPPO(RecurrentPPO):
                         # CRITICAL FIX V2: Compute per-sample cross-entropy loss
                         # PPO VF clipping MUST use mean(max(L_unclipped, L_clipped))
                         # NOT max(mean(L_unclipped), mean(L_clipped))
-                        critic_loss_unclipped_per_sample = -(
-                            target_distribution_selected * log_predictions_selected
-                        ).sum(dim=1)  # Shape: [batch], do NOT mean yet!
+
+                        # Twin Critics Integration: Use both critics if enabled
+                        use_twin = getattr(self.policy, '_use_twin_critics', False)
+                        if use_twin:
+                            # Get cached latent_vf from policy forward pass
+                            latent_vf = getattr(self.policy, '_last_latent_vf', None)
+                            if latent_vf is None:
+                                raise RuntimeError("Twin Critics enabled but latent_vf not cached")
+
+                            # Compute losses for both critics (categorical mode)
+                            loss_critic_1, loss_critic_2, min_values = self._twin_critics_loss(
+                                latent_vf,
+                                targets=None,  # Not used for categorical
+                                reduction="none",
+                                target_distribution=target_distribution_selected
+                            )
+
+                            # Average both critic losses for training
+                            critic_loss_unclipped_per_sample = (loss_critic_1 + loss_critic_2) / 2.0
+
+                            # Store losses for logging (accumulate over buckets)
+                            if not hasattr(self, '_twin_critic_1_loss_sum'):
+                                self._twin_critic_1_loss_sum = 0.0
+                                self._twin_critic_2_loss_sum = 0.0
+                                self._twin_critic_loss_count = 0
+                            self._twin_critic_1_loss_sum += float(loss_critic_1.mean().item()) * weight
+                            self._twin_critic_2_loss_sum += float(loss_critic_2.mean().item()) * weight
+                            self._twin_critic_loss_count += weight
+                        else:
+                            # Single critic (original behavior)
+                            critic_loss_unclipped_per_sample = -(
+                                target_distribution_selected * log_predictions_selected
+                            ).sum(dim=1)  # Shape: [batch], do NOT mean yet!
 
                         # DISTRIBUTIONAL VF CLIPPING FIX (Categorical Critic)
                         # Same modes as quantile critic:
@@ -10271,6 +10422,18 @@ class DistributionalPPO(RecurrentPPO):
             self._cvar_violation_ema if self._cvar_violation_ema is not None else cvar_violation
         )
         self.logger.record("train/value_ce_loss", critic_loss_value)
+
+        # Twin Critics: Log individual critic losses
+        if hasattr(self, '_twin_critic_1_loss_sum') and self._twin_critic_loss_count > 0:
+            critic_1_loss = self._twin_critic_1_loss_sum / self._twin_critic_loss_count
+            critic_2_loss = self._twin_critic_2_loss_sum / self._twin_critic_loss_count
+            self.logger.record("train/twin_critics/critic_1_loss", critic_1_loss)
+            self.logger.record("train/twin_critics/critic_2_loss", critic_2_loss)
+            self.logger.record("train/twin_critics/loss_diff", abs(critic_1_loss - critic_2_loss))
+            # Reset accumul ators for next iteration
+            self._twin_critic_1_loss_sum = 0.0
+            self._twin_critic_2_loss_sum = 0.0
+            self._twin_critic_loss_count = 0
         self._record_cvar_logs(
             cvar_raw_value=cvar_raw_value,
             cvar_unit_value=cvar_unit_value,
