@@ -207,14 +207,14 @@ def test_backward_compatibility_no_twin_critics():
     arch_params = {
         'hidden_dim': 32,
         'critic': {'distributional': True, 'num_quantiles': 16}
-        # Note: 'use_twin_critics' not specified
+        # Note: 'use_twin_critics' not specified - should default to True
     }
     policy = CustomActorCriticPolicy(
         observation_space, action_space, lambda x: 0.001, arch_params=arch_params
     )
-    assert policy._use_twin_critics == False, "Should default to False"
-    assert policy.quantile_head_2 is None, "Should not create second critic"
-    print("✓ Default behavior preserved")
+    assert policy._use_twin_critics == True, "Should default to True"
+    assert policy.quantile_head_2 is not None, "Should create second critic by default"
+    print("✓ Default behavior: Twin Critics enabled")
 
     # Test 2: Explicit False
     print("Test 2: Explicit use_twin_critics=False")
@@ -236,12 +236,12 @@ def test_backward_compatibility_no_twin_critics():
     assert output.shape == (4, 16)
     print("✓ Forward pass works")
 
-    # Test 4: _get_min_twin_values falls back to single critic
-    print("Test 4: Fallback in _get_min_twin_values")
+    # Test 4: _get_min_twin_values falls back to single critic when disabled
+    print("Test 4: Fallback in _get_min_twin_values when twin critics disabled")
     min_vals = policy._get_min_twin_values(latent)
     single_vals = policy._get_value_from_latent(latent)
-    assert torch.allclose(min_vals, single_vals), "Should return single critic value"
-    print("✓ Fallback works")
+    assert torch.allclose(min_vals, single_vals), "Should return single critic value when disabled"
+    print("✓ Fallback works when twin critics disabled")
 
     # Test 5: Old code should still work
     print("Test 5: Old code patterns still work")

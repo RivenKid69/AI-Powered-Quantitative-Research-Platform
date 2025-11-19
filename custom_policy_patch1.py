@@ -239,7 +239,8 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
         self._use_quantile_value_head = bool(distributional_flag)
 
         # Twin Critics configuration: enables dual value networks for bias reduction
-        twin_critics_flag = critic_cfg.get("use_twin_critics", False)
+        # Default is True to reduce overestimation bias in value estimates
+        twin_critics_flag = critic_cfg.get("use_twin_critics", True)
         self._use_twin_critics = bool(twin_critics_flag)
 
         if self._use_quantile_value_head:

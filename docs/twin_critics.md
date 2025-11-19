@@ -23,12 +23,7 @@ By maintaining two independent critic networks and using the minimum of their es
 
 ## Architecture
 
-### Without Twin Critics (Default)
-```
-[Observation] → [Features] → [LSTM] → [MLP] → [Critic Head] → [Value]
-```
-
-### With Twin Critics (Enabled)
+### With Twin Critics (Default - Enabled)
 ```
 [Observation] → [Features] → [LSTM] → [MLP] → [Critic Head 1] → [Value 1]
                                               ↘ [Critic Head 2] → [Value 2]
@@ -36,11 +31,16 @@ By maintaining two independent critic networks and using the minimum of their es
 Target Value = min(Value 1, Value 2)
 ```
 
+### Without Twin Critics (Legacy - Explicitly Disabled)
+```
+[Observation] → [Features] → [LSTM] → [MLP] → [Critic Head] → [Value]
+```
+
 ## Configuration
 
-### Enable Twin Critics
+### Default Behavior (Twin Critics Enabled)
 
-Add `use_twin_critics: True` to your architecture parameters:
+**Twin Critics are now enabled by default** to reduce overestimation bias and improve training stability. No configuration is needed:
 
 ```python
 arch_params = {
@@ -49,13 +49,30 @@ arch_params = {
         'distributional': True,  # or False for categorical
         'num_quantiles': 32,     # if distributional=True
         'huber_kappa': 1.0,
-        'use_twin_critics': True,  # ← Enable Twin Critics
+        # use_twin_critics defaults to True (no need to specify)
+    }
+}
+```
+
+### Disable Twin Critics (If Needed)
+
+To explicitly disable Twin Critics for backward compatibility or testing:
+
+```python
+arch_params = {
+    'hidden_dim': 64,
+    'critic': {
+        'distributional': True,
+        'num_quantiles': 32,
+        'huber_kappa': 1.0,
+        'use_twin_critics': False,  # ← Explicitly disable
     }
 }
 ```
 
 ### YAML Configuration
 
+**Default (Twin Critics Enabled)**:
 ```yaml
 model:
   arch_params:
@@ -64,7 +81,19 @@ model:
       distributional: true
       num_quantiles: 32
       huber_kappa: 1.0
-      use_twin_critics: true  # ← Enable Twin Critics
+      # use_twin_critics defaults to true
+```
+
+**Explicit Disable**:
+```yaml
+model:
+  arch_params:
+    hidden_dim: 64
+    critic:
+      distributional: true
+      num_quantiles: 32
+      huber_kappa: 1.0
+      use_twin_critics: false  # Explicitly disable
 ```
 
 ## Features
@@ -88,11 +117,11 @@ Twin Critics works with both:
 - Each critic has independent parameters (separate linear heads)
 - Both critics are trained with the same targets
 - Minimum of both estimates is used for advantage calculation
-- Fully backward compatible (disabled by default)
+- **Enabled by default** for improved performance (can be disabled if needed)
 
 ## Usage Examples
 
-### Basic Training with Twin Critics
+### Basic Training (Twin Critics Enabled by Default)
 
 ```python
 from distributional_ppo import DistributionalPPO
@@ -104,7 +133,7 @@ arch_params = {
     'critic': {
         'distributional': True,
         'num_quantiles': 32,
-        'use_twin_critics': True,  # Enable Twin Critics
+        # Twin Critics enabled by default - no need to specify
     }
 }
 
@@ -124,7 +153,7 @@ model.learn(total_timesteps=1_000_000)
 
 ### With Variance Gradient Scaling
 
-Twin Critics is fully compatible with other features:
+Twin Critics (enabled by default) is fully compatible with other features:
 
 ```python
 arch_params = {
@@ -132,7 +161,7 @@ arch_params = {
     'critic': {
         'distributional': True,
         'num_quantiles': 32,
-        'use_twin_critics': True,
+        # Twin Critics enabled by default
     }
 }
 
@@ -230,10 +259,10 @@ When Twin Critics is enabled, the following additional metrics are logged to Ten
 
 Twin Critics is **fully backward compatible**:
 
-1. **Default Behavior**: Disabled by default (`use_twin_critics=False`)
-2. **No Breaking Changes**: Existing configurations work unchanged
-3. **Optional Feature**: Only active when explicitly enabled
-4. **Save/Load**: Models save/load correctly regardless of twin critics state
+1. **Default Behavior**: **Enabled by default** (`use_twin_critics=True`) for improved performance
+2. **Explicit Disable**: Can be disabled with `use_twin_critics=False` for backward compatibility
+3. **No Breaking Changes**: Existing models can load correctly regardless of twin critics state
+4. **Save/Load**: Models save/load correctly between single/twin critic configurations
 
 ## Troubleshooting
 

@@ -239,14 +239,14 @@ class TestTwinCriticsIntegration:
         assert hasattr(model, '_vgs') and model._vgs is not None
 
     def test_backward_compatibility(self, env):
-        """Test that disabling twin critics maintains backward compatibility."""
+        """Test that explicitly disabling twin critics maintains backward compatibility."""
         arch_params = {
             'hidden_dim': 32,
             'lstm_hidden_size': 32,
             'critic': {
                 'distributional': True,
                 'num_quantiles': 8,
-                # use_twin_critics NOT specified (defaults to False)
+                'use_twin_critics': False,  # Explicitly disable for backward compatibility
             }
         }
 
@@ -270,6 +270,40 @@ class TestTwinCriticsIntegration:
         assert model.policy.quantile_head_2 is None
 
         # Model should train successfully (backward compatible)
+        assert model.num_timesteps == 256
+
+    def test_default_enables_twin_critics(self, env):
+        """Test that twin critics are enabled by default."""
+        arch_params = {
+            'hidden_dim': 32,
+            'lstm_hidden_size': 32,
+            'critic': {
+                'distributional': True,
+                'num_quantiles': 8,
+                # use_twin_critics NOT specified - should default to True
+            }
+        }
+
+        model = DistributionalPPO(
+            CustomActorCriticPolicy,
+            env,
+            arch_params=arch_params,
+            n_steps=64,
+            batch_size=32,
+            n_epochs=2,
+            learning_rate=0.001,
+            verbose=0,
+        )
+
+        # Check that twin critics are enabled by default
+        assert model.policy._use_twin_critics is True
+        assert model.policy.quantile_head is not None
+        assert model.policy.quantile_head_2 is not None
+
+        # Train normally
+        model.learn(total_timesteps=256)
+
+        # Model should train successfully
         assert model.num_timesteps == 256
 
 
