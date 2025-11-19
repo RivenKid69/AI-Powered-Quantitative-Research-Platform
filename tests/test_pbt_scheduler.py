@@ -486,17 +486,20 @@ class TestPBTScheduler:
     def test_select_source_member_truncation(self, scheduler):
         """Test source member selection with truncation."""
         scheduler.config.exploit_method = "truncation"
+        scheduler.config.truncation_ratio = 0.5  # Select from top 50%
         scheduler.initialize_population()
 
         # Set performances
-        scheduler.population[0].performance = 0.3
-        scheduler.population[1].performance = 0.9
-        scheduler.population[2].performance = 0.7
+        scheduler.population[0].performance = 0.3  # Worst
+        scheduler.population[1].performance = 0.9  # Best
+        scheduler.population[2].performance = 0.7  # 2nd best
         scheduler.population[3].performance = 0.5
 
         source = scheduler._select_source_member(scheduler.population[0])
 
-        # Should select from top performers
+        # With 0.5 ratio: threshold = int(4*0.5) = 2
+        # Top 2 members have performance 0.9 and 0.7
+        # Should select from top performers (>= 0.7)
         assert source is not None
         assert source.performance >= 0.7
 
