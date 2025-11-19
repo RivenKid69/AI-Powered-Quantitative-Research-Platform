@@ -4948,10 +4948,13 @@ class DistributionalPPO(RecurrentPPO):
         vgs_beta: float = 0.99,
         vgs_alpha: float = 0.1,
         vgs_warmup_steps: int = 100,
+        _setup: bool = True,
         **kwargs: Any,
     ) -> None:
-        # FIX Bug #8: Check if we're being loaded (policy won't exist yet)
-        self._is_loading = not hasattr(self, "policy") or self.policy is None
+        # FIX Bug #8: Two-phase initialization
+        # _setup=True: normal initialization (call _setup_dependent_components after super().__init__)
+        # _setup=False: skip dependent setup (used during unpickling, setup done in load())
+        self._setup_complete = False
 
         self._last_lstm_states: Optional[Union[RNNStates, Tuple[torch.Tensor, ...]]] = None
         self._last_rollout_entropy: float = 0.0
@@ -5794,110 +5797,15 @@ class DistributionalPPO(RecurrentPPO):
         self.logger.record("config/scheduler_min_lr", float(self._scheduler_min_lr))
 
         # BUGFIX Bug #2: Check if user provided custom lr in optimizer_kwargs
-        # If yes, use that instead of lr_schedule
-        optimizer_kwargs_preview = self._get_optimizer_kwargs()
-        if 'lr' in optimizer_kwargs_preview:
-            # User provided explicit lr - use it
-            base_lr = float(optimizer_kwargs_preview['lr'])
-        else:
-            # No explicit lr - use lr_schedule as default
-            # FIX Bug #8: Check if lr_schedule exists before using it (during load, super().__init__() hasn't run yet)
-            base_lr = float(self.lr_schedule(1.0)) if hasattr(self, "lr_schedule") else 3e-4
-
-        # FIX Bug #8: Initialize these variables even during load
-        value_params: list[torch.nn.Parameter] = []
-        other_params: list[torch.nn.Parameter] = []
-        param_groups: list[dict[str, Any]] = []
-
-        # FIX Bug #8: Skip optimizer/VGS setup during load (before super().__init__() creates policy)
-        if not self._is_loading:
-            for name, param in self.policy.named_parameters():
-                if not param.requires_grad:
-                    continue
-                target = (
-                    value_params
-                if (
-                    "value" in name
-                    or "value_net" in name
-                    or "critic" in name
-                    or "v_head" in name
-                )
-                else other_params
-            )
-                target.append(param)
-
-            if other_params:
-                param_groups.append(
-                    {
-                        "params": other_params,
-                        "lr": base_lr,
-                    "initial_lr": base_lr,
-                    "_lr_scale": 1.0,
-                }
-            )
-        if value_params:
-            value_lr_scale = 2.0
-            param_groups.append(
-                {
-                    "params": value_params,
-                    "lr": base_lr * value_lr_scale,
-                    "initial_lr": base_lr * value_lr_scale,
-                    "_lr_scale": value_lr_scale,
-                }
-            )
-        if param_groups:
-            # Create optimizer based on configuration
-            optimizer_cls = self._get_optimizer_class()
-            optimizer_kwargs = self._get_optimizer_kwargs()
-
-            # BUGFIX Bug #2: Remove 'lr' from optimizer_kwargs before creating optimizer
-            # because lr is already set in param_groups. Passing both causes conflict.
-            optimizer_kwargs_for_init = {k: v for k, v in optimizer_kwargs.items() if k != 'lr'}
-
-            self.policy.optimizer = optimizer_cls(
-                param_groups,
-                **optimizer_kwargs_for_init
-            )
-
-            # Log optimizer configuration
-            optimizer_name = optimizer_cls.__name__ if hasattr(optimizer_cls, '__name__') else str(optimizer_cls)
-            self.logger.record("config/optimizer_class", optimizer_name)
-            self.logger.record(
-                "train/optimizer_lr_groups",
-                [float(group.get("lr", 0.0)) for group in param_groups],
-            )
-
         base_logger = getattr(self, "_logger", None)
 
-        self._configure_loss_head_weights(loss_head_weights)
-
-        # Initialize Variance Gradient Scaler
+        # FIX Bug #8: Save configuration for _setup_dependent_components()
+        self._loss_head_weights_config = loss_head_weights
         self._vgs_enabled = bool(variance_gradient_scaling)
         self._vgs_beta = float(vgs_beta)
         self._vgs_alpha = float(vgs_alpha)
         self._vgs_warmup_steps = int(vgs_warmup_steps)
         self._variance_gradient_scaler: Optional[VarianceGradientScaler] = None
-        if self._vgs_enabled:
-            self._variance_gradient_scaler = VarianceGradientScaler(
-                parameters=self.policy.parameters(),
-                enabled=True,
-                beta=self._vgs_beta,
-                alpha=self._vgs_alpha,
-                warmup_steps=self._vgs_warmup_steps,
-                logger=self.logger,
-            )
-        self.logger.record("config/vgs_enabled", float(self._vgs_enabled))
-        if self._vgs_enabled:
-            self.logger.record("config/vgs_beta", float(self._vgs_beta))
-            self.logger.record("config/vgs_alpha", float(self._vgs_alpha))
-            self.logger.record("config/vgs_warmup_steps", float(self._vgs_warmup_steps))
-
-        # BUGFIX Bug #4: Update VGS parameters after policy optimizer may have been recreated
-        # CustomActorCriticPolicy._setup_custom_optimizer() is called during policy __init__,
-        # which recreates the optimizer with updated parameters. VGS must update its parameter
-        # list to track the correct parameters after optimizer recreation.
-        if self._variance_gradient_scaler is not None:
-            self._variance_gradient_scaler.update_parameters(self.policy.parameters())
 
         self._configure_gradient_accumulation(
             microbatch_size=microbatch_size,
@@ -5912,7 +5820,10 @@ class DistributionalPPO(RecurrentPPO):
         # По умолчанию политика выставляет value_clip_limit = max(|v_min|,|v_max|).
         # При normalize_returns=True нам нужен ТОЛЬКО нормализованный клип ±ret_clip.
         # Поэтому полностью отключаем «raw-clip» в этом режиме.
-        clip_limit_unscaled = getattr(self.policy, "value_clip_limit", None)
+        # FIX Bug #8: Check if policy exists before accessing it (during load, policy may not exist yet)
+        clip_limit_unscaled = None
+        if hasattr(self, "policy") and self.policy is not None:
+            clip_limit_unscaled = getattr(self.policy, "value_clip_limit", None)
         self._value_clip_limit_unscaled: Optional[float] = None
         self._value_clip_limit_scaled: Optional[float] = None
         if not self.normalize_returns and clip_limit_unscaled is not None:
@@ -5926,11 +5837,12 @@ class DistributionalPPO(RecurrentPPO):
                 clip_limit_unscaled_f * self._value_target_scale_effective
             )
         # Явно обнуляем лимит в политике (если атрибут есть), чтобы ничего не «воскресало».
-        try:
-            if self.normalize_returns:
-                setattr(self.policy, "value_clip_limit", None)
-        except Exception:
-            pass
+        if hasattr(self, "policy") and self.policy is not None:
+            try:
+                if self.normalize_returns:
+                    setattr(self.policy, "value_clip_limit", None)
+            except Exception:
+                pass
         # Диагностика
         self.logger.record("debug/raw_value_clip_enabled", 0.0 if self.normalize_returns else 1.0)
         self._value_target_raw_outlier_warn_threshold = 0.01
@@ -5982,10 +5894,15 @@ class DistributionalPPO(RecurrentPPO):
         if self._entropy_window is None and self.ent_coef_decay_steps > 0:
             self._entropy_decay_start_update = 0
 
-        self.lr_scheduler = getattr(self.policy, "optimizer_scheduler", None)
+        # FIX Bug #8: Check if policy exists before accessing it
+        self.lr_scheduler = None
+        if hasattr(self, "policy") and self.policy is not None:
+            self.lr_scheduler = getattr(self.policy, "optimizer_scheduler", None)
 
+        # FIX Bug #8: Check if policy exists before compiling it
         if use_torch_compile and self.device.type == "cuda":
-            self.policy = torch.compile(self.policy, mode="reduce-overhead")
+            if hasattr(self, "policy") and self.policy is not None:
+                self.policy = torch.compile(self.policy, mode="reduce-overhead")
 
         # --- KL-adaptive training controls ----------------------------------------------------
         self.kl_epoch_decay = float(kl_epoch_decay)
@@ -5993,13 +5910,19 @@ class DistributionalPPO(RecurrentPPO):
             raise ValueError("'kl_epoch_decay' must be in (0, 1]")
         self._kl_min_lr = float(self._scheduler_min_lr)
         self._kl_lr_scale = 1.0
-        self._base_lr_schedule = self.lr_schedule
 
-        def _scaled_lr_schedule(progress_remaining: float) -> float:
-            base_lr = self._base_lr_schedule(progress_remaining)
-            return float(max(base_lr, self._kl_min_lr))
+        # FIX Bug #8: Check if lr_schedule exists before using it (may not exist during load)
+        if hasattr(self, "lr_schedule") and self.lr_schedule is not None:
+            self._base_lr_schedule = self.lr_schedule
 
-        self.lr_schedule = _scaled_lr_schedule
+            def _scaled_lr_schedule(progress_remaining: float) -> float:
+                base_lr = self._base_lr_schedule(progress_remaining)
+                return float(max(base_lr, self._kl_min_lr))
+
+            self.lr_schedule = _scaled_lr_schedule
+        else:
+            # Will be set later by __setstate__ or after super().__init__() completes
+            self._base_lr_schedule = None
         self.kl_early_stop = bool(kl_early_stop)
         self._kl_early_stop_use_ema = bool(kl_early_stop_use_ema)
         ema_updates_value = max(1, int(kl_ema_updates))
@@ -6018,7 +5941,9 @@ class DistributionalPPO(RecurrentPPO):
         self._kl_epoch_factor = 1.0
         self._kl_epoch_factor_min = 1.0 / float(self._base_n_epochs)
         self._kl_base_param_lrs: list[float] = []
-        self._refresh_kl_base_lrs()
+        # FIX Bug #8: Skip if policy doesn't exist yet (during load)
+        if hasattr(self, "policy") and self.policy is not None:
+            self._refresh_kl_base_lrs()
 
         self._kl_exceed_stop_fraction = float(kl_exceed_stop_fraction)
         if not (0.0 <= self._kl_exceed_stop_fraction <= 1.0):
@@ -6063,14 +5988,23 @@ class DistributionalPPO(RecurrentPPO):
 
         self.normalize_advantage = True
 
-        atoms = max(1, int(getattr(self.policy, "num_atoms", 1)))
+        # FIX Bug #8: Check if policy exists before accessing it
+        atoms = 1
+        if hasattr(self, "policy") and self.policy is not None:
+            atoms = max(1, int(getattr(self.policy, "num_atoms", 1)))
         ce_norm = math.log(float(atoms))
         self._critic_ce_normalizer = ce_norm if ce_norm > 1e-6 else 1.0
         self.logger.record("debug/critic_ce_normalizer", float(self._critic_ce_normalizer))
 
-        policy_block_fn = getattr(self.policy, "set_critic_gradient_blocked", None)
-        if callable(policy_block_fn):
-            policy_block_fn(self._critic_grad_block_scale)
+        # FIX Bug #8: Check if policy exists before accessing it
+        if hasattr(self, "policy") and self.policy is not None:
+            policy_block_fn = getattr(self.policy, "set_critic_gradient_blocked", None)
+            if callable(policy_block_fn):
+                policy_block_fn(self._critic_grad_block_scale)
+
+        # FIX Bug #8: Setup components that depend on self.policy after super().__init__()
+        if _setup:
+            self._setup_dependent_components()
 
     @property
     def kl_exceed_stop_fraction(self) -> float:
@@ -6100,6 +6034,131 @@ class DistributionalPPO(RecurrentPPO):
 
         self._kl_absolute_stop_factor = factor_value
 
+    def _setup_dependent_components(self) -> None:
+        """Setup components that depend on self.policy existing (Bug #8 fix).
+
+        This is called after super().__init__() creates self.policy during normal
+        initialization, or explicitly from load() after unpickling.
+
+        Idempotent - safe to call multiple times.
+        """
+        if getattr(self, "_setup_complete", False):
+            return
+
+        if not hasattr(self, "policy") or self.policy is None:
+            return  # Cannot setup without policy
+
+        # 1. Setup optimizer with param groups
+        # Skip if optimizer already exists (e.g., during load, SB3 has already created it)
+        if not hasattr(self.policy, "optimizer") or self.policy.optimizer is None:
+            # Get base learning rate
+            optimizer_kwargs_preview = getattr(self, "_optimizer_kwargs", {})
+            if 'lr' in optimizer_kwargs_preview:
+                base_lr = float(optimizer_kwargs_preview['lr'])
+            else:
+                base_lr = float(self.lr_schedule(1.0)) if hasattr(self, "lr_schedule") else 3e-4
+
+            value_params: list[torch.nn.Parameter] = []
+            other_params: list[torch.nn.Parameter] = []
+            param_groups: list[dict[str, Any]] = []
+
+            for name, param in self.policy.named_parameters():
+                if not param.requires_grad:
+                    continue
+                target = (
+                    value_params
+                    if (
+                        "value" in name
+                        or "value_net" in name
+                        or "critic" in name
+                        or "v_head" in name
+                    )
+                    else other_params
+                )
+                target.append(param)
+
+            if other_params:
+                param_groups.append(
+                    {
+                        "params": other_params,
+                        "lr": base_lr,
+                        "initial_lr": base_lr,
+                        "_lr_scale": 1.0,
+                    }
+                )
+            if value_params:
+                value_lr_scale = 2.0
+                param_groups.append(
+                    {
+                        "params": value_params,
+                        "lr": base_lr * value_lr_scale,
+                        "initial_lr": base_lr * value_lr_scale,
+                        "_lr_scale": value_lr_scale,
+                    }
+                )
+            if param_groups:
+                # Create optimizer based on configuration
+                optimizer_cls = self._get_optimizer_class()
+                optimizer_kwargs = self._get_optimizer_kwargs()
+
+                # Remove 'lr' from optimizer_kwargs (already set in param_groups)
+                optimizer_kwargs_for_init = {k: v for k, v in optimizer_kwargs.items() if k != 'lr'}
+
+                self.policy.optimizer = optimizer_cls(
+                    param_groups,
+                    **optimizer_kwargs_for_init
+                )
+
+                # Log optimizer configuration
+                optimizer_name = optimizer_cls.__name__ if hasattr(optimizer_cls, '__name__') else str(optimizer_cls)
+                self.logger.record("config/optimizer_class", optimizer_name)
+                self.logger.record(
+                    "train/optimizer_lr_groups",
+                    [float(group.get("lr", 0.0)) for group in param_groups],
+                )
+
+        # 2. Setup loss head weights
+        loss_head_weights = getattr(self, "_loss_head_weights_config", None)
+        if loss_head_weights is not None:
+            self._configure_loss_head_weights(loss_head_weights)
+
+        # 3. Setup VGS
+        vgs_enabled = getattr(self, "_vgs_enabled", False)
+        if vgs_enabled:
+            vgs_beta = getattr(self, "_vgs_beta", 0.99)
+            vgs_alpha = getattr(self, "_vgs_alpha", 0.1)
+            vgs_warmup_steps = getattr(self, "_vgs_warmup_steps", 100)
+
+            self._variance_gradient_scaler = VarianceGradientScaler(
+                parameters=self.policy.parameters(),
+                enabled=True,
+                beta=vgs_beta,
+                alpha=vgs_alpha,
+                warmup_steps=vgs_warmup_steps,
+                logger=self.logger,
+            )
+
+            # Restore VGS state if available
+            vgs_saved_state = getattr(self, "_vgs_saved_state_for_restore", None)
+            if vgs_saved_state is not None:
+                try:
+                    self._variance_gradient_scaler.load_state_dict(vgs_saved_state)
+                except Exception as e:
+                    logger.warning(f"Failed to restore VGS state: {e}")
+                delattr(self, "_vgs_saved_state_for_restore")
+
+            # Update VGS parameters after policy optimizer may have been recreated
+            self._variance_gradient_scaler.update_parameters(self.policy.parameters())
+
+            self.logger.record("config/vgs_enabled", float(vgs_enabled))
+            self.logger.record("config/vgs_beta", float(vgs_beta))
+            self.logger.record("config/vgs_alpha", float(vgs_alpha))
+            self.logger.record("config/vgs_warmup_steps", float(vgs_warmup_steps))
+        else:
+            self._variance_gradient_scaler = None
+
+        self._setup_complete = True
+
     def __getstate__(self) -> dict:
         """Custom pickle handler to exclude unpicklable objects (Bug #8 fix).
 
@@ -6109,16 +6168,29 @@ class DistributionalPPO(RecurrentPPO):
         - _logger/logger: contains file handles
 
         This causes PicklingError: Cannot pickle files that are not opened for reading.
+
+        FIX Bug #8: Save VGS state_dict instead of the object itself.
         """
         state = self.__dict__.copy()
+
+        # FIX Bug #8: Save VGS state before removing it
+        vgs_state = None
+        if self._variance_gradient_scaler is not None:
+            try:
+                vgs_state = self._variance_gradient_scaler.state_dict()
+            except Exception as e:
+                logger.warning(f"Failed to save VGS state: {e}")
+        state["_vgs_saved_state"] = vgs_state
+
         # Remove unpicklable objects
         state.pop("_logger", None)
         state.pop("logger", None)
         # lr_schedule will be recreated from _base_lr_schedule
         state.pop("lr_schedule", None)
-        # _variance_gradient_scaler can be pickled if it implements __getstate__
-        # but let's exclude it and recreate on load
+        # _variance_gradient_scaler will be recreated in _setup_dependent_components()
         state.pop("_variance_gradient_scaler", None)
+        # Reset setup flag - will be set again in _setup_dependent_components()
+        state["_setup_complete"] = False
         return state
 
     def __setstate__(self, state: dict) -> None:
@@ -6137,24 +6209,16 @@ class DistributionalPPO(RecurrentPPO):
             from stable_baselines3.common.utils import get_schedule_fn
             self.lr_schedule = get_schedule_fn(learning_rate)
 
-        # Recreate _variance_gradient_scaler if it was enabled
+        # FIX Bug #8: Prepare VGS state for restoration in _setup_dependent_components()
+        # Do NOT create VGS here because self.policy may not exist yet
+        # _setup_dependent_components() will be called from load() after policy is restored
+        vgs_saved_state = state.pop("_vgs_saved_state", None)
+        if vgs_saved_state is not None:
+            self._vgs_saved_state_for_restore = vgs_saved_state
+
+        # Ensure _variance_gradient_scaler is initialized to None (will be created in _setup_dependent_components)
         if not hasattr(self, "_variance_gradient_scaler"):
-            # Check if VGS was enabled by looking at saved config
-            variance_gradient_scaling = getattr(self, "_variance_gradient_scaling_enabled", False)
-            if variance_gradient_scaling and hasattr(self, "policy"):
-                from variance_gradient_scaler import VarianceGradientScaler
-                vgs_beta = getattr(self, "_vgs_beta", 0.99)
-                vgs_alpha = getattr(self, "_vgs_alpha", 0.1)
-                vgs_warmup_steps = getattr(self, "_vgs_warmup_steps", 100)
-                self._variance_gradient_scaler = VarianceGradientScaler(
-                    self.policy.parameters(),
-                    enabled=True,
-                    beta=vgs_beta,
-                    alpha=vgs_alpha,
-                    warmup_steps=vgs_warmup_steps,
-                )
-            else:
-                self._variance_gradient_scaler = None
+            self._variance_gradient_scaler = None
 
     def _update_learning_rate(self, optimizer: Optional[torch.optim.Optimizer]) -> None:
         if optimizer is None:
@@ -11034,6 +11098,11 @@ class DistributionalPPO(RecurrentPPO):
             **kwargs,
         )
         if isinstance(model, DistributionalPPO):
+            # FIX Bug #8: Phase 2 of two-phase initialization
+            # Setup components that depend on self.policy (optimizer, VGS, etc.)
+            if hasattr(model, "_setup_dependent_components"):
+                model._setup_dependent_components()
+
             if not getattr(model, "_popart_disabled_logged", False):
                 model._ensure_internal_logger()
                 model._initialise_popart_controller({})
