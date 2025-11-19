@@ -1,0 +1,508 @@
+"""
+Population-Based Training (PBT) Scheduler
+
+Implements population-based hyperparameter optimization for RL training.
+
+Based on "Population Based Training of Neural Networks" (DeepMind 2017):
+- Maintains a population of parallel training runs
+- Periodically evaluates and ranks population members
+- Exploitation: Copy parameters from better performers
+- Exploration: Perturb hyperparameters for diversity
+
+Key features:
+1. Asynchronous population management
+2. Configurable exploitation and exploration strategies
+3. Hyperparameter mutation (perturbation and resampling)
+4. Model checkpoint management
+5. Performance-based ranking
+"""
+
+from __future__ import annotations
+
+import copy
+import logging
+import os
+import random
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+
+import numpy as np
+import torch
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class HyperparamConfig:
+    """Configuration for a single hyperparameter.
+
+    Attributes:
+        name: Hyperparameter name
+        min_value: Minimum allowed value (for continuous parameters)
+        max_value: Maximum allowed value (for continuous parameters)
+        values: Discrete values to choose from (for categorical parameters)
+        perturbation_factor: Multiplicative factor for perturbation (default: 1.2)
+        resample_probability: Probability of resampling instead of perturbing (default: 0.25)
+        is_log_scale: Whether to use log scale for perturbations (default: False)
+    """
+    name: str
+    min_value: Optional[float] = None
+    max_value: Optional[float] = None
+    values: Optional[List[Any]] = None
+    perturbation_factor: float = 1.2
+    resample_probability: float = 0.25
+    is_log_scale: bool = False
+
+    def __post_init__(self) -> None:
+        """Validate configuration."""
+        if self.values is None and (self.min_value is None or self.max_value is None):
+            raise ValueError(f"Either 'values' or 'min_value'/'max_value' must be specified for {self.name}")
+        if self.values is not None and (self.min_value is not None or self.max_value is not None):
+            raise ValueError(f"Cannot specify both 'values' and 'min_value'/'max_value' for {self.name}")
+        if self.min_value is not None and self.max_value is not None and self.min_value >= self.max_value:
+            raise ValueError(f"min_value must be < max_value for {self.name}")
+        if not 0.0 <= self.resample_probability <= 1.0:
+            raise ValueError(f"resample_probability must be in [0, 1] for {self.name}")
+
+    @property
+    def is_continuous(self) -> bool:
+        """Check if hyperparameter is continuous."""
+        return self.values is None
+
+    @property
+    def is_categorical(self) -> bool:
+        """Check if hyperparameter is categorical."""
+        return self.values is not None
+
+
+@dataclass
+class PBTConfig:
+    """Configuration for Population-Based Training.
+
+    Attributes:
+        population_size: Number of parallel training runs
+        perturbation_interval: Training steps between perturbations
+        hyperparams: List of hyperparameter configurations
+        exploit_method: Exploitation strategy ('truncation', 'binary_tournament')
+        explore_method: Exploration strategy ('perturb', 'resample', 'both')
+        truncation_ratio: Ratio of population to truncate (for 'truncation' method)
+        checkpoint_dir: Directory to save checkpoints
+        metric_name: Name of metric to optimize
+        metric_mode: Optimization mode ('max' or 'min')
+        ready_percentage: Percentage of population that must be ready for exploitation
+    """
+    population_size: int = 10
+    perturbation_interval: int = 5
+    hyperparams: List[HyperparamConfig] = field(default_factory=list)
+    exploit_method: str = "truncation"
+    explore_method: str = "both"
+    truncation_ratio: float = 0.2
+    checkpoint_dir: str = "pbt_checkpoints"
+    metric_name: str = "mean_reward"
+    metric_mode: str = "max"
+    ready_percentage: float = 0.8
+
+    def __post_init__(self) -> None:
+        """Validate configuration."""
+        if self.population_size < 2:
+            raise ValueError(f"population_size must be >= 2, got {self.population_size}")
+        if self.perturbation_interval < 1:
+            raise ValueError(f"perturbation_interval must be >= 1, got {self.perturbation_interval}")
+        if self.exploit_method not in ("truncation", "binary_tournament"):
+            raise ValueError(f"exploit_method must be 'truncation' or 'binary_tournament', got {self.exploit_method}")
+        if self.explore_method not in ("perturb", "resample", "both"):
+            raise ValueError(f"explore_method must be 'perturb', 'resample', or 'both', got {self.explore_method}")
+        if not 0.0 < self.truncation_ratio < 1.0:
+            raise ValueError(f"truncation_ratio must be in (0, 1), got {self.truncation_ratio}")
+        if self.metric_mode not in ("max", "min"):
+            raise ValueError(f"metric_mode must be 'max' or 'min', got {self.metric_mode}")
+        if not 0.0 < self.ready_percentage <= 1.0:
+            raise ValueError(f"ready_percentage must be in (0, 1], got {self.ready_percentage}")
+
+
+@dataclass
+class PopulationMember:
+    """Represents a single member of the PBT population.
+
+    Attributes:
+        member_id: Unique identifier for this member
+        hyperparams: Current hyperparameter values
+        performance: Current performance metric
+        step: Current training step
+        checkpoint_path: Path to saved checkpoint
+        history: History of hyperparameter changes and performance
+    """
+    member_id: int
+    hyperparams: Dict[str, Any]
+    performance: Optional[float] = None
+    step: int = 0
+    checkpoint_path: Optional[str] = None
+    history: List[Dict[str, Any]] = field(default_factory=list)
+
+    def record_step(self, step: int, performance: float, hyperparams: Dict[str, Any]) -> None:
+        """Record a training step in history.
+
+        Args:
+            step: Training step number
+            performance: Performance metric value
+            hyperparams: Current hyperparameter values
+        """
+        self.step = step
+        self.performance = performance
+        self.history.append({
+            "step": step,
+            "performance": performance,
+            "hyperparams": copy.deepcopy(hyperparams),
+        })
+
+
+class PBTScheduler:
+    """Population-Based Training scheduler.
+
+    Manages a population of training runs with periodic exploitation and exploration.
+    """
+
+    def __init__(self, config: PBTConfig, seed: Optional[int] = None):
+        """Initialize PBT scheduler.
+
+        Args:
+            config: PBT configuration
+            seed: Random seed for reproducibility
+        """
+        self.config = config
+        self.population: List[PopulationMember] = []
+        self._exploitation_count = 0
+        self._exploration_count = 0
+
+        # Set random seed
+        if seed is not None:
+            random.seed(seed)
+            np.random.seed(seed)
+            torch.manual_seed(seed)
+
+        # Create checkpoint directory
+        os.makedirs(config.checkpoint_dir, exist_ok=True)
+
+        logger.info(
+            f"PBT Scheduler initialized: population_size={config.population_size}, "
+            f"perturbation_interval={config.perturbation_interval}, "
+            f"metric={config.metric_name} ({config.metric_mode})"
+        )
+
+    def initialize_population(
+        self,
+        initial_hyperparams: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[PopulationMember]:
+        """Initialize population with random or provided hyperparameters.
+
+        Args:
+            initial_hyperparams: Optional list of initial hyperparameter configurations
+
+        Returns:
+            List of initialized population members
+        """
+        if initial_hyperparams is not None:
+            if len(initial_hyperparams) != self.config.population_size:
+                raise ValueError(
+                    f"initial_hyperparams length ({len(initial_hyperparams)}) must match "
+                    f"population_size ({self.config.population_size})"
+                )
+            hyperparams_list = initial_hyperparams
+        else:
+            # Generate random initial hyperparameters
+            hyperparams_list = [
+                self._sample_hyperparams() for _ in range(self.config.population_size)
+            ]
+
+        # Create population members
+        self.population = [
+            PopulationMember(
+                member_id=i,
+                hyperparams=hyperparams,
+            )
+            for i, hyperparams in enumerate(hyperparams_list)
+        ]
+
+        logger.info(f"Population initialized with {len(self.population)} members")
+        return self.population
+
+    def should_exploit_and_explore(self, member: PopulationMember) -> bool:
+        """Check if a member should undergo exploitation and exploration.
+
+        Args:
+            member: Population member to check
+
+        Returns:
+            True if member should be perturbed
+        """
+        return member.step > 0 and member.step % self.config.perturbation_interval == 0
+
+    def exploit_and_explore(
+        self,
+        member: PopulationMember,
+        model_state_dict: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+        """Perform exploitation and exploration for a population member.
+
+        Args:
+            member: Population member to update
+            model_state_dict: Current model state dict (for exploitation)
+
+        Returns:
+            Tuple of (new_model_state_dict, new_hyperparams)
+            new_model_state_dict is None if no exploitation occurred
+        """
+        # Check if enough population members are ready
+        ready_count = sum(1 for m in self.population if m.performance is not None)
+        required_count = int(self.config.population_size * self.config.ready_percentage)
+
+        if ready_count < required_count:
+            logger.debug(f"Not enough ready members ({ready_count}/{required_count}), skipping PBT")
+            return None, member.hyperparams
+
+        # Exploitation: decide whether to copy from better performer
+        new_state_dict = None
+        if self._should_exploit(member):
+            source_member = self._select_source_member(member)
+            if source_member is not None and source_member.checkpoint_path is not None:
+                # Load checkpoint from better performer
+                logger.info(
+                    f"Member {member.member_id} exploiting from member {source_member.member_id} "
+                    f"(performance: {member.performance:.4f} -> {source_member.performance:.4f})"
+                )
+                new_state_dict = torch.load(source_member.checkpoint_path)
+                # Copy hyperparameters from source
+                member.hyperparams = copy.deepcopy(source_member.hyperparams)
+                self._exploitation_count += 1
+
+        # Exploration: perturb hyperparameters
+        new_hyperparams = self._explore_hyperparams(member.hyperparams)
+        member.hyperparams = new_hyperparams
+        self._exploration_count += 1
+
+        return new_state_dict, new_hyperparams
+
+    def update_performance(
+        self,
+        member: PopulationMember,
+        performance: float,
+        step: int,
+        model_state_dict: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Update performance and save checkpoint for a population member.
+
+        Args:
+            member: Population member to update
+            performance: Performance metric value
+            step: Current training step
+            model_state_dict: Model state dict to save (optional)
+        """
+        member.record_step(step, performance, member.hyperparams)
+
+        # Save checkpoint if model state provided
+        if model_state_dict is not None:
+            checkpoint_path = os.path.join(
+                self.config.checkpoint_dir,
+                f"member_{member.member_id}_step_{step}.pt"
+            )
+            torch.save(model_state_dict, checkpoint_path)
+            member.checkpoint_path = checkpoint_path
+
+        logger.debug(
+            f"Member {member.member_id} step {step}: "
+            f"performance={performance:.4f}, "
+            f"hyperparams={member.hyperparams}"
+        )
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get PBT statistics.
+
+        Returns:
+            Dictionary with PBT statistics
+        """
+        performances = [m.performance for m in self.population if m.performance is not None]
+
+        return {
+            "pbt/population_size": len(self.population),
+            "pbt/ready_members": len(performances),
+            "pbt/mean_performance": np.mean(performances) if performances else 0.0,
+            "pbt/std_performance": np.std(performances) if performances else 0.0,
+            "pbt/min_performance": np.min(performances) if performances else 0.0,
+            "pbt/max_performance": np.max(performances) if performances else 0.0,
+            "pbt/exploitation_count": self._exploitation_count,
+            "pbt/exploration_count": self._exploration_count,
+        }
+
+    def _should_exploit(self, member: PopulationMember) -> bool:
+        """Determine if a member should exploit from better performers.
+
+        Args:
+            member: Population member to check
+
+        Returns:
+            True if member should exploit
+        """
+        if member.performance is None:
+            return False
+
+        # Rank members by performance
+        ranked_members = self._rank_population()
+
+        if self.config.exploit_method == "truncation":
+            # Check if member is in bottom truncation_ratio
+            truncation_threshold = int(len(ranked_members) * self.config.truncation_ratio)
+            member_rank = next(i for i, m in enumerate(ranked_members) if m.member_id == member.member_id)
+            return member_rank >= len(ranked_members) - truncation_threshold
+        elif self.config.exploit_method == "binary_tournament":
+            # Randomly select another member and compare
+            other_member = random.choice([m for m in self.population if m.member_id != member.member_id])
+            if other_member.performance is None:
+                return False
+            if self.config.metric_mode == "max":
+                return member.performance < other_member.performance
+            else:
+                return member.performance > other_member.performance
+        else:
+            return False
+
+    def _select_source_member(self, member: PopulationMember) -> Optional[PopulationMember]:
+        """Select a better-performing member to exploit from.
+
+        Args:
+            member: Population member that will exploit
+
+        Returns:
+            Source member to copy from, or None if no suitable source found
+        """
+        # Rank members by performance
+        ranked_members = self._rank_population()
+
+        if self.config.exploit_method == "truncation":
+            # Select from top truncation_ratio
+            truncation_threshold = int(len(ranked_members) * self.config.truncation_ratio)
+            top_members = ranked_members[:truncation_threshold]
+            # Randomly select from top performers
+            return random.choice(top_members) if top_members else None
+        elif self.config.exploit_method == "binary_tournament":
+            # Select the better performer from binary tournament
+            other_member = random.choice([m for m in self.population if m.member_id != member.member_id])
+            if other_member.performance is None:
+                return None
+            if self.config.metric_mode == "max":
+                return other_member if other_member.performance > member.performance else None
+            else:
+                return other_member if other_member.performance < member.performance else None
+        else:
+            return None
+
+    def _rank_population(self) -> List[PopulationMember]:
+        """Rank population members by performance.
+
+        Returns:
+            List of members sorted by performance (best first)
+        """
+        # Filter members with performance data
+        valid_members = [m for m in self.population if m.performance is not None]
+
+        # Sort by performance
+        reverse = self.config.metric_mode == "max"
+        return sorted(valid_members, key=lambda m: m.performance, reverse=reverse)
+
+    def _explore_hyperparams(self, current_hyperparams: Dict[str, Any]) -> Dict[str, Any]:
+        """Explore (perturb) hyperparameters.
+
+        Args:
+            current_hyperparams: Current hyperparameter values
+
+        Returns:
+            New hyperparameter values after exploration
+        """
+        new_hyperparams = copy.deepcopy(current_hyperparams)
+
+        for hyperparam_config in self.config.hyperparams:
+            name = hyperparam_config.name
+            if name not in new_hyperparams:
+                continue
+
+            current_value = new_hyperparams[name]
+
+            # Decide whether to resample or perturb
+            if self.config.explore_method == "resample":
+                should_resample = True
+            elif self.config.explore_method == "perturb":
+                should_resample = False
+            else:  # "both"
+                should_resample = random.random() < hyperparam_config.resample_probability
+
+            if should_resample:
+                # Resample from distribution
+                new_value = self._sample_hyperparam(hyperparam_config)
+            else:
+                # Perturb current value
+                new_value = self._perturb_hyperparam(hyperparam_config, current_value)
+
+            new_hyperparams[name] = new_value
+
+        return new_hyperparams
+
+    def _sample_hyperparams(self) -> Dict[str, Any]:
+        """Sample initial hyperparameters for a new population member.
+
+        Returns:
+            Dictionary of sampled hyperparameter values
+        """
+        hyperparams = {}
+        for hyperparam_config in self.config.hyperparams:
+            hyperparams[hyperparam_config.name] = self._sample_hyperparam(hyperparam_config)
+        return hyperparams
+
+    def _sample_hyperparam(self, config: HyperparamConfig) -> Any:
+        """Sample a single hyperparameter value.
+
+        Args:
+            config: Hyperparameter configuration
+
+        Returns:
+            Sampled value
+        """
+        if config.is_categorical:
+            return random.choice(config.values)
+        else:
+            if config.is_log_scale:
+                log_min = np.log(config.min_value)
+                log_max = np.log(config.max_value)
+                return np.exp(random.uniform(log_min, log_max))
+            else:
+                return random.uniform(config.min_value, config.max_value)
+
+    def _perturb_hyperparam(self, config: HyperparamConfig, current_value: Any) -> Any:
+        """Perturb a single hyperparameter value.
+
+        Args:
+            config: Hyperparameter configuration
+            current_value: Current value to perturb
+
+        Returns:
+            Perturbed value
+        """
+        if config.is_categorical:
+            # For categorical, select adjacent value or random value
+            current_index = config.values.index(current_value)
+            # Randomly move left or right
+            if random.random() < 0.5:
+                new_index = (current_index + 1) % len(config.values)
+            else:
+                new_index = (current_index - 1) % len(config.values)
+            return config.values[new_index]
+        else:
+            # For continuous, multiply or divide by perturbation_factor
+            if random.random() < 0.5:
+                new_value = current_value * config.perturbation_factor
+            else:
+                new_value = current_value / config.perturbation_factor
+
+            # Clip to valid range
+            new_value = max(config.min_value, min(config.max_value, new_value))
+
+            return new_value

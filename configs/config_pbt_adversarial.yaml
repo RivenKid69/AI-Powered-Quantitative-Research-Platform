@@ -1,0 +1,174 @@
+# Configuration for Population-Based Training + Adversarial Training
+# This config enables robust training using SA-PPO with PBT hyperparameter optimization
+
+# Inherits base configuration from config_train.yaml
+# Override specific settings for PBT + Adversarial training
+
+# Population-Based Training Configuration
+pbt:
+  enabled: true
+  population_size: 8  # Number of parallel training runs
+  perturbation_interval: 10  # Training updates between perturbations
+  exploit_method: truncation  # 'truncation' or 'binary_tournament'
+  explore_method: both  # 'perturb', 'resample', or 'both'
+  truncation_ratio: 0.25  # Top/bottom 25% for exploitation
+  checkpoint_dir: artifacts/pbt_checkpoints
+  metric_name: mean_reward  # Metric to optimize
+  metric_mode: max  # 'max' or 'min'
+  ready_percentage: 0.75  # Percentage of population ready before PBT kicks in
+
+  # Hyperparameters to optimize via PBT
+  hyperparams:
+    - name: learning_rate
+      min_value: 1.0e-5
+      max_value: 5.0e-4
+      perturbation_factor: 1.2
+      resample_probability: 0.25
+      is_log_scale: true
+
+    - name: entropy_coef
+      min_value: 0.0001
+      max_value: 0.01
+      perturbation_factor: 1.2
+      resample_probability: 0.25
+      is_log_scale: false
+
+    - name: clip_range
+      min_value: 0.05
+      max_value: 0.3
+      perturbation_factor: 1.1
+      resample_probability: 0.2
+      is_log_scale: false
+
+    - name: adversarial_epsilon
+      min_value: 0.01
+      max_value: 0.15
+      perturbation_factor: 1.15
+      resample_probability: 0.3
+      is_log_scale: false
+
+    - name: adversarial_ratio
+      min_value: 0.2
+      max_value: 0.8
+      perturbation_factor: 1.1
+      resample_probability: 0.25
+      is_log_scale: false
+
+    - name: robust_kl_coef
+      min_value: 0.01
+      max_value: 0.5
+      perturbation_factor: 1.2
+      resample_probability: 0.3
+      is_log_scale: false
+
+# State-Adversarial PPO Configuration
+adversarial:
+  enabled: true
+
+  # State perturbation settings
+  perturbation:
+    epsilon: 0.075  # Maximum L-inf norm of perturbation
+    attack_steps: 3  # Number of PGD iterations
+    attack_lr: 0.03  # PGD step size
+    random_init: true  # Random initialization for PGD
+    norm_type: linf  # 'linf' or 'l2'
+    clip_min: null  # State clipping bounds (null = no clipping)
+    clip_max: null
+    attack_method: pgd  # 'pgd' or 'fgsm'
+
+  # SA-PPO training settings
+  adversarial_ratio: 0.5  # Ratio of adversarial vs clean samples
+  robust_kl_coef: 0.1  # Coefficient for robust KL regularization
+  warmup_updates: 10  # Updates before enabling adversarial training
+  attack_policy: true  # Attack policy loss
+  attack_value: true  # Attack value loss
+
+  # Adaptive epsilon scheduling
+  adaptive_epsilon: true
+  epsilon_schedule: cosine  # 'constant', 'linear', or 'cosine'
+  epsilon_final: 0.05  # Final epsilon value
+
+# Model configuration (inherits from base config with overrides)
+model:
+  algo: "ppo"
+  optimizer_lr_min: &default_min_lr 5.0e-6
+  scheduler_min_lr: *default_min_lr
+  params:
+    learning_rate: 1.0e-4  # Will be optimized by PBT
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_range: 0.10  # Will be optimized by PBT
+
+    clip_range_vf: null
+    vf_clip_warmup_updates: 0
+    vf_clip_threshold_ev: null
+
+    ent_coef: 0.001  # Will be optimized by PBT
+    ent_coef_final: 0.001
+    ent_coef_decay_steps: 400
+    ent_coef_min: 0.0005
+    ent_coef_plateau_window: 24
+    ent_coef_plateau_tolerance: 0.002
+    ent_coef_plateau_min_updates: 40
+    vf_coef: 1.8
+    value_clip_limit: null
+    vf_coef_warmup: 0
+    vf_coef_warmup_updates: 0
+    vf_bad_explained_scale: 1.0
+    vf_bad_explained_floor: 0.0
+    bad_explained_patience: 2
+    max_grad_norm: 0.5
+    n_steps: 2048
+    n_epochs: 4
+    batch_size: 64
+    microbatch_size: 64
+    seed: 20240518
+    kl_early_stop: true
+    kl_exceed_stop_fraction: 0.15
+    kl_epoch_decay: 1.0
+
+    # CVaR risk-aware learning (compatible with adversarial training)
+    cvar_alpha: 0.05
+    cvar_weight: 0.15
+    cvar_activation_threshold: 0.15
+    cvar_activation_hysteresis: 0.05
+    cvar_ramp_updates: 12
+    cvar_cap: 0.5
+
+    # Distributional value head
+    num_atoms: 21
+    v_min: -10.0
+    v_max: 10.0
+    v_range_ema_alpha: 0.005
+
+    use_torch_compile: false
+
+# Training configuration
+training:
+  total_timesteps: 1000000  # Total timesteps per population member
+  eval_freq: 5000  # Evaluation frequency
+  eval_episodes: 10  # Number of evaluation episodes
+  save_freq: 10000  # Checkpoint save frequency
+
+  # Logging
+  log_interval: 100  # Log metrics every N updates
+  tensorboard: true
+  wandb: false  # Enable W&B logging if desired
+
+# Environment configuration (inherits from base)
+env:
+  decision_timing: CLOSE_TO_OPEN
+  no_trade:
+    enabled: false
+    policy: ignore
+  session:
+    calendar: crypto_24x7
+    pre_open_keepout_bars: 0
+    post_close_keepout_bars: 0
+  liquidity:
+    min_adv_usd: 0
+    min_bar_quote_volume: 0
+  spreads:
+    max_spread_bps: 1000000000
+  warmup:
+    bars: 0
