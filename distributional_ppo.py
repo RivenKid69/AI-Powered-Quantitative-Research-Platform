@@ -2483,6 +2483,61 @@ class DistributionalPPO(RecurrentPPO):
             raise RuntimeError("Quantile levels are not available on the policy")
         return levels.to(device=device, dtype=torch.float32)
 
+    def _twin_critics_loss(
+        self,
+        latent_vf: torch.Tensor,
+        targets: torch.Tensor,
+        reduction: str = "mean",
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+        """
+        Compute Twin Critics loss for both value networks.
+
+        Twin Critics (inspired by TD3/SAC) uses two independent value networks
+        to reduce overestimation bias. Both critics are trained with the same targets,
+        but the minimum of their predictions is used for target computation in PPO.
+
+        Args:
+            latent_vf: Latent critic features [batch, latent_dim]
+            targets: Target returns [batch, 1]
+            reduction: Loss reduction mode ('none', 'mean', 'sum')
+
+        Returns:
+            Tuple of (loss_critic_1, loss_critic_2, min_value_estimates)
+            - loss_critic_1: Loss for first critic
+            - loss_critic_2: Loss for second critic (None if twin critics disabled)
+            - min_value_estimates: Minimum of both predictions (for logging)
+        """
+        policy = self.policy
+        use_twin = getattr(policy, "_use_twin_critics", False)
+        use_quantile = getattr(policy, "_use_quantile_value_head", False)
+
+        # Get first critic predictions
+        value_logits_1 = policy._get_value_logits(latent_vf)
+
+        if use_quantile:
+            loss_1 = self._quantile_huber_loss(value_logits_1, targets, reduction=reduction)
+        else:
+            # Categorical critic loss will be handled in main train loop
+            loss_1 = None  # Placeholder, computed elsewhere for categorical
+
+        if not use_twin:
+            return loss_1, None, None
+
+        # Get second critic predictions
+        value_logits_2 = policy._get_value_logits_2(latent_vf)
+
+        if use_quantile:
+            loss_2 = self._quantile_huber_loss(value_logits_2, targets, reduction=reduction)
+            # For logging: compute minimum value estimates
+            value_est_1 = value_logits_1.mean(dim=-1, keepdim=True)
+            value_est_2 = value_logits_2.mean(dim=-1, keepdim=True)
+            min_values = torch.min(value_est_1, value_est_2)
+        else:
+            loss_2 = None  # Categorical twin loss handled elsewhere
+            min_values = None
+
+        return loss_1, loss_2, min_values
+
     def _quantile_huber_loss(
         self,
         predicted_quantiles: torch.Tensor,
