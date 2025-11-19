@@ -320,6 +320,20 @@ class VarianceGradientScaler:
         self._grad_max_ema = None
         self._param_stats.clear()
 
+    def __getstate__(self) -> dict:
+        """Custom pickle handler to exclude unpicklable logger (Bug #8 fix)."""
+        state = self.__dict__.copy()
+        # Remove unpicklable logger
+        state.pop("_logger", None)
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        """Custom unpickle handler to restore state without logger (Bug #8 fix)."""
+        self.__dict__.update(state)
+        # Logger will not be restored - caller must set it if needed
+        if not hasattr(self, "_logger"):
+            self._logger = None
+
     def state_dict(self) -> Dict[str, Any]:
         """Return state dictionary for serialization."""
         return {

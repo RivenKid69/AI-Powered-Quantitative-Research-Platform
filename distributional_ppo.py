@@ -50,6 +50,24 @@ except ImportError:  # pragma: no cover - fallback when imported as package modu
 logger = logging.getLogger(__name__)
 
 
+def _make_clip_range_callable(clip_range_base: float) -> Callable[[float], float]:
+    """Factory function that creates a picklable clip_range callable.
+
+    Fixes Bug #8: Lambda and bound methods capture unpicklable scope (logger, file handles).
+    This factory creates a simple closure that only captures primitive values.
+
+    Args:
+        clip_range_base: The base clip range value
+
+    Returns:
+        A callable that always returns the clip range value
+    """
+    def clip_range_fn(progress_remaining: float = 1.0) -> float:
+        return float(clip_range_base)
+
+    return clip_range_fn
+
+
 def _cfg_get(cfg: Any, key: str, default: Any = None) -> Any:
     """Generic getter for dicts, pydantic/dataclass objects, and custom cfgs."""
 
@@ -4932,6 +4950,9 @@ class DistributionalPPO(RecurrentPPO):
         vgs_warmup_steps: int = 100,
         **kwargs: Any,
     ) -> None:
+        # FIX Bug #8: Check if we're being loaded (policy won't exist yet)
+        self._is_loading = not hasattr(self, "policy") or self.policy is None
+
         self._last_lstm_states: Optional[Union[RNNStates, Tuple[torch.Tensor, ...]]] = None
         self._last_rollout_entropy: float = 0.0
         self._last_rollout_entropy_raw: float = 0.0
@@ -5641,18 +5662,25 @@ class DistributionalPPO(RecurrentPPO):
 
         self._rebuild_scheduler_if_needed()
 
-        self._use_quantile_value = bool(
-            getattr(self.policy, "uses_quantile_value_head", False)
-        )
-        self._quantile_huber_kappa = float(
-            getattr(self.policy, "quantile_huber_kappa", 1.0)
-        )
-        # QUANTILE LOSS FIX: Disabled by default for backward compatibility
-        # Set policy.use_fixed_quantile_loss_asymmetry = True to enable the fix
-        # See QUANTILE_LOSS_FIX.md for details
-        self._use_fixed_quantile_loss_asymmetry = bool(
-            getattr(self.policy, "use_fixed_quantile_loss_asymmetry", False)
-        )
+        # FIX Bug #8: Check if policy exists before accessing it (during load, super().__init__() hasn't run yet)
+        if hasattr(self, "policy") and self.policy is not None:
+            self._use_quantile_value = bool(
+                getattr(self.policy, "uses_quantile_value_head", False)
+            )
+            self._quantile_huber_kappa = float(
+                getattr(self.policy, "quantile_huber_kappa", 1.0)
+            )
+            # QUANTILE LOSS FIX: Disabled by default for backward compatibility
+            # Set policy.use_fixed_quantile_loss_asymmetry = True to enable the fix
+            # See QUANTILE_LOSS_FIX.md for details
+            self._use_fixed_quantile_loss_asymmetry = bool(
+                getattr(self.policy, "use_fixed_quantile_loss_asymmetry", False)
+            )
+        else:
+            # During loading, these will be set after super().__init__() creates the policy
+            self._use_quantile_value = False
+            self._quantile_huber_kappa = 1.0
+            self._use_fixed_quantile_loss_asymmetry = False
 
         self._ensure_score_action_space()
 
@@ -5773,15 +5801,21 @@ class DistributionalPPO(RecurrentPPO):
             base_lr = float(optimizer_kwargs_preview['lr'])
         else:
             # No explicit lr - use lr_schedule as default
-            base_lr = float(self.lr_schedule(1.0))
+            # FIX Bug #8: Check if lr_schedule exists before using it (during load, super().__init__() hasn't run yet)
+            base_lr = float(self.lr_schedule(1.0)) if hasattr(self, "lr_schedule") else 3e-4
 
+        # FIX Bug #8: Initialize these variables even during load
         value_params: list[torch.nn.Parameter] = []
         other_params: list[torch.nn.Parameter] = []
-        for name, param in self.policy.named_parameters():
-            if not param.requires_grad:
-                continue
-            target = (
-                value_params
+        param_groups: list[dict[str, Any]] = []
+
+        # FIX Bug #8: Skip optimizer/VGS setup during load (before super().__init__() creates policy)
+        if not self._is_loading:
+            for name, param in self.policy.named_parameters():
+                if not param.requires_grad:
+                    continue
+                target = (
+                    value_params
                 if (
                     "value" in name
                     or "value_net" in name
@@ -5790,14 +5824,13 @@ class DistributionalPPO(RecurrentPPO):
                 )
                 else other_params
             )
-            target.append(param)
+                target.append(param)
 
-        param_groups: list[dict[str, Any]] = []
-        if other_params:
-            param_groups.append(
-                {
-                    "params": other_params,
-                    "lr": base_lr,
+            if other_params:
+                param_groups.append(
+                    {
+                        "params": other_params,
+                        "lr": base_lr,
                     "initial_lr": base_lr,
                     "_lr_scale": 1.0,
                 }
@@ -6022,7 +6055,10 @@ class DistributionalPPO(RecurrentPPO):
         self._kl_pid_d = 0.0
 
         self._fixed_clip_range = clip_range_value
-        self.clip_range = lambda _: self._compute_clip_range_value()
+        # FIX Bug #8: Use factory function instead of lambda to avoid pickle errors
+        # Lambda captures scope that may contain unpicklable objects (logger, file handles)
+        # Factory-created closure only captures primitive values
+        self.clip_range = _make_clip_range_callable(clip_range_value)
         self.target_kl = target_kl_value
 
         self.normalize_advantage = True
@@ -6063,6 +6099,62 @@ class DistributionalPPO(RecurrentPPO):
             raise ValueError("'kl_absolute_stop_factor' must be a positive finite value when provided")
 
         self._kl_absolute_stop_factor = factor_value
+
+    def __getstate__(self) -> dict:
+        """Custom pickle handler to exclude unpicklable objects (Bug #8 fix).
+
+        SB3 tries to pickle the entire model including objects that contain file handles:
+        - lr_schedule: function/closure that captures scope with file handles
+        - _variance_gradient_scaler: may contain references to file handles
+        - _logger/logger: contains file handles
+
+        This causes PicklingError: Cannot pickle files that are not opened for reading.
+        """
+        state = self.__dict__.copy()
+        # Remove unpicklable objects
+        state.pop("_logger", None)
+        state.pop("logger", None)
+        # lr_schedule will be recreated from _base_lr_schedule
+        state.pop("lr_schedule", None)
+        # _variance_gradient_scaler can be pickled if it implements __getstate__
+        # but let's exclude it and recreate on load
+        state.pop("_variance_gradient_scaler", None)
+        return state
+
+    def __setstate__(self, state: dict) -> None:
+        """Custom unpickle handler to restore state and recreate unpicklable objects (Bug #8 fix)."""
+        self.__dict__.update(state)
+
+        # Recreate logger
+        if not hasattr(self, "_logger") or self._logger is None:
+            from stable_baselines3.common.logger import configure
+            self._logger = configure()
+            self._expand_logger_key_length(self._logger, min_max_length=self._LOGGER_MIN_KEY_LENGTH)
+
+        # Recreate lr_schedule from saved learning_rate if available
+        if not hasattr(self, "lr_schedule") or self.lr_schedule is None:
+            learning_rate = getattr(self, "learning_rate", 3e-4)
+            from stable_baselines3.common.utils import get_schedule_fn
+            self.lr_schedule = get_schedule_fn(learning_rate)
+
+        # Recreate _variance_gradient_scaler if it was enabled
+        if not hasattr(self, "_variance_gradient_scaler"):
+            # Check if VGS was enabled by looking at saved config
+            variance_gradient_scaling = getattr(self, "_variance_gradient_scaling_enabled", False)
+            if variance_gradient_scaling and hasattr(self, "policy"):
+                from variance_gradient_scaler import VarianceGradientScaler
+                vgs_beta = getattr(self, "_vgs_beta", 0.99)
+                vgs_alpha = getattr(self, "_vgs_alpha", 0.1)
+                vgs_warmup_steps = getattr(self, "_vgs_warmup_steps", 100)
+                self._variance_gradient_scaler = VarianceGradientScaler(
+                    self.policy.parameters(),
+                    enabled=True,
+                    beta=vgs_beta,
+                    alpha=vgs_alpha,
+                    warmup_steps=vgs_warmup_steps,
+                )
+            else:
+                self._variance_gradient_scaler = None
 
     def _update_learning_rate(self, optimizer: Optional[torch.optim.Optimizer]) -> None:
         if optimizer is None:
