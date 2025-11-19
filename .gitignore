@@ -80,3 +80,6 @@ tensorboard/
 tensorboard_logs/
 data/processed/
 data/fear_greed.csv
+upgd_test_report.txt
+upgd_test_results.log
+test_output.log
