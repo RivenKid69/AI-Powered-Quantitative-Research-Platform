@@ -96,8 +96,8 @@ class TestTwinCriticsArchitecture:
         # Check that heads have independent parameters
         assert policy.dist_head.weight.data_ptr() != policy.dist_head_2.weight.data_ptr()
 
-    def test_twin_critics_disabled_by_default(self):
-        """Test that twin critics are disabled by default."""
+    def test_twin_critics_enabled_by_default(self):
+        """Test that twin critics are enabled by default."""
         observation_space = spaces.Box(low=-1.0, high=1.0, shape=(10,), dtype=np.float32)
         action_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
 
@@ -106,7 +106,33 @@ class TestTwinCriticsArchitecture:
             'critic': {
                 'distributional': True,
                 'num_quantiles': 16,
-                # use_twin_critics NOT set
+                # use_twin_critics NOT set - should default to True
+            }
+        }
+
+        policy = CustomActorCriticPolicy(
+            observation_space=observation_space,
+            action_space=action_space,
+            lr_schedule=lambda x: 0.001,
+            arch_params=arch_params,
+        )
+
+        # Check that twin critics are enabled by default
+        assert policy._use_twin_critics is True
+        assert policy.quantile_head is not None
+        assert policy.quantile_head_2 is not None
+
+    def test_twin_critics_explicit_disable(self):
+        """Test that twin critics can be explicitly disabled."""
+        observation_space = spaces.Box(low=-1.0, high=1.0, shape=(10,), dtype=np.float32)
+        action_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
+
+        arch_params = {
+            'hidden_dim': 32,
+            'critic': {
+                'distributional': True,
+                'num_quantiles': 16,
+                'use_twin_critics': False,  # Explicitly disable
             }
         }
 
