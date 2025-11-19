@@ -5596,6 +5596,47 @@ class DistributionalPPO(RecurrentPPO):
         self._value_scale_latest_ret_abs_p95 = 0.0
         self._value_scale_frozen = False
 
+        # BUGFIX Bug #2: Inject optimizer_class and optimizer_kwargs into policy_kwargs
+        # so they reach CustomActorCriticPolicy.__init__()
+        policy_kwargs_dict = kwargs_local.get("policy_kwargs", {})
+        if not isinstance(policy_kwargs_dict, dict):
+            policy_kwargs_dict = {}
+
+        # Resolve string-based optimizer class to actual class
+        if self._optimizer_class is not None:
+            resolved_optimizer_class = self._optimizer_class
+            if isinstance(self._optimizer_class, str):
+                # Inline resolution logic (from _get_optimizer_class)
+                optimizer_map = {
+                    "adamw": torch.optim.AdamW,
+                    "adam": torch.optim.Adam,
+                    "sgd": torch.optim.SGD,
+                }
+                optimizer_key = self._optimizer_class.lower()
+
+                if optimizer_key in ("upgd", "adaptive_upgd", "upgdw"):
+                    try:
+                        from optimizers import UPGD, AdaptiveUPGD, UPGDW
+                        optimizer_map["upgd"] = UPGD
+                        optimizer_map["adaptive_upgd"] = AdaptiveUPGD
+                        optimizer_map["upgdw"] = UPGDW
+                    except ImportError as e:
+                        raise ImportError(f"UPGD optimizers not available: {e}")
+
+                if optimizer_key in optimizer_map:
+                    resolved_optimizer_class = optimizer_map[optimizer_key]
+                else:
+                    raise ValueError(f"Unknown optimizer '{self._optimizer_class}'")
+
+            policy_kwargs_dict["optimizer_class"] = resolved_optimizer_class
+
+        # Pass optimizer_kwargs to policy
+        if self._optimizer_kwargs:
+            policy_kwargs_dict["optimizer_kwargs"] = self._optimizer_kwargs
+
+        if policy_kwargs_dict:
+            kwargs_local["policy_kwargs"] = policy_kwargs_dict
+
         super().__init__(policy=policy, env=env, **kwargs_local)
 
         self._rebuild_scheduler_if_needed()
@@ -5724,7 +5765,16 @@ class DistributionalPPO(RecurrentPPO):
             self.logger.record("config/optimizer_lr_max", float(self._optimizer_lr_max))
         self.logger.record("config/scheduler_min_lr", float(self._scheduler_min_lr))
 
-        base_lr = float(self.lr_schedule(1.0))
+        # BUGFIX Bug #2: Check if user provided custom lr in optimizer_kwargs
+        # If yes, use that instead of lr_schedule
+        optimizer_kwargs_preview = self._get_optimizer_kwargs()
+        if 'lr' in optimizer_kwargs_preview:
+            # User provided explicit lr - use it
+            base_lr = float(optimizer_kwargs_preview['lr'])
+        else:
+            # No explicit lr - use lr_schedule as default
+            base_lr = float(self.lr_schedule(1.0))
+
         value_params: list[torch.nn.Parameter] = []
         other_params: list[torch.nn.Parameter] = []
         for name, param in self.policy.named_parameters():
@@ -5767,9 +5817,13 @@ class DistributionalPPO(RecurrentPPO):
             optimizer_cls = self._get_optimizer_class()
             optimizer_kwargs = self._get_optimizer_kwargs()
 
+            # BUGFIX Bug #2: Remove 'lr' from optimizer_kwargs before creating optimizer
+            # because lr is already set in param_groups. Passing both causes conflict.
+            optimizer_kwargs_for_init = {k: v for k, v in optimizer_kwargs.items() if k != 'lr'}
+
             self.policy.optimizer = optimizer_cls(
                 param_groups,
-                **optimizer_kwargs
+                **optimizer_kwargs_for_init
             )
 
             # Log optimizer configuration
@@ -9092,9 +9146,15 @@ class DistributionalPPO(RecurrentPPO):
                             if latent_vf is None:
                                 raise RuntimeError("Twin Critics enabled but latent_vf not cached")
 
+                            # BUGFIX Bug #1: Select latent_vf using valid_indices to match targets_norm_for_loss
+                            if valid_indices is not None:
+                                latent_vf_selected = latent_vf[valid_indices]
+                            else:
+                                latent_vf_selected = latent_vf
+
                             # Compute losses for both critics
                             loss_critic_1, loss_critic_2, min_values = self._twin_critics_loss(
-                                latent_vf, targets_norm_for_loss, reduction="none"
+                                latent_vf_selected, targets_norm_for_loss, reduction="none"
                             )
 
                             # Average both critic losses for training
@@ -9415,9 +9475,15 @@ class DistributionalPPO(RecurrentPPO):
                             if latent_vf is None:
                                 raise RuntimeError("Twin Critics enabled but latent_vf not cached")
 
+                            # BUGFIX Bug #1: Select latent_vf using valid_indices to match target_distribution_selected
+                            if valid_indices is not None:
+                                latent_vf_selected = latent_vf[valid_indices]
+                            else:
+                                latent_vf_selected = latent_vf
+
                             # Compute losses for both critics (categorical mode)
                             loss_critic_1, loss_critic_2, min_values = self._twin_critics_loss(
-                                latent_vf,
+                                latent_vf_selected,
                                 targets=None,  # Not used for categorical
                                 reduction="none",
                                 target_distribution=target_distribution_selected

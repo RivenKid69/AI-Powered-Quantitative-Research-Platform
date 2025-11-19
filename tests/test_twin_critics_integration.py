@@ -11,16 +11,18 @@ Tests cover:
 import pytest
 import torch
 import numpy as np
+import gymnasium
 from gymnasium import spaces
 from stable_baselines3.common.vec_env import DummyVecEnv
 from custom_policy_patch1 import CustomActorCriticPolicy
 from distributional_ppo import DistributionalPPO
 
 
-class SimpleDummyEnv:
+class SimpleDummyEnv(gymnasium.Env):
     """Simple environment for testing."""
 
     def __init__(self):
+        super().__init__()
         self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(10,), dtype=np.float32)
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
         self.steps = 0

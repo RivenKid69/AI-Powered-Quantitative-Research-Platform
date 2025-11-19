@@ -281,6 +281,19 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
 
         self.optimizer_scheduler_fn = optimizer_scheduler_fn
 
+        # BUGFIX Bug #2: Store optimizer_class and optimizer_kwargs BEFORE super().__init__()
+        # because they may be modified by base class. We'll use these in _setup_custom_optimizer().
+        self._pending_optimizer_class = optimizer_class
+        self._pending_optimizer_kwargs = dict(optimizer_kwargs) if optimizer_kwargs else {}
+
+        # BUGFIX Bug #2: Temporarily remove 'lr' from optimizer_kwargs to avoid conflict
+        # with lr_schedule in base class __init__. The 'lr' will be restored and used
+        # in _setup_custom_optimizer().
+        temp_lr_for_init = None
+        if optimizer_kwargs and 'lr' in optimizer_kwargs:
+            optimizer_kwargs = dict(optimizer_kwargs)  # Make a copy
+            temp_lr_for_init = optimizer_kwargs.pop('lr')
+
         # dist_head создаётся позже в _build, но атрибут инициализируем заранее,
         # чтобы на него можно было безопасно ссылаться до сборки модели.
         self.dist_head: Optional[nn.Linear] = None
@@ -535,7 +548,18 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
         Twin Critics: When use_twin_critics=True, creates a second independent
         value network to reduce overestimation bias (similar to TD3/SAC approach).
         """
+        # BUGFIX Bug #2: Temporarily remove 'lr' from optimizer_kwargs to avoid conflict
+        # with lr_schedule in base class _build(). The lr will be applied later in
+        # _setup_custom_optimizer().
+        temp_lr = None
+        if self.optimizer_kwargs and 'lr' in self.optimizer_kwargs:
+            temp_lr = self.optimizer_kwargs.pop('lr')
+
         super()._build(lr_schedule)
+
+        # Restore 'lr' to optimizer_kwargs for later use in _setup_custom_optimizer()
+        if temp_lr is not None:
+            self.optimizer_kwargs['lr'] = temp_lr
 
         if self._use_quantile_value_head:
             self.quantile_head = QuantileValueHead(
@@ -619,11 +643,22 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
         if hasattr(self, "unconstrained_log_std"):
             params.append(self.unconstrained_log_std)
 
-        optimizer_kwargs = self.optimizer_kwargs or {}
+        # BUGFIX Bug #2: Use _pending_optimizer_kwargs which contains the original
+        # user-provided values (including 'lr' if specified), not self.optimizer_kwargs
+        # which may have been filtered by the base class.
+        optimizer_kwargs = getattr(self, '_pending_optimizer_kwargs', self.optimizer_kwargs) or {}
+        optimizer_class = getattr(self, '_pending_optimizer_class', self.optimizer_class)
 
         # Recreate the optimizer so the new parameter set (including feature
         # extractors) participates in training.
-        self.optimizer = self.optimizer_class(params, lr=lr_schedule(1), **optimizer_kwargs)
+        # IMPORTANT: Check if 'lr' is in optimizer_kwargs to allow user override
+        # If user explicitly sets lr in optimizer_kwargs, respect it; otherwise use lr_schedule
+        if 'lr' in optimizer_kwargs:
+            # User provided explicit lr in optimizer_kwargs - use it directly
+            self.optimizer = optimizer_class(params, **optimizer_kwargs)
+        else:
+            # No explicit lr in optimizer_kwargs - use lr_schedule as default
+            self.optimizer = optimizer_class(params, lr=lr_schedule(1), **optimizer_kwargs)
 
         if self.optimizer_scheduler_fn is not None:
             self.optimizer_scheduler = self.optimizer_scheduler_fn(self.optimizer)
