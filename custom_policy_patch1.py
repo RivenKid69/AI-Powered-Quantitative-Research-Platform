@@ -295,6 +295,8 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
         self._last_value_quantiles: Optional[torch.Tensor] = None
         self._last_value_logits_2: Optional[torch.Tensor] = None
         self._last_value_quantiles_2: Optional[torch.Tensor] = None
+        # Twin Critics: cache latent_vf for loss computation
+        self._last_latent_vf: Optional[torch.Tensor] = None
         self._last_raw_actions: Optional[torch.Tensor] = None
         self._critic_gradient_blocked: bool = False
         self._critic_gradient_scale: float = 1.0
@@ -897,6 +899,8 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
 
     def _get_value_logits(self, latent_vf: torch.Tensor) -> torch.Tensor:
         """Возвращает логиты распределения/квантили ценностей без агрегации."""
+        # Twin Critics: cache latent_vf for loss computation in train loop
+        self._last_latent_vf = latent_vf
 
         if self._use_quantile_value_head:
             if self.quantile_head is None:
@@ -1415,7 +1419,13 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
             latent_vf = self.critic(features)
 
         latent_vf = self.mlp_extractor.forward_critic(latent_vf)
-        return self._get_value_from_latent(latent_vf)
+
+        # Twin Critics: Use minimum of both critics for value prediction
+        # This reduces overestimation bias in advantage computation
+        if self._use_twin_critics:
+            return self._get_min_twin_values(latent_vf)
+        else:
+            return self._get_value_from_latent(latent_vf)
 
     def value_quantiles(
         self,

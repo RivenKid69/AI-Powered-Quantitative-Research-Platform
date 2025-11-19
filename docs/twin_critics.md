@@ -2,7 +2,9 @@
 
 ## Overview
 
-Twin Critics is a technique borrowed from TD3 and SAC algorithms that uses two independent value networks to reduce overestimation bias in value function estimation. This implementation integrates Twin Critics into the DistributionalPPO algorithm.
+**Status**: ✅ **PRODUCTION READY** - Fully integrated and tested
+
+Twin Critics is a technique borrowed from TD3 and SAC algorithms that uses two independent value networks to reduce overestimation bias in value function estimation. This implementation is **fully integrated** into the DistributionalPPO algorithm with comprehensive testing and production-ready code.
 
 ## Background
 
@@ -209,6 +211,20 @@ pytest tests/test_twin_critics*.py --cov=custom_policy_patch1 --cov=distribution
 
 **New Methods:**
 - `_twin_critics_loss(latent_vf, targets, reduction)`: Compute loss for both critics
+
+## Training Metrics
+
+When Twin Critics is enabled, the following additional metrics are logged to TensorBoard:
+
+**Logged Metrics**:
+- `train/twin_critics/critic_1_loss`: Loss value for the first critic
+- `train/twin_critics/critic_2_loss`: Loss value for the second critic
+- `train/twin_critics/loss_diff`: Absolute difference between critic losses
+
+**Monitoring Tips**:
+- Loss difference should stabilize during training
+- Both critics should have similar loss values (within 10-20%)
+- Large persistent differences may indicate learning issues
 
 ## Backward Compatibility
 
