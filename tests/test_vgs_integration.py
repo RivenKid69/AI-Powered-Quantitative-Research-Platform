@@ -20,12 +20,14 @@ from stable_baselines3.common.vec_env import DummyVecEnv
 try:
     from distributional_ppo import DistributionalPPO
     from variance_gradient_scaler import VarianceGradientScaler
+    from custom_policy_patch1 import CustomActorCriticPolicy
 except ImportError:
     import sys
     import os
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from distributional_ppo import DistributionalPPO
     from variance_gradient_scaler import VarianceGradientScaler
+    from custom_policy_patch1 import CustomActorCriticPolicy
 
 
 def make_simple_env():
@@ -40,7 +42,7 @@ class TestVGSInitialization:
         """Test that VGS is enabled by default."""
         env = make_simple_env()
         model = DistributionalPPO(
-            "MlpLstmPolicy",
+            CustomActorCriticPolicy,
             env,
             value_scale_max_rel_step=0.1,
             n_steps=128,
@@ -58,7 +60,7 @@ class TestVGSInitialization:
         """Test that VGS uses correct default parameters."""
         env = make_simple_env()
         model = DistributionalPPO(
-            "MlpLstmPolicy",
+            CustomActorCriticPolicy,
             env,
             value_scale_max_rel_step=0.1,
             n_steps=128,
@@ -85,7 +87,7 @@ class TestVGSInitialization:
         """Test that VGS can be explicitly disabled."""
         env = make_simple_env()
         model = DistributionalPPO(
-            "MlpLstmPolicy",
+            CustomActorCriticPolicy,
             env,
             value_scale_max_rel_step=0.1,
             n_steps=128,
@@ -103,7 +105,7 @@ class TestVGSInitialization:
         """Test that VGS can be enabled through config."""
         env = make_simple_env()
         model = DistributionalPPO(
-            "MlpLstmPolicy",
+            CustomActorCriticPolicy,
             env,
             value_scale_max_rel_step=0.1,
             n_steps=128,
@@ -127,7 +129,7 @@ class TestVGSInitialization:
         """Test that VGS configuration is logged."""
         env = make_simple_env()
         model = DistributionalPPO(
-            "MlpLstmPolicy",
+            CustomActorCriticPolicy,
             env,
             value_scale_max_rel_step=0.1,
             n_steps=128,
@@ -152,7 +154,7 @@ class TestVGSTrainingIntegration:
         """Test that training works with VGS enabled by default."""
         env = make_simple_env()
         model = DistributionalPPO(
-            "MlpLstmPolicy",
+            CustomActorCriticPolicy,
             env,
             value_scale_max_rel_step=0.1,
             n_steps=128,
@@ -181,7 +183,7 @@ class TestVGSTrainingIntegration:
         """Test that training works with VGS explicitly enabled."""
         env = make_simple_env()
         model = DistributionalPPO(
-            "MlpLstmPolicy",
+            CustomActorCriticPolicy,
             env,
             value_scale_max_rel_step=0.1,
             n_steps=128,
@@ -208,7 +210,7 @@ class TestVGSTrainingIntegration:
         """Test that training works normally with VGS disabled."""
         env = make_simple_env()
         model = DistributionalPPO(
-            "MlpLstmPolicy",
+            CustomActorCriticPolicy,
             env,
             value_scale_max_rel_step=0.1,
             n_steps=128,
@@ -231,7 +233,7 @@ class TestVGSTrainingIntegration:
         env = make_simple_env()
         warmup_steps = 20
         model = DistributionalPPO(
-            "MlpLstmPolicy",
+            CustomActorCriticPolicy,
             env,
             value_scale_max_rel_step=0.1,
             n_steps=128,
@@ -258,7 +260,7 @@ class TestVGSTrainingIntegration:
         """Test that VGS works correctly with gradient clipping."""
         env = make_simple_env()
         model = DistributionalPPO(
-            "MlpLstmPolicy",
+            CustomActorCriticPolicy,
             env,
             value_scale_max_rel_step=0.1,
             n_steps=128,
@@ -288,7 +290,7 @@ class TestVGSMetricsAndLogging:
         """Test that VGS metrics are logged during training by default."""
         env = make_simple_env()
         model = DistributionalPPO(
-            "MlpLstmPolicy",
+            CustomActorCriticPolicy,
             env,
             value_scale_max_rel_step=0.1,
             n_steps=128,
@@ -317,7 +319,7 @@ class TestVGSMetricsAndLogging:
         """Test that VGS metrics are logged during training."""
         env = make_simple_env()
         model = DistributionalPPO(
-            "MlpLstmPolicy",
+            CustomActorCriticPolicy,
             env,
             value_scale_max_rel_step=0.1,
             n_steps=128,
@@ -347,7 +349,7 @@ class TestVGSMetricsAndLogging:
         """Test that normalized variance is computed correctly."""
         env = make_simple_env()
         model = DistributionalPPO(
-            "MlpLstmPolicy",
+            CustomActorCriticPolicy,
             env,
             value_scale_max_rel_step=0.1,
             n_steps=128,
@@ -380,7 +382,7 @@ class TestVGSStatePersistence:
 
         # Create and train model with VGS (default enabled)
         model1 = DistributionalPPO(
-            "MlpLstmPolicy",
+            CustomActorCriticPolicy,
             env,
             value_scale_max_rel_step=0.1,
             n_steps=128,
@@ -424,7 +426,7 @@ class TestVGSStatePersistence:
 
         # Create and train model with VGS
         model1 = DistributionalPPO(
-            "MlpLstmPolicy",
+            CustomActorCriticPolicy,
             env,
             value_scale_max_rel_step=0.1,
             n_steps=128,
@@ -471,7 +473,7 @@ class TestVGSEdgeCases:
         """Test VGS with warmup_steps=0."""
         env = make_simple_env()
         model = DistributionalPPO(
-            "MlpLstmPolicy",
+            CustomActorCriticPolicy,
             env,
             value_scale_max_rel_step=0.1,
             n_steps=128,
@@ -494,7 +496,7 @@ class TestVGSEdgeCases:
         """Test VGS with very large warmup period."""
         env = make_simple_env()
         model = DistributionalPPO(
-            "MlpLstmPolicy",
+            CustomActorCriticPolicy,
             env,
             value_scale_max_rel_step=0.1,
             n_steps=128,
@@ -519,7 +521,7 @@ class TestVGSEdgeCases:
         """Test VGS with aggressive scaling (high alpha)."""
         env = make_simple_env()
         model = DistributionalPPO(
-            "MlpLstmPolicy",
+            CustomActorCriticPolicy,
             env,
             value_scale_max_rel_step=0.1,
             n_steps=128,
@@ -553,7 +555,7 @@ class TestVGSGradientScaling:
         """Test that VGS scaling is applied by default."""
         env = make_simple_env()
         model = DistributionalPPO(
-            "MlpLstmPolicy",
+            CustomActorCriticPolicy,
             env,
             value_scale_max_rel_step=0.1,
             n_steps=128,
@@ -585,7 +587,7 @@ class TestVGSGradientScaling:
         """Test that VGS tends to reduce gradient variance over time."""
         env = make_simple_env()
         model = DistributionalPPO(
-            "MlpLstmPolicy",
+            CustomActorCriticPolicy,
             env,
             value_scale_max_rel_step=0.1,
             n_steps=128,
@@ -619,7 +621,7 @@ class TestVGSGradientScaling:
 
         # Create model with both VGS and grad clipping
         model = DistributionalPPO(
-            "MlpLstmPolicy",
+            CustomActorCriticPolicy,
             env,
             value_scale_max_rel_step=0.1,
             n_steps=128,
