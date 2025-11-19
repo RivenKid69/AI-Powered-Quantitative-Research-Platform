@@ -138,9 +138,12 @@ class UPGD(torch.optim.Optimizer):
                 noise = torch.randn_like(p.grad) * group["sigma"]
 
                 # Scale utility: sigmoid maps to [0, 1], high utility → close to 1
+                # BUGFIX Bug #5: Add epsilon to prevent division by zero when global_max_util = 0
+                # This can happen when all parameters are zero or all utilities are negative
                 global_max_on_device = global_max_util.to(device)
+                epsilon = 1e-8  # Small value to prevent division by zero
                 scaled_utility = torch.sigmoid(
-                    (state["avg_utility"] / bias_correction_utility) / global_max_on_device
+                    (state["avg_utility"] / bias_correction_utility) / (global_max_on_device + epsilon)
                 )
 
                 # Apply weight decay (L2 regularization)
