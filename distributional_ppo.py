@@ -5859,6 +5859,13 @@ class DistributionalPPO(RecurrentPPO):
             self.logger.record("config/vgs_alpha", float(self._vgs_alpha))
             self.logger.record("config/vgs_warmup_steps", float(self._vgs_warmup_steps))
 
+        # BUGFIX Bug #4: Update VGS parameters after policy optimizer may have been recreated
+        # CustomActorCriticPolicy._setup_custom_optimizer() is called during policy __init__,
+        # which recreates the optimizer with updated parameters. VGS must update its parameter
+        # list to track the correct parameters after optimizer recreation.
+        if self._variance_gradient_scaler is not None:
+            self._variance_gradient_scaler.update_parameters(self.policy.parameters())
+
         self._configure_gradient_accumulation(
             microbatch_size=microbatch_size,
             grad_steps=gradient_accumulation_steps,
