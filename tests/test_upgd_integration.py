@@ -11,11 +11,12 @@ import gymnasium as gym
 from stable_baselines3.common.vec_env import DummyVecEnv
 from distributional_ppo import DistributionalPPO
 from optimizers import UPGD, AdaptiveUPGD, UPGDW
+from custom_policy_patch1 import CustomActorCriticPolicy
 
 
 def make_simple_env():
-    """Create a simple test environment."""
-    return DummyVecEnv([lambda: gym.make("CartPole-v1")])
+    """Create a simple test environment with continuous action space."""
+    return DummyVecEnv([lambda: gym.make("Pendulum-v1")])
 
 
 class TestUPGDIntegrationWithPPO:
@@ -26,7 +27,7 @@ class TestUPGDIntegrationWithPPO:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="upgd",
             optimizer_kwargs={"lr": 1e-4, "sigma": 0.001},
@@ -44,7 +45,7 @@ class TestUPGDIntegrationWithPPO:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="adaptive_upgd",
             optimizer_kwargs={"beta1": 0.9, "beta2": 0.999},
@@ -60,7 +61,7 @@ class TestUPGDIntegrationWithPPO:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="upgdw",
             optimizer_kwargs={"weight_decay": 0.01},
@@ -76,7 +77,7 @@ class TestUPGDIntegrationWithPPO:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class=AdaptiveUPGD,
             optimizer_kwargs={"lr": 3e-4},
@@ -92,7 +93,7 @@ class TestUPGDIntegrationWithPPO:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class=None,  # Default
             verbose=0,
@@ -107,7 +108,7 @@ class TestUPGDIntegrationWithPPO:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="adamw",  # Explicit
             verbose=0,
@@ -123,7 +124,7 @@ class TestUPGDIntegrationWithPPO:
 
         with pytest.raises(ValueError, match="Unknown optimizer"):
             DistributionalPPO(
-                "MlpPolicy",
+                CustomActorCriticPolicy,
                 env,
                 optimizer_class="invalid_optimizer",
                 verbose=0,
@@ -137,7 +138,7 @@ class TestUPGDIntegrationWithPPO:
 
         with pytest.raises(TypeError, match="must be a dictionary"):
             DistributionalPPO(
-                "MlpPolicy",
+                CustomActorCriticPolicy,
                 env,
                 optimizer_class="upgd",
                 optimizer_kwargs="invalid",  # Should be dict
@@ -151,7 +152,7 @@ class TestUPGDIntegrationWithPPO:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="upgd",
             n_steps=64,
@@ -181,7 +182,7 @@ class TestUPGDIntegrationWithPPO:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="adaptive_upgd",
             optimizer_kwargs={"lr": 3e-4},
@@ -214,7 +215,7 @@ class TestUPGDIntegrationWithPPO:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="upgdw",
             optimizer_kwargs={"lr": 1e-4, "weight_decay": 0.01},
@@ -239,7 +240,7 @@ class TestUPGDIntegrationWithPPO:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="adaptive_upgd",
             verbose=0,
@@ -255,7 +256,7 @@ class TestUPGDIntegrationWithPPO:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="upgd",
             learning_rate=1e-4,
@@ -282,7 +283,7 @@ class TestUPGDIntegrationWithPPO:
             return 1e-4 * (1 - progress)
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="upgd",
             learning_rate=lr_schedule,
@@ -306,7 +307,7 @@ class TestUPGDIntegrationWithPPO:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="upgd",
             cvar_use_constraint=True,
@@ -329,7 +330,7 @@ class TestUPGDIntegrationWithPPO:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="upgd",
             max_grad_norm=0.5,
@@ -353,7 +354,7 @@ class TestUPGDHyperparameters:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="upgd",
             optimizer_kwargs={"sigma": 0.01},
@@ -369,7 +370,7 @@ class TestUPGDHyperparameters:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="upgd",
             optimizer_kwargs={"beta_utility": 0.99},
@@ -385,7 +386,7 @@ class TestUPGDHyperparameters:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="adaptive_upgd",
             optimizer_kwargs={"beta1": 0.95, "beta2": 0.995},
@@ -403,7 +404,7 @@ class TestUPGDHyperparameters:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="upgdw",
             optimizer_kwargs={"weight_decay": 0.05},
@@ -423,7 +424,7 @@ class TestUPGDStatePersistence:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="upgd",
             n_steps=64,
@@ -452,7 +453,7 @@ class TestUPGDStatePersistence:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="adaptive_upgd",
             n_steps=64,
@@ -480,7 +481,7 @@ class TestUPGDPerformance:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="upgd",
             optimizer_kwargs={"lr": 3e-4},
@@ -505,7 +506,7 @@ class TestUPGDPerformance:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="adaptive_upgd",
             optimizer_kwargs={"lr": 3e-4},
@@ -538,7 +539,7 @@ class TestUPGDNumericalStability:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="upgd",
             n_steps=64,
@@ -567,7 +568,7 @@ class TestUPGDNumericalStability:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="upgd",
             n_steps=64,
@@ -592,7 +593,7 @@ class TestUPGDDefaultConfiguration:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             verbose=0,
         )
@@ -607,7 +608,7 @@ class TestUPGDDefaultConfiguration:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             verbose=0,
         )
@@ -631,7 +632,7 @@ class TestUPGDDefaultConfiguration:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_kwargs={
                 "lr": 1e-3,
@@ -660,7 +661,7 @@ class TestUPGDDefaultConfiguration:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             n_steps=64,
             n_epochs=2,
@@ -701,7 +702,7 @@ class TestUPGDComprehensiveCoverage:
 
         for variant, expected_class in zip(variants, expected_classes):
             model = DistributionalPPO(
-                "MlpPolicy",
+                CustomActorCriticPolicy,
                 env,
                 optimizer_class=variant,
                 n_steps=64,
@@ -721,7 +722,7 @@ class TestUPGDComprehensiveCoverage:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="adaptive_upgd",
             optimizer_kwargs={"lr": 3e-4},
@@ -751,7 +752,7 @@ class TestUPGDComprehensiveCoverage:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="adaptive_upgd",
             n_steps=64,
@@ -796,7 +797,7 @@ class TestUPGDComprehensiveCoverage:
 
         for lr in learning_rates:
             model = DistributionalPPO(
-                "MlpPolicy",
+                CustomActorCriticPolicy,
                 env,
                 optimizer_class="adaptive_upgd",
                 learning_rate=lr,
@@ -820,7 +821,7 @@ class TestUPGDComprehensiveCoverage:
 
         for sigma in sigma_values:
             model = DistributionalPPO(
-                "MlpPolicy",
+                CustomActorCriticPolicy,
                 env,
                 optimizer_class="adaptive_upgd",
                 optimizer_kwargs={"sigma": sigma},
@@ -841,7 +842,7 @@ class TestUPGDComprehensiveCoverage:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="upgdw",
             optimizer_kwargs={"weight_decay": 0.05},
@@ -869,7 +870,7 @@ class TestUPGDComprehensiveCoverage:
         # Test all three UPGD variants
         for optimizer_cls in [UPGD, AdaptiveUPGD, UPGDW]:
             model = DistributionalPPO(
-                "MlpPolicy",
+                CustomActorCriticPolicy,
                 env,
                 optimizer_class=optimizer_cls,
                 n_steps=64,
@@ -885,7 +886,7 @@ class TestUPGDComprehensiveCoverage:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="adaptive_upgd",
             optimizer_kwargs={"lr": 1e-4, "sigma": 0.005},
@@ -910,7 +911,7 @@ class TestUPGDEdgeCases:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="adaptive_upgd",
             learning_rate=0.0,
@@ -929,7 +930,7 @@ class TestUPGDEdgeCases:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="adaptive_upgd",
             learning_rate=0.1,
@@ -958,7 +959,7 @@ class TestUPGDEdgeCases:
         env = make_simple_env()
 
         model = DistributionalPPO(
-            "MlpPolicy",
+            CustomActorCriticPolicy,
             env,
             optimizer_class="adaptive_upgd",
             optimizer_kwargs={"sigma": 0.0},
@@ -979,7 +980,7 @@ class TestUPGDEdgeCases:
 
         with pytest.raises(TypeError, match="must be a dictionary"):
             DistributionalPPO(
-                "MlpPolicy",
+                CustomActorCriticPolicy,
                 env,
                 optimizer_class="adaptive_upgd",
                 optimizer_kwargs="invalid",

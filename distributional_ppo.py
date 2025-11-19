@@ -5414,11 +5414,9 @@ class DistributionalPPO(RecurrentPPO):
         if value_scale_ema_beta is None:
             value_scale_ema_beta = kwargs_local.pop("value_scale_ema_beta", 0.2)
         if value_scale_max_rel_step is None:
-            value_scale_max_rel_step = kwargs_local.pop("value_scale_max_rel_step", None)
+            value_scale_max_rel_step = kwargs_local.pop("value_scale_max_rel_step", 0.5)
         else:
             kwargs_local.pop("value_scale_max_rel_step", None)
-        if value_scale_max_rel_step is None:
-            raise ValueError("'value_scale.max_rel_step' must be provided")
         if value_scale_std_floor is None:
             value_scale_std_floor = kwargs_local.pop("value_scale_std_floor", 3e-3)
         if value_scale_window_updates is None:
@@ -8933,10 +8931,13 @@ class DistributionalPPO(RecurrentPPO):
 
                             # Fix up the same_bounds cases using the original upper_bound positions
                             if torch.any(same_bounds):
-                                same_indices = same_bounds.nonzero(as_tuple=False).squeeze(1)
-                                if same_indices.numel() > 0:
-                                    target_distribution[same_indices] = 0.0
-                                    target_distribution[same_indices, upper_bound_before_adjust[same_indices]] = 1.0
+                                # Flatten same_bounds to match target_distribution's batch dimension
+                                same_bounds_flat = same_bounds.view(-1)
+                                if torch.any(same_bounds_flat):
+                                    target_distribution[same_bounds_flat] = 0.0
+                                    # Use the flattened upper_bound_before_adjust directly
+                                    upper_indices = upper_bound_before_adjust.view(-1)[same_bounds_flat].unsqueeze(-1)
+                                    target_distribution.scatter_(1, upper_indices, 1.0, reduce='add')
 
                         target_norm_for_stats = target_returns_norm_selected.to(
                             dtype=torch.float32

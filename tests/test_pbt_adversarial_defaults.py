@@ -283,7 +283,7 @@ class TestDocumentationConsistency:
         if not os.path.exists(readme_path):
             pytest.skip(f"{readme_path} not found")
 
-        with open(readme_path, "r") as f:
+        with open(readme_path, "r", encoding="utf-8") as f:
             content = f.read()
 
         # Check that README mentions the components
