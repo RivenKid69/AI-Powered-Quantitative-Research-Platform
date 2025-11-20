@@ -319,7 +319,7 @@ class PBTTrainingCoordinator:
         new_hyperparams = member.hyperparams
 
         if self.pbt_scheduler is not None and self.pbt_scheduler.should_exploit_and_explore(member):
-            new_state_dict, new_hyperparams = self.pbt_scheduler.exploit_and_explore(
+            new_state_dict, new_hyperparams, checkpoint_format = self.pbt_scheduler.exploit_and_explore(
                 member, model_state_dict
             )
 

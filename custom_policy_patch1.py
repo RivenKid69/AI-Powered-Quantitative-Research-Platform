@@ -229,6 +229,34 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
                 raise ValueError(f"Invalid '{key}' value in policy arch params: {value}") from exc
             return coerced
 
+        def _coerce_arch_bool(value: Optional[bool], fallback: bool, key: str) -> bool:
+            """Coerce value to boolean with proper string handling.
+
+            Handles:
+            - None -> fallback
+            - bool -> as is
+            - int: 0 -> False, non-zero -> True
+            - str: "true"/"yes"/"1" -> True, "false"/"no"/"0" -> False (case-insensitive)
+            """
+            if value is None:
+                return fallback
+            if isinstance(value, bool):
+                return value
+            if isinstance(value, int):
+                return value != 0
+            if isinstance(value, str):
+                lower_val = value.lower().strip()
+                if lower_val in ("true", "yes", "1", "on"):
+                    return True
+                elif lower_val in ("false", "no", "0", "off"):
+                    return False
+                else:
+                    raise ValueError(
+                        f"Invalid '{key}' string value in policy arch params: {value}. "
+                        f"Expected 'true'/'false', 'yes'/'no', '1'/'0', or 'on'/'off'"
+                    )
+            raise ValueError(f"Invalid '{key}' value type in policy arch params: {type(value).__name__}")
+
         critic_cfg_raw = arch_params.get("critic") if arch_params else None
         self._critic_cfg: Mapping[str, Any] | None = critic_cfg_raw if isinstance(
             critic_cfg_raw, Mapping
@@ -240,8 +268,9 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
 
         # Twin Critics configuration: enables dual value networks for bias reduction
         # Default is True to reduce overestimation bias in value estimates
-        twin_critics_flag = critic_cfg.get("use_twin_critics", True)
-        self._use_twin_critics = bool(twin_critics_flag)
+        self._use_twin_critics = _coerce_arch_bool(
+            critic_cfg.get("use_twin_critics"), True, "critic.use_twin_critics"
+        )
 
         if self._use_quantile_value_head:
             self.num_quantiles = _coerce_arch_int(

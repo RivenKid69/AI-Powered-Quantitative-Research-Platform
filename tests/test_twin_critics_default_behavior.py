@@ -11,16 +11,18 @@ Tests verify that:
 import pytest
 import torch
 import numpy as np
+import gymnasium as gym
 from gymnasium import spaces
 from custom_policy_patch1 import CustomActorCriticPolicy
 from distributional_ppo import DistributionalPPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 
 
-class SimpleDummyEnv:
+class SimpleDummyEnv(gym.Env):
     """Simple environment for testing."""
 
     def __init__(self):
+        super().__init__()
         self.observation_space = spaces.Box(low=-1.0, high=1.0, shape=(10,), dtype=np.float32)
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(1,), dtype=np.float32)
         self.steps = 0
@@ -270,7 +272,7 @@ class TestEdgeCases:
             observation_space, action_space, lambda x: 0.001, arch_params=arch_params
         )
         # None should use default value (True)
-        assert policy._use_twin_critics is False  # bool(None) = False
+        assert policy._use_twin_critics is True  # None uses fallback value (True)
 
 
 class TestPPOIntegration:
@@ -296,7 +298,7 @@ class TestPPOIntegration:
         model = DistributionalPPO(
             CustomActorCriticPolicy,
             env,
-            arch_params=arch_params,
+            policy_kwargs={'arch_params': arch_params},
             n_steps=64,
             batch_size=32,
             n_epochs=2,
@@ -327,7 +329,7 @@ class TestPPOIntegration:
         model = DistributionalPPO(
             CustomActorCriticPolicy,
             env,
-            arch_params=arch_params,
+            policy_kwargs={'arch_params': arch_params},
             n_steps=64,
             batch_size=32,
             n_epochs=2,
@@ -358,7 +360,7 @@ class TestPPOIntegration:
         model = DistributionalPPO(
             CustomActorCriticPolicy,
             env,
-            arch_params=arch_params,
+            policy_kwargs={'arch_params': arch_params},
             n_steps=64,
             batch_size=32,
             n_epochs=2,
