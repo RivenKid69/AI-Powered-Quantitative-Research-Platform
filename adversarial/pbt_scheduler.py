@@ -91,6 +91,10 @@ class PBTConfig:
         metric_name: Name of metric to optimize
         metric_mode: Optimization mode ('max' or 'min')
         ready_percentage: Percentage of population that must be ready for exploitation
+        optimizer_exploit_strategy: Strategy for optimizer state during exploit
+                                    ('reset' or 'copy')
+                                    - 'reset': Reset optimizer state after exploit (recommended)
+                                    - 'copy': Copy optimizer state from source agent (advanced)
     """
     population_size: int = 10
     perturbation_interval: int = 5
@@ -102,6 +106,7 @@ class PBTConfig:
     metric_name: str = "mean_reward"
     metric_mode: str = "max"
     ready_percentage: float = 0.8
+    optimizer_exploit_strategy: str = "reset"
 
     def __post_init__(self) -> None:
         """Validate configuration."""
@@ -119,6 +124,10 @@ class PBTConfig:
             raise ValueError(f"metric_mode must be 'max' or 'min', got {self.metric_mode}")
         if not 0.0 < self.ready_percentage <= 1.0:
             raise ValueError(f"ready_percentage must be in (0, 1], got {self.ready_percentage}")
+        if self.optimizer_exploit_strategy not in ("reset", "copy"):
+            raise ValueError(
+                f"optimizer_exploit_strategy must be 'reset' or 'copy', got {self.optimizer_exploit_strategy}"
+            )
 
 
 @dataclass
@@ -251,9 +260,17 @@ class PBTScheduler:
 
         Returns:
             Tuple of (new_model_parameters, new_hyperparams, checkpoint_format)
-            - new_model_parameters: Full model parameters (includes VGS state) if exploitation occurred, None otherwise
+            - new_model_parameters: Full model parameters (includes VGS state and optimizer state)
+                                   if exploitation occurred, None otherwise
             - new_hyperparams: Updated hyperparameters
             - checkpoint_format: "v2_full_parameters", "v1_policy_only", or None
+
+        Note:
+            Optimizer state handling depends on config.optimizer_exploit_strategy:
+            - 'reset': Optimizer state is REMOVED from new_model_parameters
+                      (caller should reset optimizer)
+            - 'copy': Optimizer state is INCLUDED in new_model_parameters
+                     (caller should load optimizer state from checkpoint)
         """
         # Check if enough population members are ready
         ready_count = sum(1 for m in self.population if m.performance is not None)
@@ -292,13 +309,15 @@ class PBTScheduler:
 
                     if checkpoint_format == "v2_full_parameters":
                         has_vgs = "vgs_state" in new_parameters if isinstance(new_parameters, dict) else False
+                        has_optimizer = "optimizer_state" in new_parameters if isinstance(new_parameters, dict) else False
                         logger.info(
-                            f"Member {member.member_id}: Loaded v2 checkpoint with VGS state: {has_vgs}"
+                            f"Member {member.member_id}: Loaded v2 checkpoint "
+                            f"(VGS: {has_vgs}, Optimizer: {has_optimizer})"
                         )
                     else:
                         logger.warning(
                             f"Member {member.member_id}: Loaded v1 checkpoint (policy_only). "
-                            f"VGS state will NOT be transferred!"
+                            f"VGS state and optimizer state will NOT be transferred!"
                         )
                 else:
                     # Legacy format (v1): Direct policy state_dict
@@ -306,7 +325,30 @@ class PBTScheduler:
                     new_parameters = checkpoint
                     logger.warning(
                         f"Member {member.member_id}: Loaded legacy checkpoint format. "
-                        f"VGS state NOT included. Consider re-saving checkpoints."
+                        f"VGS state and optimizer state NOT included. Consider re-saving checkpoints."
+                    )
+
+                # Handle optimizer state based on strategy
+                if isinstance(new_parameters, dict) and "optimizer_state" in new_parameters:
+                    if self.config.optimizer_exploit_strategy == "reset":
+                        # Remove optimizer state - caller should reset optimizer
+                        new_parameters = dict(new_parameters)  # Make a copy
+                        new_parameters.pop("optimizer_state", None)
+                        logger.info(
+                            f"Member {member.member_id}: Optimizer state REMOVED (strategy=reset). "
+                            f"Optimizer will be reset after loading weights."
+                        )
+                    else:  # copy
+                        # Keep optimizer state - caller should load it
+                        logger.info(
+                            f"Member {member.member_id}: Optimizer state INCLUDED (strategy=copy). "
+                            f"Optimizer state will be copied from source agent."
+                        )
+                elif self.config.optimizer_exploit_strategy == "copy":
+                    logger.warning(
+                        f"Member {member.member_id}: Optimizer state NOT found in checkpoint "
+                        f"but strategy='copy'. Optimizer will be reset. "
+                        f"Consider using model.get_parameters(include_optimizer=True)."
                     )
 
                 # Copy hyperparameters from source
@@ -335,13 +377,14 @@ class PBTScheduler:
             performance: Performance metric value
             step: Current training step
             model_state_dict: DEPRECATED. Model state dict to save (for backward compatibility)
-            model_parameters: Full model parameters including VGS state (preferred).
+            model_parameters: Full model parameters including VGS state and optimizer state (preferred).
                              If not provided, falls back to model_state_dict.
+                             Should include optimizer_state if optimizer_exploit_strategy='copy'.
         """
         member.record_step(step, performance, member.hyperparams)
 
         # Save checkpoint if model state provided
-        # Prefer model_parameters (includes VGS state) over model_state_dict
+        # Prefer model_parameters (includes VGS state and optimizer state) over model_state_dict
         checkpoint_data = model_parameters if model_parameters is not None else model_state_dict
 
         if checkpoint_data is not None:
@@ -351,11 +394,15 @@ class PBTScheduler:
             )
 
             # Add metadata to distinguish checkpoint format
+            has_vgs = 'vgs_state' in checkpoint_data if isinstance(checkpoint_data, dict) else False
+            has_optimizer = 'optimizer_state' in checkpoint_data if isinstance(checkpoint_data, dict) else False
+
             checkpoint_to_save = {
                 "format_version": "v2_full_parameters" if model_parameters is not None else "v1_policy_only",
                 "data": checkpoint_data,
                 "step": step,
                 "performance": performance,
+                "has_optimizer_state": has_optimizer,
             }
 
             torch.save(checkpoint_to_save, checkpoint_path)
@@ -364,13 +411,13 @@ class PBTScheduler:
             if model_parameters is not None:
                 logger.debug(
                     f"Member {member.member_id} step {step}: Saved full model parameters "
-                    f"(includes VGS state: {'vgs_state' in model_parameters})"
+                    f"(VGS: {has_vgs}, Optimizer: {has_optimizer})"
                 )
             else:
                 logger.warning(
                     f"Member {member.member_id} step {step}: Saved legacy format (policy_only). "
-                    f"VGS state will NOT be preserved during exploitation. "
-                    f"Use model_parameters=model.get_parameters() instead."
+                    f"VGS state and optimizer state will NOT be preserved during exploitation. "
+                    f"Use model_parameters=model.get_parameters(include_optimizer=True) instead."
                 )
 
         logger.debug(

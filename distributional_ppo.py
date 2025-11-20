@@ -11029,6 +11029,53 @@ class DistributionalPPO(RecurrentPPO):
         integral_limit = self._kl_integral_limit()
         self._kl_err_int = float(np.clip(self._kl_err_int, -integral_limit, integral_limit))
 
+    def _serialize_optimizer_state(self) -> Optional[dict[str, Any]]:
+        """
+        Serialize optimizer state for save/load.
+
+        Returns optimizer state_dict if optimizer is initialized, None otherwise.
+        This allows proper restoration of optimizer momentum/velocity/EMA after model load.
+
+        Critical for PBT (Population-Based Training) to avoid optimizer state mismatch
+        after exploit operation.
+        """
+        if self.policy is None or not hasattr(self.policy, 'optimizer'):
+            return None
+
+        try:
+            return self.policy.optimizer.state_dict()
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to serialize optimizer state: {e}")
+            return None
+
+    def _restore_optimizer_state(self, state: Optional[Mapping[str, Any]]) -> None:
+        """
+        Restore optimizer state after load.
+
+        Args:
+            state: Optimizer state dict from checkpoint
+
+        Note:
+            This is critical for PBT to avoid optimizer state mismatch.
+            If state is None, optimizer will be reset (fresh state).
+        """
+        logger_inst = logging.getLogger(__name__)
+
+        if not isinstance(state, Mapping):
+            logger_inst.debug("_restore_optimizer_state: No optimizer state to restore (state is None or not a Mapping)")
+            return
+
+        if self.policy is None or not hasattr(self.policy, 'optimizer'):
+            logger_inst.warning("_restore_optimizer_state: Policy or optimizer not yet initialized, cannot restore state")
+            return
+
+        try:
+            self.policy.optimizer.load_state_dict(state)
+            logger_inst.info("_restore_optimizer_state: Optimizer state restored successfully")
+        except Exception as e:
+            logger_inst.warning(f"Failed to restore optimizer state: {e}")
+
     def _serialize_vgs_state(self) -> Optional[dict[str, Any]]:
         """
         Serialize VGS state for save/load.
@@ -11073,10 +11120,28 @@ class DistributionalPPO(RecurrentPPO):
             except Exception as e:
                 logger.warning(f"Failed to restore VGS state: {e}")
 
-    def get_parameters(self) -> dict[str, dict]:
+    def get_parameters(self, include_optimizer: bool = False) -> dict[str, dict]:
+        """
+        Get model parameters including policy, value networks, and optional optimizer state.
+
+        Args:
+            include_optimizer: If True, include optimizer state in the returned dict.
+                             Critical for PBT to avoid optimizer state mismatch after exploit.
+
+        Returns:
+            Dictionary with model parameters including:
+            - Policy and value network weights (from super().get_parameters())
+            - KL penalty state
+            - VGS state
+            - Optimizer state (if include_optimizer=True)
+        """
         params = super().get_parameters()
         params["kl_penalty_state"] = self._serialize_kl_penalty_state()
         params["vgs_state"] = self._serialize_vgs_state()
+
+        if include_optimizer:
+            params["optimizer_state"] = self._serialize_optimizer_state()
+
         return params
 
     def set_parameters(
@@ -11085,6 +11150,18 @@ class DistributionalPPO(RecurrentPPO):
         exact_match: bool = True,
         device: Union[torch.device, str] = "auto",
     ) -> None:
+        """
+        Set model parameters including policy, value networks, and optional optimizer state.
+
+        Args:
+            load_path_or_dict: Path to checkpoint or dictionary with parameters
+            exact_match: If True, require exact parameter match
+            device: Device to load parameters to
+
+        Note:
+            If parameters include "optimizer_state", it will be restored.
+            This is critical for PBT to avoid optimizer state mismatch after exploit.
+        """
         if isinstance(load_path_or_dict, Mapping):
             params: dict[str, Any] = dict(load_path_or_dict)
         else:
@@ -11097,9 +11174,12 @@ class DistributionalPPO(RecurrentPPO):
 
         kl_state = params.pop("kl_penalty_state", None)
         vgs_state = params.pop("vgs_state", None)
+        optimizer_state = params.pop("optimizer_state", None)
+
         super().set_parameters(params, exact_match=exact_match, device=device)
         self._restore_kl_penalty_state(kl_state)
         self._restore_vgs_state(vgs_state)
+        self._restore_optimizer_state(optimizer_state)
 
     def learn(
         self,
