@@ -229,7 +229,7 @@ class AdaptiveUPGD(torch.optim.Optimizer):
                 # Apply weight decay and update
                 p.data.mul_(1 - group["lr"] * group["weight_decay"]).add_(
                     perturbed_update,
-                    alpha=-2.0 * group["lr"],
+                    alpha=-1.0 * group["lr"],  # BUGFIX: Changed from -2.0 to -1.0
                 )
 
         return loss

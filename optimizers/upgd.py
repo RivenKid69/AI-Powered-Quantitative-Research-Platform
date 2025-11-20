@@ -148,10 +148,10 @@ class UPGD(torch.optim.Optimizer):
 
                 # Apply weight decay (L2 regularization)
                 # Update: param -= lr * (grad + noise) * (1 - scaled_utility) - lr * weight_decay * param
-                # Rearranged: param *= (1 - lr * weight_decay); param -= 2*lr * (grad + noise) * (1 - scaled_utility)
+                # Rearranged: param *= (1 - lr * weight_decay); param -= lr * (grad + noise) * (1 - scaled_utility)
                 p.data.mul_(1 - group["lr"] * group["weight_decay"]).add_(
                     (p.grad.data + noise) * (1 - scaled_utility),
-                    alpha=-2.0 * group["lr"],
+                    alpha=-1.0 * group["lr"],  # BUGFIX: Changed from -2.0 to -1.0
                 )
 
         return loss
