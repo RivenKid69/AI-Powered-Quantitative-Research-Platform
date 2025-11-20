@@ -7302,6 +7302,8 @@ class DistributionalPPO(RecurrentPPO):
                 actions, _, log_probs, self._last_lstm_states = self.policy.forward(
                     obs_tensor, self._last_lstm_states, episode_starts
                 )
+                # Cache value quantiles/logits from first critic for VF clipping
+                # (used in rollout buffer for distributional clipping)
                 if self._use_quantile_value:
                     value_quantiles = self.policy.last_value_quantiles
                 else:
@@ -7339,15 +7341,18 @@ class DistributionalPPO(RecurrentPPO):
                         )
                     old_log_prob_raw_tensor = log_probs
 
-            if self._use_quantile_value:
-                if value_quantiles is None:
-                    raise RuntimeError("Policy did not cache value quantiles during forward pass")
-                mean_values_norm = value_quantiles.mean(dim=1, keepdim=True).detach()
-            else:
+                # TWIN CRITICS FIX: Use predict_values to get min(Q1, Q2) for GAE computation
+                # This reduces overestimation bias in advantage estimation
+                # Note: We still cache value_quantiles/logits above for VF clipping purposes
+                mean_values_norm = self.policy.predict_values(
+                    obs_tensor, self._last_lstm_states, episode_starts
+                ).detach()
+
+            # Prepare probs for categorical critic (needed for VF clipping buffer)
+            if not self._use_quantile_value:
                 if value_logits is None:
                     raise RuntimeError("Policy did not cache value logits during forward pass")
                 probs = torch.softmax(value_logits, dim=1)
-                mean_values_norm = (probs * self.policy.atoms).sum(dim=1, keepdim=True).detach()
 
             if self.normalize_returns:
                 # НЕТ raw-clip: просто де-нормализация и переход в буферную шкалу
@@ -7558,24 +7563,11 @@ class DistributionalPPO(RecurrentPPO):
                 episode_starts = torch.as_tensor(
                     dones, dtype=torch.float32, device=self.device
                 )
-                _, _, _, _ = self.policy.forward(
+                # TWIN CRITICS FIX: Use predict_values to get min(Q1, Q2) for terminal bootstrap
+                # This ensures consistent bias reduction across all GAE computation steps
+                last_mean_norm = self.policy.predict_values(
                     obs_tensor, self._last_lstm_states, episode_starts
                 )
-                if self._use_quantile_value:
-                    last_value_quantiles = self.policy.last_value_quantiles
-                    if last_value_quantiles is None:
-                        raise RuntimeError(
-                            "Policy did not cache value quantiles during terminal forward pass"
-                        )
-                    last_mean_norm = last_value_quantiles.mean(dim=1)
-                else:
-                    last_value_logits = self.policy.last_value_logits
-                    if last_value_logits is None:
-                        raise RuntimeError(
-                            "Policy did not cache value logits during terminal forward pass"
-                        )
-                    last_probs = torch.softmax(last_value_logits, dim=1)
-                    last_mean_norm = (last_probs * self.policy.atoms).sum(dim=1)
         finally:
             if was_training:
                 self.policy.train()  # FIX: вернуть исходный режим
