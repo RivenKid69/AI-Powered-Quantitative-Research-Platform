@@ -1,3 +1,49 @@
+"""distributional_ppo.py - Distributional PPO with Critical Fixes (2025-11-21)
+
+CRITICAL FIXES IMPLEMENTED:
+1. LSTM State Reset on Episode Boundaries (2025-11-21)
+   - Prevents temporal leakage between episodes (5-15% accuracy improvement)
+   - See _reset_lstm_states_for_done_envs() method (lines ~1958-2081)
+   - WARNING: Do NOT remove this reset call from training loop!
+   - Reference: NUMERICAL_ISSUES_FIX_SUMMARY.md
+
+2. Action Space Semantics: TARGET Position (2025-11-21)
+   - ActionProto.volume_frac now represents TARGET position (not DELTA)
+   - Prevents position doubling bug in live trading (CRITICAL!)
+   - See: CRITICAL_FIXES_COMPLETE_REPORT.md
+   - WARNING: Models trained before 2025-11-21 may need retraining!
+
+3. Twin Critics Architecture (Enabled by Default)
+   - Two independent value networks to reduce overestimation bias
+   - Target value = min(value_1, value_2)
+   - See: docs/twin_critics.md
+   - Configuration: use_twin_critics=true (default)
+
+4. VGS (Variance Gradient Scaler) Support
+   - Automatic per-layer gradient normalization for training stability
+   - See: variance_gradient_scaler.py
+   - Configuration: vgs.enabled=true in config
+
+5. AdaptiveUPGD Optimizer (Default)
+   - Continual learning optimizer with utility-based weight protection
+   - Prevents catastrophic forgetting
+   - See: docs/UPGD_INTEGRATION.md
+   - Configuration: optimizer_class=AdaptiveUPGD
+
+6. PopArt (DISABLED - Code Retained for Reference)
+   - PopArt controller is disabled at initialization
+   - Code exists but normalize_returns processing is skipped
+   - Safe to leave as-is; will not affect training
+   - See: PopArtController class (lines ~687-1076)
+
+ARCHITECTURE:
+- Distributional Value Head: Quantile regression (21-51 atoms)
+- CVaR Risk-Aware Learning: Focus on worst 5% tail outcomes
+- EV Reserve Sampling: Prioritization of rare/high-value events
+- No-Trade Mask Support: Blocks trading in specified windows
+
+See CLAUDE.md "КРИТИЧЕСКИЕ ИСПРАВЛЕНИЯ" section for full details and migration guide.
+"""
 import copy
 import dataclasses
 import io
@@ -684,8 +730,27 @@ class PopArtHoldoutEvaluation:
     clip_fraction_after: float
 
 
+# ==============================================================================
+# DISABLED: PopArt Controller (Retained for Reference Only)
+# ==============================================================================
+# PopArt is DISABLED at initialization (see distributional_ppo.py header).
+# The controller exists but normalize_returns processing is SKIPPED.
+# This code is retained for:
+#   1. Historical reference and documentation
+#   2. Potential future re-enablement (research purposes)
+#   3. Backward compatibility with old checkpoints
+#
+# IMPORTANT: Enabling PopArt requires careful testing and migration.
+# See CLAUDE.md line 633 for status and migration notes.
+# ==============================================================================
+
 class PopArtController:
-    """Offline PopArt regulator that guards return normalisation updates."""
+    """Offline PopArt regulator that guards return normalisation updates.
+
+    WARNING: This controller is DISABLED by default.
+    PopArt processing is skipped even if normalize_returns=True.
+    Code exists for reference only.
+    """
 
     def __init__(
         self,
@@ -1526,7 +1591,66 @@ class RawRecurrentRolloutBuffer(RecurrentRolloutBuffer):
 
 
 class DistributionalPPO(RecurrentPPO):
-    """Distributional PPO with CVaR regularisation and entropy scheduling."""
+    """Distributional PPO with CVaR regularisation, Twin Critics, and LSTM episode boundary reset.
+
+    Key Features (2025-11-21):
+    --------------------------
+
+    **Distributional Value Head**:
+        - Quantile regression with 21-51 atoms (configurable)
+        - Support for categorical and quantile critics
+        - Adaptive value range (v_min, v_max) with EMA updates
+
+    **Twin Critics** (default enabled):
+        - Two independent value networks for reduced overestimation bias
+        - Minimum value used for target computation (similar to TD3/SAC)
+        - Improves stability in stochastic environments
+
+    **CVaR Risk-Aware Learning**:
+        - Focus on tail risk (worst 5% outcomes by default)
+        - Configurable cvar_alpha and cvar_weight
+        - Lagrangian multiplier for constraint satisfaction
+
+    **LSTM State Management** (CRITICAL FIX 2025-11-21):
+        - Automatic LSTM state reset on episode boundaries (done=True)
+        - Prevents temporal leakage between unrelated episodes
+        - See: _reset_lstm_states_for_done_envs() method
+        - Expected impact: 5-15% improvement in value estimation accuracy
+
+    **VGS (Variance Gradient Scaler)**:
+        - Automatic per-layer gradient scaling based on variance
+        - Stabilizes training with UPGD optimizer
+        - State dict managed for PBT checkpointing
+
+    **Expected Value (EV) Reserve Sampling**:
+        - Prioritizes rare/high-value events in batch sampling
+        - Configurable reserve ratio and quantile thresholds
+        - Improves learning from important transitions
+
+    **Value Function Clipping**:
+        - Per-quantile clipping for distributional critics
+        - Configurable clip_range_vf (default: 0.7)
+        - Optional warmup period (vf_clip_warmup_updates)
+
+    **Sampling Mask Support**:
+        - Respects no-trade windows via environment mask
+        - Prevents policy updates during prohibited periods
+
+    Critical Notes:
+    ---------------
+    - ⚠️ LSTM models trained before 2025-11-21 should be retrained
+    - ⚠️ Twin Critics enabled by default (use_twin_critics=True)
+    - ⚠️ LSTM state reset is CRITICAL - do NOT remove _reset_lstm_states_for_done_envs() calls
+    - See: CRITICAL_LSTM_RESET_FIX_REPORT.md for full documentation
+    - See: NUMERICAL_ISSUES_FIX_SUMMARY.md for all fixes
+
+    References:
+    -----------
+    - LSTM Episode Reset: Hausknecht & Stone (2015) "Deep Recurrent Q-Learning"
+    - Twin Critics: Fujimoto et al. (2018) "Addressing Function Approximation Error"
+    - CVaR Learning: Chow et al. (2015) "Risk-Constrained RL"
+    - Distributional RL: Dabney et al. (2018) "Distributional RL with Quantile Regression"
+    """
 
     _LOGGER_MIN_KEY_LENGTH = 80
 

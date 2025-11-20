@@ -279,8 +279,26 @@ def _cfg_get(cfg: Any, key: str, default: Any = None) -> Any:
     return default
 
 
+# ==============================================================================
+# DISABLED: PopArt Holdout Loader (Legacy Code Path)
+# ==============================================================================
+# This class is part of the DISABLED PopArt system.
+# PopArt holdout loaders are no longer used in training (see distributional_ppo.py line 5215).
+# Code retained for:
+#   1. Backward compatibility with old training configs
+#   2. Historical reference
+#
+# WARNING: Do NOT enable PopArt without reviewing CLAUDE.md line 633 and
+# running comprehensive tests. PopArt is disabled at initialization.
+# ==============================================================================
+
 class _PopArtHoldoutLoaderWrapper:
-    """Lazily loads or materialises PopArt holdout batches."""
+    """Lazily loads or materialises PopArt holdout batches.
+
+    WARNING: This class is part of the DISABLED PopArt system.
+    PopArt is disabled at initialization and this code path is unused.
+    Retained for backward compatibility with old configs.
+    """
 
     def __init__(
         self,

@@ -48,10 +48,32 @@ data:
 
 model:
   algo: "ppo"
+
+  # OPTIMIZER CONFIGURATION (AdaptiveUPGD - default for continual learning)
+  # See docs/UPGD_INTEGRATION.md for details
+  optimizer_class: AdaptiveUPGD  # Options: AdaptiveUPGD (recommended), UPGD, UPGDW
+  optimizer_kwargs:
+    lr: 1.0e-4                   # Learning rate (will be set from params.learning_rate if not specified)
+    weight_decay: 0.001          # L2 regularization coefficient
+    sigma: 0.001                 # CRITICAL: Gaussian noise std (tune to 0.0005-0.001 for VGS interaction)
+    beta_utility: 0.999          # EMA decay for utility tracking (forgetting prevention)
+    beta1: 0.9                   # First moment coefficient (AdaptiveUPGD only)
+    beta2: 0.999                 # Second moment coefficient (AdaptiveUPGD only)
+    adaptive_noise: false        # Enable adaptive noise scaling (set true if using VGS + UPGD)
+
+  # VARIANCE GRADIENT SCALER (VGS) - Automatic per-layer gradient normalization
+  # See variance_gradient_scaler.py for algorithm details
+  vgs:
+    enabled: true                # Enable VGS for training stability
+    accumulation_steps: 4        # Number of backward passes to accumulate gradient statistics
+    warmup_steps: 10             # Warmup updates before applying scaling
+    eps: 1.0e-6                  # Numerical stability epsilon
+    clip_threshold: 10.0         # Clip extreme scaling factors to prevent instability
+
   optimizer_lr_min: &default_min_lr 5.0e-6
   scheduler_min_lr: *default_min_lr
   params:
-    learning_rate: 1.0e-4              # осторожно повышаем шаг обучения
+    learning_rate: 1.0e-4              # Base learning rate (осторожно повышаем шаг обучения)
     gamma: 0.99
     gae_lambda: 0.95
     clip_range: 0.10                   # не душим обновления (0.1–0.2 норма)
@@ -129,11 +151,13 @@ model:
     bc_decay_steps: 800000
     bc_final_coef: 0.0
 
-    # Параметры головы ценности:
-    num_atoms: 21   # можно 1 (обычная ценность), 11 — компромисс; >51 обычно не нужно
-    v_min: -10.0    # нижняя граница поддержки ценности
-    v_max: 10.0     # верхняя граница (v_max > v_min)
-    v_range_ema_alpha: 0.005
+    # DISTRIBUTIONAL VALUE HEAD & TWIN CRITICS CONFIGURATION
+    # See docs/twin_critics.md for architecture details
+    use_twin_critics: true       # Enable Twin Critics (default: true, can omit)
+    num_atoms: 21                # Distributional critic: number of quantiles (1=standard, 11-51=distributional)
+    v_min: -10.0                 # Lower bound of value support
+    v_max: 10.0                  # Upper bound of value support (v_max > v_min)
+    v_range_ema_alpha: 0.005     # EMA alpha for adaptive v_min/v_max range adjustment
     value_scale:
       ema_beta: 0.9
       max_rel_step: 0.5
