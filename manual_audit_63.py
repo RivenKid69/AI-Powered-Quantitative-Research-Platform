@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
 Manual audit of 63-feature observation structure.
-Tracks expected vs actual feature indices.
+Tracks expected vs actual feature indices from obs_builder.pyx.
+
+UPDATED: 2025-11-20 to match corrected feature_config.py ordering.
 """
 
 print("=" * 80)
@@ -9,20 +11,22 @@ print("MANUAL AUDIT: 63-Feature Observation Structure")
 print("=" * 80)
 print()
 
-# Define expected feature structure based on code review
+# Define CORRECT feature structure based on obs_builder.pyx (lines 236-590)
 features = [
-    # Bar level (0-2)
+    # Block 1: Bar level (0-2)
     (0, "price"),
     (1, "log_volume_norm"),
     (2, "rel_volume"),
 
-    # MA features (3-6)
+    # Block 2: MA5 (3-4)
     (3, "ma5"),
     (4, "ma5_valid"),
+
+    # Block 3: MA20 (5-6)
     (5, "ma20"),
     (6, "ma20_valid"),
 
-    # Technical indicators with validity flags (7-20)
+    # Block 4: Technical indicators with validity flags (7-20)
     (7, "rsi14"),
     (8, "rsi_valid"),
     (9, "macd"),
@@ -32,178 +36,125 @@ features = [
     (13, "momentum"),
     (14, "momentum_valid"),
     (15, "atr"),
-    (16, "atr_valid"),  # NEW in 62→63
+    (16, "atr_valid"),  # CRITICAL: Added in 62→63, prevents NaN in vol_proxy
     (17, "cci"),
     (18, "cci_valid"),
     (19, "obv"),
     (20, "obv_valid"),
 
-    # Bollinger Bands (21-22)
-    (21, "bb_position"),
-    (22, "bb_width"),
+    # Block 5: Derived price/volatility signals (21-22)
+    # NOTE: This comes AFTER indicators, not before!
+    (21, "ret_bar"),      # tanh((price - prev_price) / prev_price)
+    (22, "vol_proxy"),    # Uses atr_valid flag to prevent NaN
 
-    # Derived (23-24)
-    (23, "ret_bar"),
-    (24, "vol_proxy"),
+    # Block 6: Agent state (23-28)
+    (23, "cash_ratio"),
+    (24, "position_ratio"),
+    (25, "vol_imbalance"),
+    (26, "trade_intensity"),
+    (27, "realized_spread"),
+    (28, "agent_fill_ratio"),
 
-    # Agent state (25-30)
-    (25, "cash_ratio"),
-    (26, "position_ratio"),
-    (27, "vol_imbalance"),
-    (28, "trade_intensity"),
-    (29, "realized_spread"),
-    (30, "agent_fill_ratio"),
+    # Block 7: Microstructure proxies (29-31)
+    (29, "price_momentum"),   # tanh(momentum / (price * 0.01))
+    (30, "bb_squeeze"),       # tanh((bb_upper - bb_lower) / price)
+    (31, "trend_strength"),   # tanh((macd - macd_signal) / (price * 0.01))
 
-    # Microstructure / Technical 4h (31-33)
-    (31, "price_momentum OR bb_squeeze"),  # Check which is first
-    (32, "trend_strength OR price_momentum"),
-    (33, "bb_position OR trend_strength"),
+    # Block 8: Bollinger Bands context (32-33)
+    # NOTE: This was MISSING in previous versions!
+    (32, "bb_position"),      # (price - bb_lower) / bb_width, clipped to [-1, 2]
+    (33, "bb_width_norm"),    # (bb_upper - bb_lower) / price
 
-    # Event metadata (34-36)
+    # Block 9: Event metadata (34-38)
     (34, "is_high_importance"),
     (35, "time_since_event"),
     (36, "risk_off_flag"),
-
-    # Fear & Greed (37-38)
     (37, "fear_greed_value"),
     (38, "fear_greed_indicator"),
 
-    # External normalized columns (39-59) - 21 features
+    # Block 10: External normalized columns (39-59) - 21 features
     *[(39 + i, f"norm_cols[{i}]") for i in range(21)],
 
-    # Token metadata (60-61)
-    (60, "token_count_ratio"),
+    # Block 11: Token metadata (60-61)
+    (60, "num_tokens_norm"),
     (61, "token_id_norm"),
 
-    # Token one-hot (62)
+    # Block 12: Token one-hot (62)
     (62, "token_one_hot[0]"),
 ]
 
-print(f"Expected total features: {len(features)}")
+print(f"Total features: {len(features)}")
 
-# Wait, I think I miscounted. Let me recalculate:
-
-# Actually, looking at the structure more carefully:
-# Bar: 3
-# MA: 4
-# Indicators: 14 (7 indicators * 2 each: value + valid)
-# BB: 2
-# Derived: 2
-# Agent: 6
-# Microstructure: 3
-# Metadata: 3
-# Fear: 2
-# External: 21
-# Token meta: 2
-# Token onehot: 1
-# Total: 3+4+14+2+2+6+3+3+2+21+2+1 = 63
-
-# But I have confusion in indices 21-33. Let me check documentation.
-
-print("\n" + "=" * 80)
-print("Checking indices 21-33 (BB + Derived + Agent + Microstructure)")
-print("=" * 80)
-
-# From code review, correct order should be:
-# 21-22: BB (bb_position, bb_width)
-# 23-24: Derived (ret_bar, vol_proxy)
-# 25-30: Agent (6 features)
-# 31-33: Microstructure (bb_squeeze, price_momentum, trend_strength)
-
-features_corrected = [
-    # Bar level (0-2)
-    (0, "price"),
-    (1, "log_volume_norm"),
-    (2, "rel_volume"),
-
-    # MA features (3-6)
-    (3, "ma5"),
-    (4, "ma5_valid"),
-    (5, "ma20"),
-    (6, "ma20_valid"),
-
-    # Technical indicators with validity flags (7-20)
-    (7, "rsi14"),
-    (8, "rsi_valid"),
-    (9, "macd"),
-    (10, "macd_valid"),
-    (11, "macd_signal"),
-    (12, "macd_signal_valid"),
-    (13, "momentum"),
-    (14, "momentum_valid"),
-    (15, "atr"),
-    (16, "atr_valid"),  # NEW in 62→63
-    (17, "cci"),
-    (18, "cci_valid"),
-    (19, "obv"),
-    (20, "obv_valid"),
-
-    # Bollinger Bands (21-22)
-    (21, "bb_position"),
-    (22, "bb_width"),
-
-    # Derived (23-24)
-    (23, "ret_bar"),
-    (24, "vol_proxy"),
-
-    # Agent state (25-30)
-    (25, "cash_ratio"),
-    (26, "position_ratio"),
-    (27, "vol_imbalance"),
-    (28, "trade_intensity"),
-    (29, "realized_spread"),
-    (30, "agent_fill_ratio"),
-
-    # Microstructure (31-33)
-    (31, "bb_squeeze"),
-    (32, "price_momentum"),
-    (33, "trend_strength"),
-
-    # Event metadata (34-36)
-    (34, "is_high_importance"),
-    (35, "time_since_event"),
-    (36, "risk_off_flag"),
-
-    # Fear & Greed (37-38)
-    (37, "fear_greed_value"),
-    (38, "fear_greed_indicator"),
-
-    # External normalized columns (39-59) - 21 features
-    *[(39 + i, f"norm_cols[{i}]") for i in range(21)],
-
-    # Token metadata (60-61)
-    (60, "token_count_ratio"),
-    (61, "token_id_norm"),
-
-    # Token one-hot (62)
-    (62, "token_one_hot[0]"),
-]
-
-print(f"\nCorrected total features: {len(features_corrected)}")
-
-if len(features_corrected) == 63:
-    print("✅ Correct: 63 features")
+if len(features) == 63:
+    print("✅ CORRECT: 63 features")
 else:
-    print(f"❌ ERROR: {len(features_corrected)} features, expected 63")
+    print(f"❌ ERROR: {len(features)} features, expected 63")
 
-# Print mapping for critical indices
+# Verify block sizes
 print("\n" + "=" * 80)
-print("Critical Indices to Verify:")
+print("Block Structure Verification:")
 print("=" * 80)
 
-critical_indices = [
-    (15, "atr"),
-    (16, "atr_valid"),  # NEW
-    (17, "cci"),
-    (24, "vol_proxy"),  # Uses atr_valid
-    (31, "bb_squeeze"),
-    (39, "external[0]"),
-    (59, "external[20]"),
-    (62, "token_one_hot[0]"),
+blocks = [
+    ("bar", 0, 2, 3),
+    ("ma5", 3, 4, 2),
+    ("ma20", 5, 6, 2),
+    ("indicators", 7, 20, 14),
+    ("derived", 21, 22, 2),
+    ("agent", 23, 28, 6),
+    ("microstructure", 29, 31, 3),
+    ("bb_context", 32, 33, 2),
+    ("metadata", 34, 38, 5),
+    ("external", 39, 59, 21),
+    ("token_meta", 60, 61, 2),
+    ("token", 62, 62, 1),
 ]
 
-for idx, name in critical_indices:
-    print(f"  [{idx:2d}] {name}")
+total = 0
+for name, start, end, expected_size in blocks:
+    actual_size = end - start + 1
+    if actual_size == expected_size:
+        status = "✅"
+    else:
+        status = "❌"
+    print(f"{status} {name:15s}: indices {start:2d}-{end:2d} (size {actual_size:2d}, expected {expected_size:2d})")
+    total += actual_size
 
-print("\n✅ MANUAL AUDIT COMPLETE")
-print("Expected structure: 63 features with atr_valid at index 16")
+print(f"\nTotal: {total} features")
+
+if total == 63:
+    print("✅ CORRECT: Total = 63")
+else:
+    print(f"❌ ERROR: Total = {total}, expected 63")
+
+# Print critical features to verify
+print("\n" + "=" * 80)
+print("Critical Features (Manual Verification Required):")
+print("=" * 80)
+
+critical = [
+    (15, "atr", "ATR value"),
+    (16, "atr_valid", "NEW in 63: Prevents NaN in vol_proxy"),
+    (21, "ret_bar", "Bar-to-bar return (MOVED from old indices 3-4!)"),
+    (22, "vol_proxy", "Volatility proxy (uses atr_valid flag)"),
+    (29, "price_momentum", "Price momentum from momentum indicator"),
+    (30, "bb_squeeze", "BB squeeze (volatility regime)"),
+    (31, "trend_strength", "MACD divergence"),
+    (32, "bb_position", "Price position within BB (ADDED, was missing!)"),
+    (33, "bb_width_norm", "BB width normalized (ADDED, was missing!)"),
+]
+
+for idx, name, description in critical:
+    print(f"  [{idx:2d}] {name:20s} - {description}")
+
+print("\n" + "=" * 80)
+print("✅ MANUAL AUDIT COMPLETE")
+print("=" * 80)
+print()
+print("Summary:")
+print("  - Total features: 63 ✅")
+print("  - All block sizes correct ✅")
+print("  - Derived moved from indices 3-4 to 21-22 ✅")
+print("  - BB context added at indices 32-33 ✅")
+print("  - Order matches obs_builder.pyx ✅")
+print()

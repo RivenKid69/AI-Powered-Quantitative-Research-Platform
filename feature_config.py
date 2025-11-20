@@ -18,8 +18,11 @@ def make_layout(obs_params=None):
     ext_dim = obs_params.get('ext_norm_dim', EXT_NORM_DIM)
     include_fear = obs_params.get('include_fear_greed', obs_params.get('use_dynamic_risk', False))
     # Define feature blocks
+    # IMPORTANT: This order MUST match obs_builder.pyx build_observation_vector_c() implementation!
+    # See obs_builder.pyx:236-590 for the exact order of feature construction.
     layout = []
-    # Bar-level features block
+
+    # Block 1: Bar-level features (indices 0-2)
     layout.append({
         "name": "bar",
         "size": 3,
@@ -27,9 +30,50 @@ def make_layout(obs_params=None):
         "clip": None,
         "scale": 1.0,
         "bias": 0.0,
-        "source": "bars"
+        "source": "bars",
+        "description": "price, log_volume_norm, rel_volume"
     })
-    # Derived features block (4h return and volatility proxy for 4h timeframe)
+
+    # Block 2: MA5 (indices 3-4)
+    layout.append({
+        "name": "ma5",
+        "size": 2,
+        "dtype": "float32",
+        "clip": None,
+        "scale": 1.0,
+        "bias": 0.0,
+        "source": "indicators",
+        "description": "ma5, is_ma5_valid"
+    })
+
+    # Block 3: MA20 (indices 5-6)
+    layout.append({
+        "name": "ma20",
+        "size": 2,
+        "dtype": "float32",
+        "clip": None,
+        "scale": 1.0,
+        "bias": 0.0,
+        "source": "indicators",
+        "description": "ma20, is_ma20_valid"
+    })
+
+    # Block 4: Technical indicators with validity flags (indices 7-20)
+    # Includes: rsi14, macd, macd_signal, momentum, atr, cci, obv + validity flags
+    # Total: 7 indicators × 2 (value + flag) = 14 features
+    layout.append({
+        "name": "indicators",
+        "size": 14,
+        "dtype": "float32",
+        "clip": None,
+        "scale": 1.0,
+        "bias": 0.0,
+        "source": "indicators",
+        "description": "rsi14, macd, macd_signal, momentum, atr, cci, obv (each with validity flag)"
+    })
+
+    # Block 5: Derived price/volatility signals (indices 21-22)
+    # NOTE: This comes AFTER indicators, not before! (Fixed from previous incorrect ordering)
     layout.append({
         "name": "derived",
         "size": 2,
@@ -37,35 +81,11 @@ def make_layout(obs_params=None):
         "clip": DEFAULT_TANH_CLIP,
         "scale": 1.0,
         "bias": 0.0,
-        "source": "derived"
+        "source": "derived",
+        "description": "ret_bar (bar-to-bar return), vol_proxy (volatility proxy from ATR)"
     })
-    # Technical indicators block
-    # Includes: MA features (4) + Indicators with validity flags (14) + Bollinger Bands (2)
-    # Size 20 = MA5 (2) + MA20 (2) + [rsi14, is_rsi_valid, macd, is_macd_valid,
-    #            macd_signal, is_macd_signal_valid, momentum, is_momentum_valid,
-    #            atr, is_atr_valid, cci, is_cci_valid, obv, is_obv_valid] (14) + BB (2)
-    # Changed from 13 to 19 (56→62): added 6 validity flags for rsi, macd, macd_signal, momentum, cci, obv
-    # Changed from 19 to 20 (62→63): added 1 validity flag for atr (critical for vol_proxy NaN prevention)
-    layout.append({
-        "name": "indicators",
-        "size": 20,  # was 13, then 19, now 20 (added 7 validity flags total)
-        "dtype": "float32",
-        "clip": None,
-        "scale": 1.0,
-        "bias": 0.0,
-        "source": "indicators"
-    })
-    # Microstructure proxies block
-    layout.append({
-        "name": "microstructure",
-        "size": 3,
-        "dtype": "float32",
-        "clip": DEFAULT_TANH_CLIP,
-        "scale": 1.0,
-        "bias": 0.0,
-        "source": "micro"
-    })
-    # Agent state features block
+
+    # Block 6: Agent state features (indices 23-28)
     layout.append({
         "name": "agent",
         "size": 6,
@@ -73,19 +93,45 @@ def make_layout(obs_params=None):
         "clip": DEFAULT_TANH_CLIP,
         "scale": 1.0,
         "bias": 0.0,
-        "source": "agent"
+        "source": "agent",
+        "description": "cash_ratio, position_ratio, vol_imbalance, trade_intensity, realized_spread, fill_ratio"
     })
-    # Metadata block (is_high_importance, time_since_event, risk_off_flag, fear_greed_value, fear_greed_indicator)
-    # Always 5 features to match obs_builder implementation
-    meta_size = 5
+
+    # Block 7: Microstructure proxies (indices 29-31)
     layout.append({
-        "name": "metadata",
-        "size": meta_size,
+        "name": "microstructure",
+        "size": 3,
         "dtype": "float32",
         "clip": DEFAULT_TANH_CLIP,
         "scale": 1.0,
         "bias": 0.0,
-        "source": "meta"
+        "source": "micro",
+        "description": "price_momentum, bb_squeeze, trend_strength (MACD divergence)"
+    })
+
+    # Block 8: Bollinger Bands context (indices 32-33)
+    # NOTE: This was missing from previous versions!
+    layout.append({
+        "name": "bb_context",
+        "size": 2,
+        "dtype": "float32",
+        "clip": None,
+        "scale": 1.0,
+        "bias": 0.0,
+        "source": "indicators",
+        "description": "bb_position (price within bands), bb_width_norm (band width normalized)"
+    })
+
+    # Block 9: Event metadata (indices 34-38)
+    layout.append({
+        "name": "metadata",
+        "size": 5,
+        "dtype": "float32",
+        "clip": DEFAULT_TANH_CLIP,
+        "scale": 1.0,
+        "bias": 0.0,
+        "source": "meta",
+        "description": "is_high_importance, time_since_event, risk_off_flag, fear_greed_value, fear_greed_indicator"
     })
     # External normalized columns block (if any)
     if ext_dim and ext_dim > 0:

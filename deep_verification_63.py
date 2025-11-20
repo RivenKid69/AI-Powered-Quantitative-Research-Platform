@@ -131,17 +131,48 @@ try:
         print_fail(f"Layout sum = {total}, expected 63!")
         errors.append(f"Wrong layout sum: {total}")
 
-    # Check indicators block size
+    # Check indicators-related blocks (ma5 + ma20 + indicators + bb_context = 2+2+14+2 = 20 total)
+    ma5_block = next((b for b in FEATURES_LAYOUT if b['name'] == 'ma5'), None)
+    ma20_block = next((b for b in FEATURES_LAYOUT if b['name'] == 'ma20'), None)
     indicators_block = next((b for b in FEATURES_LAYOUT if b['name'] == 'indicators'), None)
-    if indicators_block:
-        if indicators_block['size'] == 20:
-            print_pass(f"Indicators block size = {indicators_block['size']} ✓")
-        else:
-            print_fail(f"Indicators block size = {indicators_block['size']}, expected 20!")
-            errors.append(f"Wrong indicators size: {indicators_block['size']}")
+    bb_context_block = next((b for b in FEATURES_LAYOUT if b['name'] == 'bb_context'), None)
+
+    if ma5_block and ma5_block['size'] == 2:
+        print_pass(f"MA5 block size = {ma5_block['size']}")
     else:
-        print_fail("Indicators block not found!")
-        errors.append("Missing indicators block")
+        print_fail("MA5 block not found or wrong size!")
+        errors.append("MA5 block issue")
+
+    if ma20_block and ma20_block['size'] == 2:
+        print_pass(f"MA20 block size = {ma20_block['size']}")
+    else:
+        print_fail("MA20 block not found or wrong size!")
+        errors.append("MA20 block issue")
+
+    if indicators_block and indicators_block['size'] == 14:
+        print_pass(f"Indicators block size = {indicators_block['size']}")
+    else:
+        print_fail(f"Indicators block not found or wrong size (expected 14)!")
+        errors.append("Indicators block issue")
+
+    if bb_context_block and bb_context_block['size'] == 2:
+        print_pass(f"BB context block size = {bb_context_block['size']}")
+    else:
+        print_fail("BB context block not found or wrong size!")
+        errors.append("BB context block issue")
+
+    # Total indicators-related features should be 20
+    total_indicator_features = 0
+    if ma5_block: total_indicator_features += ma5_block['size']
+    if ma20_block: total_indicator_features += ma20_block['size']
+    if indicators_block: total_indicator_features += indicators_block['size']
+    if bb_context_block: total_indicator_features += bb_context_block['size']
+
+    if total_indicator_features == 20:
+        print_pass(f"Total indicator-related features = {total_indicator_features}")
+    else:
+        print_fail(f"Total indicator-related features = {total_indicator_features}, expected 20!")
+        errors.append(f"Wrong total indicator features: {total_indicator_features}")
 
 except Exception as e:
     print_fail(f"Error loading feature_config: {e}")

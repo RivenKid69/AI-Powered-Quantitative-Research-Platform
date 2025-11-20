@@ -20,25 +20,29 @@ def test_ext_norm_dim_is_21():
     assert EXT_NORM_DIM == 21, f"Expected EXT_NORM_DIM=21, got {EXT_NORM_DIM}"
 
 
-def test_n_features_is_62():
-    """Проверка что N_FEATURES = 62 (было 63, добавили 6 validity flags)"""
+def test_n_features_is_63():
+    """Проверка что N_FEATURES = 63 (было 62, добавили ATR validity flag)"""
     # make_layout должен был вызваться при импорте
     from feature_config import N_FEATURES as computed_features
-    assert computed_features == 62, f"Expected N_FEATURES=62, got {computed_features}"
+    assert computed_features == 63, f"Expected N_FEATURES=63, got {computed_features}"
 
 
 def test_feature_layout_sum():
-    """Проверка что сумма всех блоков = 62"""
+    """Проверка что сумма всех блоков = 63"""
     from feature_config import FEATURES_LAYOUT
 
+    # Updated for corrected block structure (2025-11-20)
     expected_sizes = {
         "bar": 3,
-        "derived": 2,
-        "indicators": 19,  # было 13, добавили 6 validity flags
-        "microstructure": 3,
+        "ma5": 2,           # Split from old indicators (20)
+        "ma20": 2,          # Split from old indicators (20)
+        "indicators": 14,   # Split from old indicators (20): 7 indicators × 2 (value + flag)
+        "derived": 2,       # Moved from indices 3-4 to 21-22
         "agent": 6,
+        "microstructure": 3,
+        "bb_context": 2,    # Added (was missing!)
         "metadata": 5,
-        "external": 21,  # было 16, стало 21
+        "external": 21,     # было 16, стало 21
         "token_meta": 2,
         "token": 1,
     }
@@ -52,7 +56,7 @@ def test_feature_layout_sum():
                 f"Block '{name}' has size {size}, expected {expected_sizes[name]}"
         total += size
 
-    assert total == 62, f"Total features = {total}, expected 62"
+    assert total == 63, f"Total features = {total}, expected 63"
 
 
 def test_mediator_extract_norm_cols_size():

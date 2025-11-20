@@ -125,11 +125,18 @@ def check_feature_config():
     with open(config_path, 'r') as f:
         content = f.read()
 
-    # Check indicators block size
-    if '"indicators"' in content and '"size": 20' in content:
-        print("✅ Indicators block size = 20 (correct for 63 features)")
+    # Check indicators-related blocks (ma5 + ma20 + indicators + bb_context = 2+2+14+2 = 20 total)
+    # NOTE: Structure was updated to split the old "indicators (20)" block into granular blocks
+    has_ma5 = '"ma5"' in content and '"size": 2' in content
+    has_ma20 = '"ma20"' in content and '"size": 2' in content
+    has_indicators = '"indicators"' in content and '"size": 14' in content
+    has_bb_context = '"bb_context"' in content and '"size": 2' in content
+
+    if has_ma5 and has_ma20 and has_indicators and has_bb_context:
+        print("OK: Indicators structure = ma5(2) + ma20(2) + indicators(14) + bb_context(2) = 20")
     else:
-        print("❌ ERROR: Indicators block size not found or incorrect")
+        print("ERROR: Indicators structure not found or incorrect")
+        print(f"  ma5: {has_ma5}, ma20: {has_ma20}, indicators: {has_indicators}, bb_context: {has_bb_context}")
         return False
 
     # Compute total from layout
