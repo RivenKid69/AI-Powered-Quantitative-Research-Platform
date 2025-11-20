@@ -511,10 +511,11 @@ class TestPBTScheduler:
         # Most members have no performance yet
         scheduler.population[0].performance = 0.5
 
-        new_state, new_hyperparams = scheduler.exploit_and_explore(member)
+        new_state, new_hyperparams, checkpoint_format = scheduler.exploit_and_explore(member)
 
         # Should skip exploitation
         assert new_state is None
+        assert checkpoint_format is None
 
     def test_exploit_and_explore_ready(self, scheduler):
         """Test exploit_and_explore when population ready."""
@@ -533,10 +534,15 @@ class TestPBTScheduler:
 
         # Test with worst performer
         worst_member = scheduler.population[0]
-        new_state, new_hyperparams = scheduler.exploit_and_explore(worst_member)
+        new_state, new_hyperparams, checkpoint_format = scheduler.exploit_and_explore(worst_member)
 
-        # Should have new hyperparams from exploration
+        # Note: Exploitation may or may not occur depending on population size and truncation_ratio
+        # Main test: method returns correct tuple (3 values) and doesn't crash
+        # Should have new hyperparams from exploration (always happens)
         assert new_hyperparams is not None
+        # If exploitation occurred, checkpoint_format should be v1_policy_only
+        if new_state is not None:
+            assert checkpoint_format == "v1_policy_only"
 
     def test_get_stats(self, scheduler):
         """Test getting PBT statistics."""

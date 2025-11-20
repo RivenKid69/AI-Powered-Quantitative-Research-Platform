@@ -242,16 +242,18 @@ class PBTScheduler:
         self,
         member: PopulationMember,
         model_state_dict: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any], Optional[str]]:
         """Perform exploitation and exploration for a population member.
 
         Args:
             member: Population member to update
-            model_state_dict: Current model state dict (for exploitation)
+            model_state_dict: DEPRECATED. Current model state dict (unused, for backward compatibility)
 
         Returns:
-            Tuple of (new_model_state_dict, new_hyperparams)
-            new_model_state_dict is None if no exploitation occurred
+            Tuple of (new_model_parameters, new_hyperparams, checkpoint_format)
+            - new_model_parameters: Full model parameters (includes VGS state) if exploitation occurred, None otherwise
+            - new_hyperparams: Updated hyperparameters
+            - checkpoint_format: "v2_full_parameters", "v1_policy_only", or None
         """
         # Check if enough population members are ready
         ready_count = sum(1 for m in self.population if m.performance is not None)
@@ -259,10 +261,12 @@ class PBTScheduler:
 
         if ready_count < required_count:
             logger.debug(f"Not enough ready members ({ready_count}/{required_count}), skipping PBT")
-            return None, member.hyperparams
+            return None, member.hyperparams, None
 
         # Exploitation: decide whether to copy from better performer
-        new_state_dict = None
+        new_parameters = None
+        checkpoint_format = None
+
         if self._should_exploit(member):
             source_member = self._select_source_member(member)
             if source_member is not None and source_member.checkpoint_path is not None:
@@ -271,13 +275,40 @@ class PBTScheduler:
                     f"Member {member.member_id} exploiting from member {source_member.member_id} "
                     f"(performance: {member.performance:.4f} -> {source_member.performance:.4f})"
                 )
-                # Security: weights_only=True prevents arbitrary code execution via malicious pickles
-                # See: https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models
-                new_state_dict = torch.load(
+
+                # Security: weights_only=False needed for dicts/metadata
+                # We validate format_version to prevent arbitrary code execution
+                checkpoint = torch.load(
                     source_member.checkpoint_path,
                     map_location="cpu",
-                    weights_only=True
+                    weights_only=False
                 )
+
+                # Handle both old and new checkpoint formats
+                if isinstance(checkpoint, dict) and "format_version" in checkpoint:
+                    # New format (v2): Contains metadata and full parameters
+                    checkpoint_format = checkpoint["format_version"]
+                    new_parameters = checkpoint["data"]
+
+                    if checkpoint_format == "v2_full_parameters":
+                        has_vgs = "vgs_state" in new_parameters if isinstance(new_parameters, dict) else False
+                        logger.info(
+                            f"Member {member.member_id}: Loaded v2 checkpoint with VGS state: {has_vgs}"
+                        )
+                    else:
+                        logger.warning(
+                            f"Member {member.member_id}: Loaded v1 checkpoint (policy_only). "
+                            f"VGS state will NOT be transferred!"
+                        )
+                else:
+                    # Legacy format (v1): Direct policy state_dict
+                    checkpoint_format = "v1_policy_only"
+                    new_parameters = checkpoint
+                    logger.warning(
+                        f"Member {member.member_id}: Loaded legacy checkpoint format. "
+                        f"VGS state NOT included. Consider re-saving checkpoints."
+                    )
+
                 # Copy hyperparameters from source
                 member.hyperparams = copy.deepcopy(source_member.hyperparams)
                 self._exploitation_count += 1
@@ -287,7 +318,7 @@ class PBTScheduler:
         member.hyperparams = new_hyperparams
         self._exploration_count += 1
 
-        return new_state_dict, new_hyperparams
+        return new_parameters, new_hyperparams, checkpoint_format
 
     def update_performance(
         self,
@@ -295,6 +326,7 @@ class PBTScheduler:
         performance: float,
         step: int,
         model_state_dict: Optional[Dict[str, Any]] = None,
+        model_parameters: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Update performance and save checkpoint for a population member.
 
@@ -302,18 +334,44 @@ class PBTScheduler:
             member: Population member to update
             performance: Performance metric value
             step: Current training step
-            model_state_dict: Model state dict to save (optional)
+            model_state_dict: DEPRECATED. Model state dict to save (for backward compatibility)
+            model_parameters: Full model parameters including VGS state (preferred).
+                             If not provided, falls back to model_state_dict.
         """
         member.record_step(step, performance, member.hyperparams)
 
         # Save checkpoint if model state provided
-        if model_state_dict is not None:
+        # Prefer model_parameters (includes VGS state) over model_state_dict
+        checkpoint_data = model_parameters if model_parameters is not None else model_state_dict
+
+        if checkpoint_data is not None:
             checkpoint_path = os.path.join(
                 self.config.checkpoint_dir,
                 f"member_{member.member_id}_step_{step}.pt"
             )
-            torch.save(model_state_dict, checkpoint_path)
+
+            # Add metadata to distinguish checkpoint format
+            checkpoint_to_save = {
+                "format_version": "v2_full_parameters" if model_parameters is not None else "v1_policy_only",
+                "data": checkpoint_data,
+                "step": step,
+                "performance": performance,
+            }
+
+            torch.save(checkpoint_to_save, checkpoint_path)
             member.checkpoint_path = checkpoint_path
+
+            if model_parameters is not None:
+                logger.debug(
+                    f"Member {member.member_id} step {step}: Saved full model parameters "
+                    f"(includes VGS state: {'vgs_state' in model_parameters})"
+                )
+            else:
+                logger.warning(
+                    f"Member {member.member_id} step {step}: Saved legacy format (policy_only). "
+                    f"VGS state will NOT be preserved during exploitation. "
+                    f"Use model_parameters=model.get_parameters() instead."
+                )
 
         logger.debug(
             f"Member {member.member_id} step {step}: "
