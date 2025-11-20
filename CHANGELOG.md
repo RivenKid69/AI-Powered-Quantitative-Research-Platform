@@ -34,6 +34,15 @@
   emit `DeprecationWarning`. See the migration guide for details.
 
 ### Fixed
+- **Bug #9: VGS parameter tracking after model load** - Fixed critical issue where VGS
+  (Variance Gradient Scaler) tracked stale parameter copies instead of actual policy
+  parameters after `model.load()`, causing gradient scaling to have no effect on training
+  after checkpoint restoration.
+  - Root cause: VGS pickled parameter references that became stale after unpickling
+  - Solution: Exclude `_parameters` from pickle state and relink via `update_parameters()`
+    after load
+  - Files modified: `variance_gradient_scaler.py`, `distributional_ppo.py`
+  - Impact: Critical for production use of checkpointing with VGS enabled
 - Ensured the explained-variance reserve path preserves training masks by
   default so no-trade windows and other zero-weight samples no longer depress
   EV metrics.

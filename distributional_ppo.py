@@ -6125,35 +6125,51 @@ class DistributionalPPO(RecurrentPPO):
         # 3. Setup VGS
         vgs_enabled = getattr(self, "_vgs_enabled", False)
         if vgs_enabled:
+            # Get VGS hyperparameters
             vgs_beta = getattr(self, "_vgs_beta", 0.99)
             vgs_alpha = getattr(self, "_vgs_alpha", 0.1)
             vgs_warmup_steps = getattr(self, "_vgs_warmup_steps", 100)
 
-            self._variance_gradient_scaler = VarianceGradientScaler(
-                parameters=self.policy.parameters(),
-                enabled=True,
-                beta=vgs_beta,
-                alpha=vgs_alpha,
-                warmup_steps=vgs_warmup_steps,
-                logger=self.logger,
-            )
+            # FIX Bug #9: Skip VGS setup if policy doesn't exist yet
+            # This can happen during unpickling when __init__ is called before policy is created
+            if not hasattr(self, "policy") or self.policy is None:
+                logger.info("VGS setup skipped - policy not yet available (will be setup after load)")
+                self._variance_gradient_scaler = None
+                # FIX Bug #9: Do NOT mark setup as complete if VGS wasn't created
+                # This ensures _setup_dependent_components() will be called again after load
+                return
+            else:
+                # FIX Bug #9: Always create fresh VGS to avoid stale parameter references
+                # Old VGS (if unpickled) will have stale _parameters from before save
+                self._variance_gradient_scaler = VarianceGradientScaler(
+                    parameters=self.policy.parameters(),
+                    enabled=True,
+                    beta=vgs_beta,
+                    alpha=vgs_alpha,
+                    warmup_steps=vgs_warmup_steps,
+                    logger=self.logger,
+                )
 
-            # Restore VGS state if available
-            vgs_saved_state = getattr(self, "_vgs_saved_state_for_restore", None)
-            if vgs_saved_state is not None:
-                try:
-                    self._variance_gradient_scaler.load_state_dict(vgs_saved_state)
-                except Exception as e:
-                    logger.warning(f"Failed to restore VGS state: {e}")
-                delattr(self, "_vgs_saved_state_for_restore")
+                # Restore VGS state if available
+                vgs_saved_state = getattr(self, "_vgs_saved_state_for_restore", None)
+                if vgs_saved_state is not None:
+                    try:
+                        self._variance_gradient_scaler.load_state_dict(vgs_saved_state)
+                    except Exception as e:
+                        logger.warning(f"Failed to restore VGS state: {e}")
+                    delattr(self, "_vgs_saved_state_for_restore")
 
-            # Update VGS parameters after policy optimizer may have been recreated
-            self._variance_gradient_scaler.update_parameters(self.policy.parameters())
+                # FIX Bug #9: CRITICAL - Update parameters to ensure VGS tracks current policy params
+                # This is essential after load because:
+                # 1. VGS.__init__ gets parameters via generator which creates a list snapshot
+                # 2. After load, policy may have been updated via load_state_dict
+                # 3. We must relink VGS to the CURRENT policy parameter objects
+                self._variance_gradient_scaler.update_parameters(self.policy.parameters())
 
-            self.logger.record("config/vgs_enabled", float(vgs_enabled))
-            self.logger.record("config/vgs_beta", float(vgs_beta))
-            self.logger.record("config/vgs_alpha", float(vgs_alpha))
-            self.logger.record("config/vgs_warmup_steps", float(vgs_warmup_steps))
+                self.logger.record("config/vgs_enabled", float(vgs_enabled))
+                self.logger.record("config/vgs_beta", float(vgs_beta))
+                self.logger.record("config/vgs_alpha", float(vgs_alpha))
+                self.logger.record("config/vgs_warmup_steps", float(vgs_warmup_steps))
         else:
             self._variance_gradient_scaler = None
 
@@ -11098,6 +11114,11 @@ class DistributionalPPO(RecurrentPPO):
             **kwargs,
         )
         if isinstance(model, DistributionalPPO):
+            # FIX Bug #9: Reset _setup_complete to force re-initialization of VGS with correct parameters
+            # During super().load(), __init__ may have been called and set _setup_complete=True
+            # but VGS was skipped because policy didn't exist yet. We need to ensure VGS is
+            # properly initialized with the loaded policy parameters.
+            model._setup_complete = False
             # FIX Bug #8: Phase 2 of two-phase initialization
             # Setup components that depend on self.policy (optimizer, VGS, etc.)
             if hasattr(model, "_setup_dependent_components"):

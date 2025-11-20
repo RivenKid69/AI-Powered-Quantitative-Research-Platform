@@ -321,18 +321,31 @@ class VarianceGradientScaler:
         self._param_stats.clear()
 
     def __getstate__(self) -> dict:
-        """Custom pickle handler to exclude unpicklable logger (Bug #8 fix)."""
+        """Custom pickle handler to exclude unpicklable logger and parameters (Bug #9 fix).
+
+        FIX Bug #9: Do NOT pickle _parameters because:
+        1. After model.load(), policy gets NEW parameter objects
+        2. If VGS pickles old parameter references, it will track stale copies
+        3. _parameters must be relinked via update_parameters() after load
+        """
         state = self.__dict__.copy()
         # Remove unpicklable logger
         state.pop("_logger", None)
+        # FIX Bug #9: Do NOT pickle _parameters - they will be stale after load
+        # _parameters will be restored via update_parameters() in _setup_dependent_components()
+        state.pop("_parameters", None)
         return state
 
     def __setstate__(self, state: dict) -> None:
-        """Custom unpickle handler to restore state without logger (Bug #8 fix)."""
+        """Custom unpickle handler to restore state without logger and parameters (Bug #9 fix)."""
         self.__dict__.update(state)
         # Logger will not be restored - caller must set it if needed
         if not hasattr(self, "_logger"):
             self._logger = None
+        # FIX Bug #9: Initialize _parameters to None - will be set via update_parameters()
+        # This ensures VGS doesn't track stale parameter copies from pickle
+        if not hasattr(self, "_parameters"):
+            self._parameters = None
 
     def state_dict(self) -> Dict[str, Any]:
         """Return state dictionary for serialization."""
