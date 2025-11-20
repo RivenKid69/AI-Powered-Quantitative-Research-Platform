@@ -174,7 +174,9 @@ class FeaturePipeline:
         for c in cols:
             v = big[c].astype(float).to_numpy()
             m = float(np.nanmean(v))
-            s = float(np.nanstd(v, ddof=0))
+            # FIX: Use sample std (ddof=1) for unbiased estimation of population variance
+            # This aligns with ML best practices (scikit-learn, PyTorch) and statistical theory (Bessel's correction)
+            s = float(np.nanstd(v, ddof=1))
             if not np.isfinite(s) or s == 0.0:
                 s = 1.0  # avoid division by zero
             if not np.isfinite(m):
