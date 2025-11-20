@@ -12,7 +12,7 @@ from enum import Enum
 from dataclasses import dataclass, field
 
 import yaml
-from pydantic import BaseModel, Field, ConfigDict, root_validator, model_validator
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 import logging
 import math
 
@@ -192,6 +192,7 @@ class CVaRRiskConfig(BaseModel):
 
 class RiskConfigSection(BaseModel):
     """Top-level risk configuration shared across run modes."""
+    model_config = ConfigDict(extra="allow")
 
     max_total_notional: Optional[float] = Field(
         default=None,
@@ -216,9 +217,6 @@ class RiskConfigSection(BaseModel):
         default_factory=CVaRRiskConfig,
         description="Configuration for CVaR-based policy constraints and penalties.",
     )
-
-    class Config:
-        extra = "allow"
 
     def component_params(self) -> Dict[str, Any]:
         """Return component-specific parameters excluding aggregate exposure limits."""
@@ -365,14 +363,12 @@ class MonitoringConfig:
 
 class LatencyConfig(BaseModel):
     """Latency configuration preserved on ``CommonRunConfig``."""
+    model_config = ConfigDict(extra="allow")
 
     use_seasonality: bool = Field(default=True)
     latency_seasonality_path: Optional[str] = Field(default=None)
     refresh_period_days: int = Field(default=30)
     seasonality_default: Optional[Union[float, Sequence[float]]] = Field(default=1.0)
-
-    class Config:
-        extra = "allow"
 
     def dict(self, *args, **kwargs):  # type: ignore[override]
         if "exclude_unset" not in kwargs:
@@ -382,6 +378,7 @@ class LatencyConfig(BaseModel):
 
 class ExecutionBridgeConfig(BaseModel):
     """Configuration payload for execution bridge adapters."""
+    model_config = ConfigDict(extra="allow")
 
     intrabar_price_model: Optional[str] = Field(default=None)
     timeframe_ms: Optional[int] = Field(default=None)
@@ -391,9 +388,6 @@ class ExecutionBridgeConfig(BaseModel):
         default=None,
         description="Optional path to an intrabar reference dataset consumed by bridge adapters.",
     )
-
-    class Config:
-        extra = "allow"
 
 
 class ExecutionEntryMode(str, Enum):
@@ -418,6 +412,7 @@ class ClipToBarConfig(BaseModel):
 
 class SpotImpactConfig(BaseModel):
     """Coefficients for simple spot-market impact models."""
+    model_config = ConfigDict(extra="allow")
 
     sqrt_coeff: float = Field(
         default=0.0,
@@ -437,9 +432,6 @@ class SpotImpactConfig(BaseModel):
         ge=0.0,
         description="Exponent for the power-law impact component.",
     )
-
-    class Config:
-        extra = "allow"
 
 
 @dataclass(frozen=True)
@@ -494,6 +486,7 @@ class ResolvedTurnoverCaps:
 
 class SpotTurnoverLimit(BaseModel):
     """Per-entity turnover guard expressed in USD/bps terms."""
+    model_config = ConfigDict(extra="allow")
 
     bps: Optional[float] = Field(
         default=None,
@@ -516,9 +509,6 @@ class SpotTurnoverLimit(BaseModel):
         description="Absolute daily turnover cap in USD.",
     )
 
-    class Config:
-        extra = "allow"
-
     def resolve(self) -> ResolvedTurnoverLimit:
         return ResolvedTurnoverLimit(
             bps=float(self.bps) if self.bps is not None else None,
@@ -530,6 +520,7 @@ class SpotTurnoverLimit(BaseModel):
 
 class SpotTurnoverCaps(BaseModel):
     """Turnover guardrails applied to bar-execution decisions."""
+    model_config = ConfigDict(extra="allow")
 
     per_symbol: Optional[SpotTurnoverLimit] = Field(
         default=None,
@@ -540,9 +531,6 @@ class SpotTurnoverCaps(BaseModel):
         description="Aggregate cap applied across all symbols (per bar).",
     )
 
-    class Config:
-        extra = "allow"
-
     def resolve(self) -> ResolvedTurnoverCaps:
         return ResolvedTurnoverCaps(
             per_symbol=self.per_symbol.resolve() if self.per_symbol else ResolvedTurnoverLimit(),
@@ -552,6 +540,7 @@ class SpotTurnoverCaps(BaseModel):
 
 class SpotCostConfig(BaseModel):
     """Container describing spot execution cost assumptions."""
+    model_config = ConfigDict(extra="allow")
 
     taker_fee_bps: float = Field(
         default=0.0,
@@ -572,12 +561,10 @@ class SpotCostConfig(BaseModel):
         description="Turnover guardrails evaluated by the bar executor.",
     )
 
-    class Config:
-        extra = "allow"
-
 
 class PortfolioConfig(BaseModel):
     """High-level portfolio assumptions shared between runtime components."""
+    model_config = ConfigDict(extra="allow")
 
     equity_usd: Optional[float] = Field(
         default=None,
@@ -594,12 +581,10 @@ class PortfolioConfig(BaseModel):
         ),
     )
 
-    class Config:
-        extra = "allow"
-
 
 class ExecutionRuntimeConfig(BaseModel):
     """Runtime execution configuration shared across run modes."""
+    model_config = ConfigDict(extra="allow")
 
     intrabar_price_model: Optional[str] = Field(default=None)
     timeframe_ms: Optional[int] = Field(default=None)
@@ -653,9 +638,6 @@ class ExecutionRuntimeConfig(BaseModel):
     portfolio: PortfolioConfig = Field(default_factory=PortfolioConfig)
     costs: SpotCostConfig = Field(default_factory=SpotCostConfig)
 
-    class Config:
-        extra = "allow"
-
     def _export_payload(self, method: str, *args, **kwargs) -> Dict[str, Any]:
         if "exclude_unset" not in kwargs:
             kwargs["exclude_unset"] = False
@@ -679,6 +661,7 @@ class ExecutionRuntimeConfig(BaseModel):
 
 class AdvRuntimeConfig(BaseModel):
     """Runtime configuration for ADV/turnover data access."""
+    model_config = ConfigDict(extra="allow")
 
     enabled: bool = Field(
         default=False,
@@ -743,20 +726,18 @@ class AdvRuntimeConfig(BaseModel):
         description="Container for legacy knobs preserved for compatibility.",
     )
 
-    class Config:
-        extra = "allow"
-
     def dict(self, *args, **kwargs):  # type: ignore[override]
         if "exclude_unset" not in kwargs:
             kwargs["exclude_unset"] = False
         payload = super().dict(*args, **kwargs)
         return payload
 
-    @root_validator(pre=True)
+    @model_validator(mode='before')
+    @classmethod
     def _capture_unknown(cls, values: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(values, dict):
             return values
-        known = set(cls.__fields__.keys())
+        known = set(cls.model_fields.keys())
         extras = {k: values[k] for k in list(values.keys()) if k not in known}
         if extras:
             existing = values.get("extra")
@@ -843,18 +824,18 @@ class CommonRunConfig(BaseModel):
         exec_cfg = getattr(self, "execution", None)
         if not isinstance(exec_cfg, ExecutionRuntimeConfig):
             try:
-                exec_cfg = ExecutionRuntimeConfig.parse_obj(exec_cfg or {})
+                exec_cfg = ExecutionRuntimeConfig.model_validate(exec_cfg or {})
             except Exception:
                 exec_cfg = ExecutionRuntimeConfig()
             object.__setattr__(self, "execution", exec_cfg)
 
-        fields_set = getattr(self, "__fields_set__", set())
-        exec_fields_set = getattr(exec_cfg, "__fields_set__", set())
+        fields_set = getattr(self, "model_fields_set", set())
+        exec_fields_set = getattr(exec_cfg, "model_fields_set", set())
 
         portfolio_cfg = getattr(self, "portfolio", None)
         if isinstance(portfolio_cfg, Mapping):
             try:
-                portfolio_cfg = PortfolioConfig.parse_obj(portfolio_cfg)
+                portfolio_cfg = PortfolioConfig.model_validate(portfolio_cfg)
             except Exception:
                 portfolio_cfg = PortfolioConfig()
         elif not isinstance(portfolio_cfg, PortfolioConfig):
@@ -862,7 +843,7 @@ class CommonRunConfig(BaseModel):
         exec_portfolio_raw = getattr(exec_cfg, "portfolio", None)
         if isinstance(exec_portfolio_raw, Mapping):
             try:
-                exec_portfolio = PortfolioConfig.parse_obj(exec_portfolio_raw)
+                exec_portfolio = PortfolioConfig.model_validate(exec_portfolio_raw)
             except Exception:
                 exec_portfolio = PortfolioConfig()
         elif isinstance(exec_portfolio_raw, PortfolioConfig):
@@ -885,7 +866,7 @@ class CommonRunConfig(BaseModel):
         costs_cfg = getattr(self, "costs", None)
         if isinstance(costs_cfg, Mapping):
             try:
-                costs_cfg = SpotCostConfig.parse_obj(costs_cfg)
+                costs_cfg = SpotCostConfig.model_validate(costs_cfg)
             except Exception:
                 costs_cfg = SpotCostConfig()
         elif not isinstance(costs_cfg, SpotCostConfig):
@@ -893,7 +874,7 @@ class CommonRunConfig(BaseModel):
         exec_costs_raw = getattr(exec_cfg, "costs", None)
         if isinstance(exec_costs_raw, Mapping):
             try:
-                exec_costs = SpotCostConfig.parse_obj(exec_costs_raw)
+                exec_costs = SpotCostConfig.model_validate(exec_costs_raw)
             except Exception:
                 exec_costs = SpotCostConfig()
         elif isinstance(exec_costs_raw, SpotCostConfig):
@@ -968,12 +949,12 @@ def load_timing_profiles(
         defaults_payload = dict(raw)
         profiles_payload = defaults_payload.pop("profiles", {}) if isinstance(defaults_payload, dict) else {}
 
-    defaults_cfg = TimingConfig.parse_obj(defaults_payload)
+    defaults_cfg = TimingConfig.model_validate(defaults_payload)
     profile_map = _initial_timing_profile_map()
 
     for key, payload in (profiles_payload or {}).items():
         prof = _coerce_execution_profile(key)
-        profile_map[prof] = TimingProfileSpec.parse_obj(payload or {})
+        profile_map[prof] = TimingProfileSpec.model_validate(payload or {})
 
     return defaults_cfg, profile_map
 
@@ -1063,7 +1044,8 @@ class SimulationConfig(CommonRunConfig):
     execution_params: ExecutionParams = Field(default_factory=ExecutionParams)
     execution: ExecutionRuntimeConfig = Field(default_factory=ExecutionRuntimeConfig)
 
-    @root_validator(pre=True)
+    @model_validator(mode='before')
+    @classmethod
     def _sync_symbols(cls, values):
         syms = values.get("symbols")
         data = values.get("data") or {}
@@ -1121,7 +1103,8 @@ class TrainDataConfig(BaseModel):
     features_params: Dict[str, Any] = Field(default_factory=dict)
     target_params: Dict[str, Any] = Field(default_factory=dict)
 
-    @root_validator(pre=True)
+    @model_validator(mode='before')
+    @classmethod
     def _sync_train_window_aliases(cls, values: Dict[str, Any]) -> Dict[str, Any]:
         start = values.get("start_ts")
         train_start = values.get("train_start_ts")
@@ -1192,7 +1175,8 @@ class TrainConfig(CommonRunConfig):
     )
     execution_params: ExecutionParams = Field(default_factory=ExecutionParams)
 
-    @root_validator(pre=True)
+    @model_validator(mode='before')
+    @classmethod
     def _sync_symbols(cls, values):
         syms = values.get("symbols")
         data = values.get("data") or {}
@@ -1252,7 +1236,7 @@ def _inject_adv_config(cfg: CommonRunConfig, data: Dict[str, Any]) -> None:
         adv_cfg = adv_raw
     else:
         try:
-            adv_cfg = AdvRuntimeConfig.parse_obj(adv_raw)
+            adv_cfg = AdvRuntimeConfig.model_validate(adv_raw)
         except Exception:
             adv_cfg = AdvRuntimeConfig()
     try:
@@ -1271,7 +1255,7 @@ def _inject_risk_config(cfg: CommonRunConfig, data: Dict[str, Any]) -> None:
         risk_cfg = r_raw
     else:
         try:
-            risk_cfg = RiskConfigSection.parse_obj(r_raw)
+            risk_cfg = RiskConfigSection.model_validate(r_raw)
         except Exception:
             risk_cfg = RiskConfigSection()
     try:
@@ -1295,8 +1279,8 @@ def load_config(path: str) -> CommonRunConfig:
     cfg_cls = mapping.get(mode)
     if cfg_cls is None:
         raise ValueError(f"Unknown mode: {mode}")
-    # parse_obj ensures all newly added optional fields are preserved
-    cfg = cfg_cls.parse_obj(data)
+    # model_validate ensures all newly added optional fields are preserved
+    cfg = cfg_cls.model_validate(data)
     _set_seasonality_log_level(cfg)
     _inject_quantizer_config(cfg, data)
     _inject_adv_config(cfg, data)
@@ -1317,8 +1301,8 @@ def load_config_from_str(content: str) -> CommonRunConfig:
     cfg_cls = mapping.get(mode)
     if cfg_cls is None:
         raise ValueError(f"Unknown mode: {mode}")
-    # parse_obj ensures all newly added optional fields are preserved
-    cfg = cfg_cls.parse_obj(data)
+    # model_validate ensures all newly added optional fields are preserved
+    cfg = cfg_cls.model_validate(data)
     _set_seasonality_log_level(cfg)
     _inject_quantizer_config(cfg, data)
     _inject_adv_config(cfg, data)
