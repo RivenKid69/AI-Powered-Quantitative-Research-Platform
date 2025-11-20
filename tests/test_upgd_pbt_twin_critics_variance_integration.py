@@ -431,7 +431,8 @@ class TestUPGDWithPBT:
         worst_member = population[0]  # Lowest performance
         worst_member.step = 10  # Trigger at perturbation interval
 
-        new_state_dict, new_hyperparams = scheduler.exploit_and_explore(
+        # FIX ISSUE #8: exploit_and_explore now returns 3 values (added checkpoint_format)
+        new_state_dict, new_hyperparams, checkpoint_format = scheduler.exploit_and_explore(
             worst_member,
             model_state_dict={"dummy": torch.randn(2, 2)},
         )
@@ -482,7 +483,8 @@ class TestUPGDWithPBT:
             # Exploit and explore for each member
             for member in population:
                 if scheduler.should_exploit_and_explore(member):
-                    _, new_hyperparams = scheduler.exploit_and_explore(
+                    # FIX ISSUE #8: exploit_and_explore now returns 3 values (added checkpoint_format)
+                    _, new_hyperparams, _ = scheduler.exploit_and_explore(
                         member,
                         model_state_dict={"dummy": torch.randn(2, 2)},
                     )
