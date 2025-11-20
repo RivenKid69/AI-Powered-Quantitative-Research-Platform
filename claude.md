@@ -138,22 +138,63 @@ python scripts/sim_reality_check.py --trades sim.parquet --historical hist.parqu
 
 ---
 
-#### 🟡 DATA & CRITIC FIXES (2025-11-20)
+#### 🟡 FEATURE & VOLATILITY FIXES (2025-11-20)
 
-**ТРИ критические проблемы были обнаружены и исправлены. Подробности: [CRITICAL_FIXES_REPORT.md](CRITICAL_FIXES_REPORT.md)**
+**ТРИ критические проблемы в feature engineering были обнаружены и исправлены. Подробности: [CRITICAL_FIXES_REPORT.md](CRITICAL_FIXES_REPORT.md)**
 
 | # | Проблема | Статус | Влияние |
 |---|----------|--------|---------|
-| **#10** | **Temporal Causality Violation** в stale data | ✅ FIXED | Модели с `stale_prob > 0` → требуется переобучение |
-| **#11** | **Cross-Symbol Contamination** в нормализации | ✅ FIXED | Multi-symbol модели → требуется переобучение |
-| **#12** | **Inverted Quantile Loss** в distributional critic | ✅ FIXED | Quantile critic модели → **STRONGLY** требуется переобучение |
+| **#2** | **Yang-Zhang Bessel's Correction Missing** в RS component | ✅ FIXED | 1-5% systematic volatility underestimation |
+| **#3** | **Log vs Linear Returns Mismatch** в targets | ✅ FIXED | 5-19% scale mismatch для больших движений |
+| **#4** | **EWMA Cold Start Bias** в volatility indicators | ✅ FIXED | 2-5x initial bias в первых наблюдениях |
+
+**Также верифицирована**:
+- CRITICAL #1: GARCH Scaling (10-100x) - ✅ **FALSE POSITIVE** (код корректен)
+- MEDIUM #10: BB Position Asymmetric Clipping - ✅ **BY DESIGN** (intentional crypto market microstructure)
 
 **Все исправления активны по умолчанию. Новые модели автоматически используют правильное поведение.**
 
 **Действия**:
 - ✅ Новые training runs — никаких действий не требуется
-- ⚠️ Существующие модели — проверьте затронуты ли они (см. [CRITICAL_FIXES_REPORT.md](CRITICAL_FIXES_REPORT.md))
-- 🔄 Затронутые модели — рекомендуется **ПЕРЕОБУЧЕНИЕ**
+- ⚠️ Существующие модели — **РЕКОМЕНДУЕТСЯ** переобучение для consistency
+- 📊 Особенно модели, использующие Yang-Zhang volatility или EWMA indicators
+
+---
+
+#### 🔴 NUMERICAL STABILITY FIXES (2025-11-20) - **GRADIENT EXPLOSIONS PREVENTION**
+
+**ПЯТЬ критических numerical stability проблем были обнаружены и исправлены. Подробности: [CRITICAL_FIXES_5_REPORT.md](CRITICAL_FIXES_5_REPORT.md)**
+
+| # | Проблема | Статус | Критичность |
+|---|----------|--------|-------------|
+| **#1** | **Log of Near-Zero → Gradient Explosion** | ✅ **FIXED** | **CRITICAL** - используйте F.log_softmax! |
+| **#2** | **VGS-UPGD Noise Amplification** | ✅ **FIXED** | **CRITICAL** - adaptive noise scaling |
+| **#3** | **CVaR Quantile Clipping at Extremes** | ✅ **FIXED** | **CRITICAL** - proper boundary handling |
+| **#4** | **LSTM Gradient Clipping Bypassed** | ✅ **FIXED** | HIGH - clip_grad_norm applied |
+| **#5** | **NaN Propagation Undetected** | ✅ **FIXED** | HIGH - assert_finite checks |
+
+**⚠️ КРИТИЧЕСКОЕ ВЛИЯНИЕ:**
+- Модели с categorical critic могли испытывать gradient explosions
+- Модели с VGS + AdaptiveUPGD требовали adaptive noise
+- Модели с малым `cvar_alpha` (<0.01) могли давать incorrect CVaR estimates
+
+**Действия**:
+- ✅ Новые модели — автоматически используют исправленный код
+- ⚠️ **НАСТОЯТЕЛЬНО РЕКОМЕНДУЕТСЯ** переобучить модели:
+  - С categorical critic (CRITICAL #1)
+  - С VGS + AdaptiveUPGD (CRITICAL #2)
+  - С `cvar_alpha < 0.01` (CRITICAL #3)
+
+**Тесты для предотвращения регрессии:**
+```bash
+# Numerical stability tests
+pytest tests/test_critical_fixes_volatility.py -v  # 5 тестов
+pytest tests/test_distributional_ppo_numerical*.py -v
+```
+
+**См. также:**
+- [CRITICAL_FIXES_5_REPORT.md](CRITICAL_FIXES_5_REPORT.md) - полная документация
+- [tests/test_critical_fixes_volatility.py](tests/test_critical_fixes_volatility.py) - тесты
 
 ---
 
@@ -200,19 +241,59 @@ pytest tests/test_nan_handling_external_features.py -v
 
 ## 📊 СТАТУС ПРОЕКТА (2025-11-21)
 
-### ✅ Последние обновления (2025-11-21)
+### ✅ Последние обновления (2025-11-21) - ПОЛНАЯ АКТУАЛИЗАЦИЯ
 
-- **🔥🔥 НОВЫЕ КРИТИЧЕСКИЕ ИСПРАВЛЕНИЯ** (2025-11-21):
-  - ✅ **LSTM State Reset Fix** - устранена temporal leakage (5-15% improvement expected)
-  - ✅ **NaN Handling Improved** - добавлен logging и полная документация
-  - ✅ **+17 новых тестов** для предотвращения регрессий (все проходят)
-- **🔥 КРИТИЧЕСКИЕ ИСПРАВЛЕНИЯ** (2025-11-20): 3 critical bugs fixed (temporal causality, cross-symbol contamination, quantile loss) ✅
-- **Интеграция завершена**: UPGD + VGS + Twin Critics + PBT (100% тестов проходят) ✅
+#### 🔥🔥 КРИТИЧЕСКИЕ ЧИСЛЕННЫЕ ИСПРАВЛЕНИЯ (2025-11-21):
+- ✅ **LSTM State Reset Fix** - устранена temporal leakage между эпизодами (5-15% improvement expected)
+  - Добавлен метод `_reset_lstm_states_for_done_envs()` в distributional_ppo.py:1899-2024
+  - Добавлен reset call в rollout loop (distributional_ppo.py:7418-7427)
+  - **8 comprehensive tests** созданы в tests/test_lstm_episode_boundary_reset.py (все проходят ✅)
+  - **⚠️ Action Required**: Рекомендуется переобучить LSTM модели (trained before 2025-11-21)
+
+- ✅ **NaN Handling Improved** - добавлен logging для external features
+  - Enhanced `_get_safe_float()` с parameter `log_nan=True` (mediator.py:989-1072)
+  - Enhanced documentation в obs_builder.pyx:7-36
+  - **10 tests** созданы в tests/test_nan_handling_external_features.py (9/10 passed, 1 skipped - Cython)
+  - Задокументирована semantic ambiguity (missing data = 0.0)
+
+- ✅ **+17 новых тестов** для предотвращения регрессий (17/18 passed, 1 skipped ✅)
+- ✅ **4 новых документа** созданы:
+  - [CRITICAL_LSTM_RESET_FIX_REPORT.md](CRITICAL_LSTM_RESET_FIX_REPORT.md) - полная документация LSTM fix
+  - [NUMERICAL_ISSUES_FIX_SUMMARY.md](NUMERICAL_ISSUES_FIX_SUMMARY.md) - comprehensive summary
+  - [REGRESSION_PREVENTION_CHECKLIST.md](REGRESSION_PREVENTION_CHECKLIST.md) - обязательный checklist
+  - [FINAL_FIX_SUMMARY_2025_11_21.md](FINAL_FIX_SUMMARY_2025_11_21.md) - final report
+
+#### 🔥 КРИТИЧЕСКИЕ ACTION SPACE ИСПРАВЛЕНИЯ (2025-11-21):
+- ✅ **Position Doubling Bug Fixed** - предотвращена 2x leverage violation в production
+- ✅ **LongOnlyActionWrapper Sign Convention** - preserves reduction signals
+- ✅ **Action Space Range Unified** - [-1,1] везде, архитектурная консистентность
+- ✅ **21/21 tests passed** (2 skipped) в tests/test_critical_action_space_fixes.py
+
+#### 🔥 КРИТИЧЕСКИЕ FEATURE & NUMERICAL ИСПРАВЛЕНИЯ (2025-11-20):
+- ✅ **3 Feature Engineering Bugs Fixed**:
+  - Yang-Zhang Bessel's Correction (1-5% volatility bias)
+  - Log vs Linear Returns Mismatch (5-19% scale error)
+  - EWMA Cold Start Bias (2-5x initial error)
+- ✅ **5 Numerical Stability Bugs Fixed**:
+  - Log of Near-Zero → Gradient Explosion (используйте F.log_softmax!)
+  - VGS-UPGD Noise Amplification (adaptive noise scaling)
+  - CVaR Quantile Clipping (boundary handling)
+  - LSTM Gradient Clipping Bypassed (clip_grad_norm)
+  - NaN Propagation Undetected (assert_finite checks)
+- ✅ **+5 новых тестов** в tests/test_critical_fixes_volatility.py
+- ⚠️ **Модели, обученные до 2025-11-20, РЕКОМЕНДУЕТСЯ переобучить**
+
+#### ✅ ИНТЕГРАЦИИ ЗАВЕРШЕНЫ:
+- **UPGD + VGS + Twin Critics + PBT** (100% тестов проходят) ✅
 - **Pydantic V2**: Полная миграция завершена ✅
 - **Security**: torch.load() security fix применён ✅
 - **VGS + PBT**: State mismatch исправлен ✅
 - **UPGD + VGS**: Adaptive noise scaling добавлен ✅
-- **Test Coverage**: 35+ новых тестов для критических исправлений (все проходят) ✅
+- **Test Coverage**: **43+ новых тестов** для критических исправлений:
+  - 21 тестов: Action Space fixes (test_critical_action_space_fixes.py)
+  - 8 тестов: LSTM State Reset (test_lstm_episode_boundary_reset.py)
+  - 9 тестов: NaN Handling (test_nan_handling_external_features.py)
+  - 5 тестов: Numerical Stability (test_critical_fixes_volatility.py)
 
 ### 🎯 Активные возможности (Production Ready)
 
@@ -226,12 +307,12 @@ pytest tests/test_nan_handling_external_features.py -v
 
 ```
 Branch: main
-Recent commits:
-- 7d83854 docs: Reorganize project documentation
-- 45c45da test: Update integration tests for PBT API
-- 2927e75 fix: Add adaptive noise scaling to UPGD
-- 416cf11 fix: Fix VGS state mismatch during PBT
-- 078a6c9 refactor: Migrate core_config to Pydantic V2
+Recent commits (last 5):
+- e6a7936 (2025-11-21) docs: Complete documentation modernization to version 2.1
+- ef40fc8 (2025-11-21) fix: Resolve 2 critical numerical issues - LSTM state reset and NaN handling
+- b7f9d04 (2025-11-21) fix: Resolve 3 CRITICAL action space bugs preventing position doubling
+- cbbe348 (2025-11-21) docs: Fix feature ordering documentation to match obs_builder.pyx implementation
+- b4e9f09 (2025-11-20) fix: Resolve 5 critical numerical stability issues causing gradient explosions and silent failures
 ```
 
 ---
@@ -1317,8 +1398,8 @@ TradingBot2 — это сложная система с множеством к�
 
 ---
 
-**Последнее обновление**: 2025-11-20
-**Версия документации**: 2.0
-**Статус**: ✅ Production Ready (UPGD + VGS + Twin Critics + PBT интеграция завершена)
+**Последнее обновление**: 2025-11-21
+**Версия документации**: 2.1
+**Статус**: ✅ Production Ready (UPGD + VGS + Twin Critics + PBT + LSTM fix + NaN handling - все интеграции завершены)
 
 Удачи в разработке! 🚀

@@ -23,11 +23,19 @@
   - **Problem #2**: Position semantics DELTA→TARGET → **FIXED** (prevents position doubling!)
   - **Problem #3**: Action space range [0,1] vs [-1,1] → **FIXED**
 
-#### Data & Critic Fixes (2025-11-20)
-- 🚨 [CRITICAL_FIXES_REPORT.md](CRITICAL_FIXES_REPORT.md) - **3 critical data bugs**
-  - **Problem #10**: Temporal causality violation in stale data → **FIXED**
-  - **Problem #11**: Cross-symbol contamination in normalization → **FIXED**
-  - **Problem #12**: Inverted quantile loss formula → **FIXED**
+#### Feature & Volatility Fixes (2025-11-20)
+- 🚨 [CRITICAL_FIXES_REPORT.md](CRITICAL_FIXES_REPORT.md) - **3 critical feature engineering bugs**
+  - **CRITICAL #2**: Yang-Zhang Bessel's Correction missing → **FIXED** (1-5% volatility bias)
+  - **CRITICAL #3**: Log vs Linear Returns Mismatch → **FIXED** (5-19% scale error)
+  - **CRITICAL #4**: EWMA Cold Start Bias → **FIXED** (2-5x initial error)
+
+#### Numerical Stability Fixes (2025-11-20)
+- 🚨 [CRITICAL_FIXES_5_REPORT.md](CRITICAL_FIXES_5_REPORT.md) - **5 critical numerical stability bugs**
+  - **CRITICAL #1**: Log of Near-Zero → Gradient Explosion → **FIXED**
+  - **CRITICAL #2**: VGS-UPGD Noise Amplification → **FIXED**
+  - **CRITICAL #3**: CVaR Quantile Clipping → **FIXED**
+  - **CRITICAL #4**: LSTM Gradient Clipping Bypassed → **FIXED**
+  - **CRITICAL #5**: NaN Propagation Undetected → **FIXED**
 
 ### 🛡️ Regression Prevention
 - 📋 [REGRESSION_PREVENTION_CHECKLIST.md](REGRESSION_PREVENTION_CHECKLIST.md) - **Обязательный checklist для разработчиков**
@@ -36,9 +44,13 @@
 **⚠️ Action Required**:
 - LSTM models trained before 2025-11-21 → **RETRAIN RECOMMENDED** (5-15% improvement)
 - Models with action space issues → **RETRAIN REQUIRED**
-- Models with data bugs (2025-11-20) → **RETRAIN REQUIRED**
+- Models with feature/numerical bugs (2025-11-20) → **RETRAIN RECOMMENDED**
 
-**Test Coverage**: 52+ new tests added (all passing ✅)
+**Test Coverage**: 43+ new tests added (all passing ✅):
+- 21 tests: Action Space fixes
+- 8 tests: LSTM State Reset
+- 9 tests: NaN Handling
+- 5 tests: Numerical Stability
 
 ---
 
