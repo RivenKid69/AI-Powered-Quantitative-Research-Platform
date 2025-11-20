@@ -20,10 +20,13 @@ if TYPE_CHECKING:
     from core_models import Order, ExecReport, Position, TradeLogRow
     from core_contracts import TradeExecutor, RiskGuards
 
+import logging
 import math
 import numpy as np
 
 from core_models import ExecReport, TradeLogRow, Side, OrderType, Liquidity, ExecStatus
+
+logger = logging.getLogger(__name__)
 
 # Import obs_builder for observation vector construction
 try:
@@ -991,17 +994,22 @@ class Mediator:
         col: str,
         default: float = 0.0,
         min_value: float = None,
-        max_value: float = None
+        max_value: float = None,
+        log_nan: bool = False
     ) -> float:
         """
         Safely extract float value from row with fallback and range validation.
 
+        ISSUE #2 FIX: Added explicit NaN handling and optional logging to make
+        silent NaN→default conversion visible for debugging.
+
         Args:
             row: Data row to extract from
             col: Column name
-            default: Default value if extraction fails
+            default: Default value if extraction fails or value is NaN/Inf
             min_value: Minimum allowed value (inclusive). If result < min_value, returns default
             max_value: Maximum allowed value (inclusive). If result > max_value, returns default
+            log_nan: If True, log warning when NaN/Inf is encountered (useful for debugging)
 
         Returns:
             Extracted float value or default if invalid/out of range
@@ -1009,29 +1017,61 @@ class Mediator:
         Validates:
         - Not None
         - Can convert to float
-        - Is finite (not NaN/Inf)
+        - Is finite (not NaN/Inf) - CRITICAL: NaN is converted to `default`
         - Within [min_value, max_value] range if specified
+
+        Design Note (Issue #2):
+            This function converts NaN to `default` (typically 0.0) to prevent NaN propagation
+            through the network. This creates semantic ambiguity where "missing data" and
+            "zero value" are indistinguishable to the model.
+
+            Future Enhancement: Add validity flags (similar to ma5_valid, rsi_valid) for
+            external features to explicitly signal missing data. This would require:
+            - Returning tuple (value, is_valid)
+            - Expanding observation space by +21 features (validity flags)
+            - Retraining all models
 
         Examples:
         - volume = _get_safe_float(row, "volume", 1.0, min_value=0.0)  # Ensures >= 0
         - price = _get_safe_float(row, "price", 50000.0, min_value=0.01, max_value=1e9)
+        - cvd = _get_safe_float(row, "cvd_24h", 0.0, log_nan=True)  # Log if NaN
         """
         if row is None:
             return default
         try:
             val = row.get(col) if hasattr(row, "get") else getattr(row, col, None)
             if val is None:
+                if log_nan:
+                    logger.debug(f"Feature '{col}' is None, using default={default}")
                 return default
             result = float(val)
             if not math.isfinite(result):
+                if log_nan:
+                    logger.warning(
+                        f"Feature '{col}' has non-finite value ({result}), "
+                        f"using default={default}. This causes ambiguity: "
+                        f"model cannot distinguish missing data from zero values."
+                    )
                 return default
             # Range validation
             if min_value is not None and result < min_value:
+                if log_nan:
+                    logger.debug(
+                        f"Feature '{col}' value {result} < min_value {min_value}, "
+                        f"using default={default}"
+                    )
                 return default
             if max_value is not None and result > max_value:
+                if log_nan:
+                    logger.debug(
+                        f"Feature '{col}' value {result} > max_value {max_value}, "
+                        f"using default={default}"
+                    )
                 return default
             return result
-        except (TypeError, ValueError, KeyError, AttributeError):
+        except (TypeError, ValueError, KeyError, AttributeError) as e:
+            if log_nan:
+                logger.debug(f"Feature '{col}' extraction failed: {e}, using default={default}")
             return default
 
     def _extract_market_data(self, row: Any, state: Any, mark_price: float, prev_price: float) -> Dict[str, float]:

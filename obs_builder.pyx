@@ -10,9 +10,25 @@ cdef inline float _clipf(double value, double lower, double upper) nogil:
 
     CRITICAL: NaN comparisons are always False in C/Cython, so we must check explicitly.
     If value is NaN, we return 0.0 as a safe default to prevent NaN propagation.
+
+    ISSUE #2 - DESIGN NOTE:
+        Converting NaN → 0.0 creates semantic ambiguity for the model:
+        - "Missing data" (NaN) becomes indistinguishable from "zero value" (0.0)
+        - Model cannot learn special handling for missing data
+        - Affects external features (cvd, garch, yang_zhang, etc.) without validity flags
+
+        Technical indicators (MA, RSI, BB) have explicit validity flags (ma5_valid, rsi_valid)
+        to signal missing/invalid data, but external features do not.
+
+        Future Enhancement: Add validity flags for all 21 external features by:
+        1. Returning (value, is_valid) tuple from mediator._get_safe_float()
+        2. Expanding observation vector by +21 dims for validity flags
+        3. Retraining models to use validity information
+
+        Current behavior is by design to prevent NaN propagation, but is suboptimal.
     """
     if isnan(value):
-        return 0.0
+        return 0.0  # Silent conversion - see ISSUE #2 note above
     if value < lower:
         value = lower
     elif value > upper:
@@ -560,8 +576,13 @@ cdef void build_observation_vector_c(
     feature_idx += 1
 
     # --- External normalised columns --------------------------------------
+    # Process 21 external features (cvd, garch, yang_zhang, returns, taker_buy_ratio, etc.)
+    # ISSUE #2: These features lack validity flags, so NaN→0.0 conversion in _clipf()
+    # creates ambiguity (missing data looks like zero). This is current design to prevent
+    # NaN propagation. Future: add validity flags similar to ma5_valid, rsi_valid.
     for i in range(norm_cols_values.shape[0]):
         # Apply tanh normalization first, then clip to safe range
+        # Note: _clipf converts NaN→0.0 (see ISSUE #2 in _clipf docstring)
         feature_val = _clipf(tanh(norm_cols_values[i]), -3.0, 3.0)
         out_features[feature_idx] = feature_val
         feature_idx += 1

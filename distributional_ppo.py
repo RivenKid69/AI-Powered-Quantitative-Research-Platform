@@ -1896,6 +1896,133 @@ class DistributionalPPO(RecurrentPPO):
 
         return tuple(states)
 
+    def _reset_lstm_states_for_done_envs(
+        self,
+        states: Optional[Union[RNNStates, Tuple[torch.Tensor, ...]]],
+        dones: np.ndarray,
+        initial_states: Optional[Union[RNNStates, Tuple[torch.Tensor, ...]]],
+    ) -> Optional[Union[RNNStates, Tuple[torch.Tensor, ...]]]:
+        """
+        Reset LSTM hidden states for environments that have finished episodes.
+
+        CRITICAL FIX (Issue #4): Without this, LSTM states carry over across episode
+        boundaries, causing temporal leakage and violating the Markov assumption.
+        This leads to:
+        - Value estimates contaminated with information from previous episode
+        - Spurious correlations across unrelated episodes
+        - Train/test mismatch if episode lengths differ
+
+        Args:
+            states: Current LSTM states with batch_size=n_envs
+            dones: Boolean array indicating which environments finished (n_envs,)
+            initial_states: Initial LSTM states to reset to (batch_size=1 or n_envs)
+
+        Returns:
+            Updated states with reset applied for done environments
+
+        References:
+            - Hausknecht & Stone (2015): "Deep Recurrent Q-Learning for POMDPs"
+            - Kapturowski et al. (2018): "Recurrent Experience Replay in DQNs"
+            Both emphasize importance of resetting hidden states at episode boundaries.
+        """
+        if states is None or initial_states is None:
+            return states
+
+        # Check if any environment is done
+        if not np.any(dones):
+            return states  # No reset needed
+
+        def _reset_state_slice(
+            state_tensor: torch.Tensor,
+            init_tensor: torch.Tensor,
+            env_idx: int,
+        ) -> torch.Tensor:
+            """
+            Reset state for specific environment index.
+
+            LSTM states typically have shape (num_layers, batch_size, hidden_size).
+            We reset all layers for the specific environment index.
+            """
+            if state_tensor.ndim >= 2:
+                # Shape: (num_layers, batch_size, hidden_size)
+                # or (batch_size, hidden_size) for single layer
+                if state_tensor.shape[1] > env_idx:
+                    # Multi-layer case: reset all layers for this env
+                    if init_tensor.ndim >= 2 and init_tensor.shape[1] > 0:
+                        state_tensor[:, env_idx, ...] = init_tensor[:, 0, ...].detach().to(state_tensor.device)
+                    else:
+                        # Fallback: use first element if init has different shape
+                        state_tensor[:, env_idx, ...] = init_tensor.flatten()[0].detach().to(state_tensor.device)
+            elif state_tensor.ndim == 1:
+                # Shape: (batch_size,) - single value per environment
+                if len(state_tensor) > env_idx:
+                    state_tensor[env_idx] = init_tensor.flatten()[0].detach().to(state_tensor.device)
+            return state_tensor
+
+        # Clone states to avoid modifying original (though we modify in-place below)
+        # This is defensive programming in case states are shared
+        if hasattr(states, "pi") and hasattr(states, "vf"):
+            # RNNStates namedtuple with separate pi (actor) and vf (critic) states
+            pi_states_list = list(states.pi)
+            vf_states_list = list(states.vf)
+
+            # Process each done environment
+            for env_idx in range(len(dones)):
+                if not dones[env_idx]:
+                    continue
+
+                # Reset actor states
+                if hasattr(initial_states, "pi"):
+                    init_pi_states = initial_states.pi
+                    for i in range(len(pi_states_list)):
+                        if i < len(init_pi_states):
+                            pi_states_list[i] = _reset_state_slice(
+                                pi_states_list[i],
+                                init_pi_states[i],
+                                env_idx,
+                            )
+
+                # Reset critic states
+                if hasattr(initial_states, "vf"):
+                    init_vf_states = initial_states.vf
+                    for i in range(len(vf_states_list)):
+                        if i < len(init_vf_states):
+                            vf_states_list[i] = _reset_state_slice(
+                                vf_states_list[i],
+                                init_vf_states[i],
+                                env_idx,
+                            )
+
+            # Return new RNNStates with updated tensors
+            return RNNStates(pi=tuple(pi_states_list), vf=tuple(vf_states_list))
+
+        elif isinstance(states, tuple):
+            # Simple tuple of tensors (no separate pi/vf)
+            states_list = list(states)
+
+            for env_idx in range(len(dones)):
+                if not dones[env_idx]:
+                    continue
+
+                # Reset each state tensor
+                if isinstance(initial_states, tuple):
+                    for i in range(len(states_list)):
+                        if i < len(initial_states):
+                            states_list[i] = _reset_state_slice(
+                                states_list[i],
+                                initial_states[i],
+                                env_idx,
+                            )
+
+            return tuple(states_list)
+
+        # Fallback: return original states if structure not recognized
+        logger.warning(
+            f"Unrecognized LSTM state structure (type={type(states)}), "
+            "skipping episode boundary reset. This may cause temporal leakage!"
+        )
+        return states
+
     def _build_value_prediction_cache_entry(
         self,
         rollout_data: RawRecurrentRolloutBufferSamples,
@@ -7287,6 +7414,17 @@ class DistributionalPPO(RecurrentPPO):
 
             self._last_obs = new_obs
             self._last_episode_starts = dones
+
+            # CRITICAL FIX (Issue #4): Reset LSTM states for environments that finished episodes
+            # This prevents temporal leakage across episode boundaries
+            if np.any(dones):
+                init_states = self.policy.recurrent_initial_state
+                init_states_on_device = self._clone_states_to_device(init_states, self.device)
+                self._last_lstm_states = self._reset_lstm_states_for_done_envs(
+                    self._last_lstm_states,
+                    dones,
+                    init_states_on_device,
+                )
 
         was_training = self.policy.training  # FIX
         self.policy.eval()  # FIX

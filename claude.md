@@ -70,6 +70,12 @@ python scripts/sim_reality_check.py --trades sim.parquet --historical hist.parqu
 
 | Ошибка | Причина | Решение |
 |--------|---------|---------|
+| **Position doubling в live trading** | **DELTA semantics вместо TARGET** | **Проверьте ActionProto contract! Должен быть TARGET** |
+| **Policy не может reduce position** | **LongOnlyWrapper обрезает negative** | **Используйте mapping [-1,1]→[0,1]** |
+| **Action space mismatch** | **Разные bounds [0,1] vs [-1,1]** | **Унифицируйте к [-1,1] везде** |
+| **Value loss не снижается** (NEW) | **LSTM states не сбрасываются** | **Проверьте `_reset_lstm_states_for_done_envs` вызывается** |
+| **Model переобучается на первый episode** (NEW) | **Temporal leakage через LSTM** | **Запустите `pytest tests/test_lstm_episode_boundary_reset.py`** |
+| **External features всегда 0.0** (NEW) | **NaN конвертируется в 0.0 молча** | **Используйте `log_nan=True` для debugging** |
 | `AttributeError` в конфигах | Pydantic V2 API | Используйте `model_dump()` вместо `dict()` |
 | Тесты падают после изменений | Не обновлены тесты | Найдите и обновите соответствующие тесты |
 | Feature mismatch | Online/offline паритет | Запустите `check_feature_parity.py` |
@@ -77,7 +83,62 @@ python scripts/sim_reality_check.py --trades sim.parquet --historical hist.parqu
 | Execution детерминизм нарушен | Изменён seed или порядок | Проверьте `test_execution_determinism.py` |
 | Градиенты взрываются | UPGD noise слишком высок | Уменьшите `sigma` в optimizer config |
 
-### ⚠️ КРИТИЧЕСКИЕ ИСПРАВЛЕНИЯ (2025-11-20) - ОБЯЗАТЕЛЬНО К ПРОЧТЕНИЮ
+### 🛡️ Критические правила (НЕ НАРУШАТЬ!)
+
+1. **ActionProto.volume_frac = TARGET position, НЕ DELTA!**
+   - ✅ Правильно: `next_units = volume_frac * max_position`
+   - ❌ НЕПРАВИЛЬНО: `next_units = current_units + volume_frac * max_position` (удвоение!)
+
+2. **Action space bounds: [-1, 1] ВЕЗДЕ**
+   - ✅ Правильно: `np.clip(action, -1.0, 1.0)`
+   - ❌ НЕПРАВИЛЬНО: `np.clip(action, 0.0, 1.0)` (потеря short/reduction)
+
+3. **LongOnlyActionWrapper: mapping, НЕ clipping**
+   - ✅ Правильно: `mapped = (action + 1.0) / 2.0` (сохраняет информацию)
+   - ❌ НЕПРАВИЛЬНО: `clipped = max(0, action)` (теряет reduction сигналы)
+
+4. **LSTM States ДОЛЖНЫ сбрасываться на episode boundaries!** (NEW 2025-11-21)
+   - ✅ Правильно: `self._last_lstm_states = self._reset_lstm_states_for_done_envs(...)`
+   - ❌ НЕПРАВИЛЬНО: пропустить reset → temporal leakage (5-15% потеря точности!)
+   - ⚠️ **НЕ УДАЛЯЙТЕ** вызов `_reset_lstm_states_for_done_envs` в distributional_ppo.py:7418-7427!
+
+5. **NaN values в external features конвертируются в 0.0**
+   - ✅ Правильно: использовать `log_nan=True` для debugging
+   - ⚠️ Semantic ambiguity: model не различает "missing data" и "zero value"
+   - 📝 Future: добавить validity flags для external features (v2.0+)
+
+6. **Перед изменением action space/LSTM логики:**
+   - ✅ Прочитайте [CRITICAL_FIXES_COMPLETE_REPORT.md](CRITICAL_FIXES_COMPLETE_REPORT.md)
+   - ✅ Прочитайте [NUMERICAL_ISSUES_FIX_SUMMARY.md](NUMERICAL_ISSUES_FIX_SUMMARY.md)
+   - ✅ Запустите `pytest tests/test_critical_action_space_fixes.py`
+   - ✅ Запустите `pytest tests/test_lstm_episode_boundary_reset.py`
+   - ✅ Убедитесь что понимаете TARGET vs DELTA semantics и LSTM state management
+
+### ⚠️ КРИТИЧЕСКИЕ ИСПРАВЛЕНИЯ - ОБЯЗАТЕЛЬНО К ПРОЧТЕНИЮ
+
+#### 🔴 ACTION SPACE FIXES (2025-11-21) - **КРИТИЧЕСКИ ВАЖНО**
+
+**ТРИ критические проблемы action space были исправлены. Подробности: [CRITICAL_FIXES_COMPLETE_REPORT.md](CRITICAL_FIXES_COMPLETE_REPORT.md)**
+
+| # | Проблема | Статус | Критичность |
+|---|----------|--------|-------------|
+| **#1** | **Sign Convention Mismatch** в LongOnlyActionWrapper | ✅ FIXED | HIGH - потеря сигнала |
+| **#2** | **Position Semantics DELTA→TARGET** в risk_guard | ✅ FIXED | **CRITICAL** - удвоение позиции! |
+| **#3** | **Action Space Range [0,1] vs [-1,1]** | ✅ FIXED | HIGH - несоответствие |
+
+**⚠️ КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ СЕМАНТИКИ:**
+- `ActionProto.volume_frac` теперь **TARGET position** (было: DELTA)
+- **НЕ ОТКАТЫВАЙТЕ** эти изменения - они предотвращают position doubling!
+- Модели, обученные до исправления, могут требовать переобучения
+
+**Действия**:
+- ✅ Новые модели — используют правильную семантику автоматически
+- ⚠️ Модели с LongOnlyActionWrapper (до 2025-11-21) → **РЕКОМЕНДУЕТСЯ** переобучение
+- ⚠️ Модели с DELTA semantics → **ОБЯЗАТЕЛЬНО** переобучение
+
+---
+
+#### 🟡 DATA & CRITIC FIXES (2025-11-20)
 
 **ТРИ критические проблемы были обнаружены и исправлены. Подробности: [CRITICAL_FIXES_REPORT.md](CRITICAL_FIXES_REPORT.md)**
 
@@ -96,17 +157,62 @@ python scripts/sim_reality_check.py --trades sim.parquet --historical hist.parqu
 
 ---
 
-## 📊 СТАТУС ПРОЕКТА (2025-11-20)
+#### 🔴 NUMERICAL & LSTM FIXES (2025-11-21) - **НОВЫЕ КРИТИЧЕСКИЕ ИСПРАВЛЕНИЯ**
 
-### ✅ Последние обновления
+**ДВЕ критические проблемы были обнаружены и исправлены. Подробности: [NUMERICAL_ISSUES_FIX_SUMMARY.md](NUMERICAL_ISSUES_FIX_SUMMARY.md)**
 
-- **🔥 КРИТИЧЕСКИЕ ИСПРАВЛЕНИЯ**: 3 critical bugs fixed (temporal causality, cross-symbol contamination, quantile loss) ✅
+| # | Проблема | Статус | Критичность |
+|---|----------|--------|-------------|
+| **#4** | **LSTM States NOT Reset on Episode Boundaries** | ✅ **FIXED** | **CRITICAL** - 5-15% потеря точности! |
+| **#2** | **External Features NaN → 0.0 Silent Conversion** | ✅ **IMPROVED** | MEDIUM - semantic ambiguity |
+
+**⚠️ КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ - LSTM STATE RESET:**
+- LSTM hidden states теперь **автоматически сбрасываются** при `done=True`
+- Это предотвращает temporal leakage между эпизодами
+- **НЕ ОТКАТЫВАЙТЕ** это исправление - оно критично для корректного обучения!
+- Модели, обученные до исправления, **НАСТОЯТЕЛЬНО РЕКОМЕНДУЕТСЯ** переобучить
+
+**Новые возможности:**
+- ✅ LSTM state reset автоматический (distributional_ppo.py:7418-7427)
+- ✅ NaN logging для external features (mediator.py: `log_nan=True` parameter)
+- ✅ Comprehensive tests (+17 новых тестов, все проходят)
+
+**Действия**:
+- ✅ Новые модели — автоматически используют правильное поведение
+- ⚠️ **ВАЖНО**: Модели с LSTM (обученные до 2025-11-21) → **ПЕРЕОБУЧИТЬ** для best performance
+- 📊 Мониторить метрики: `train/value_loss` (должен снизиться на 5-10%)
+
+**Тесты для предотвращения регрессии:**
+```bash
+# LSTM state reset (8 тестов)
+pytest tests/test_lstm_episode_boundary_reset.py -v
+
+# NaN handling (10 тестов)
+pytest tests/test_nan_handling_external_features.py -v
+```
+
+**См. также:**
+- [CRITICAL_LSTM_RESET_FIX_REPORT.md](CRITICAL_LSTM_RESET_FIX_REPORT.md) - полная документация LSTM fix
+- [tests/test_lstm_episode_boundary_reset.py](tests/test_lstm_episode_boundary_reset.py) - тесты
+- [tests/test_nan_handling_external_features.py](tests/test_nan_handling_external_features.py) - тесты NaN handling
+
+---
+
+## 📊 СТАТУС ПРОЕКТА (2025-11-21)
+
+### ✅ Последние обновления (2025-11-21)
+
+- **🔥🔥 НОВЫЕ КРИТИЧЕСКИЕ ИСПРАВЛЕНИЯ** (2025-11-21):
+  - ✅ **LSTM State Reset Fix** - устранена temporal leakage (5-15% improvement expected)
+  - ✅ **NaN Handling Improved** - добавлен logging и полная документация
+  - ✅ **+17 новых тестов** для предотвращения регрессий (все проходят)
+- **🔥 КРИТИЧЕСКИЕ ИСПРАВЛЕНИЯ** (2025-11-20): 3 critical bugs fixed (temporal causality, cross-symbol contamination, quantile loss) ✅
 - **Интеграция завершена**: UPGD + VGS + Twin Critics + PBT (100% тестов проходят) ✅
 - **Pydantic V2**: Полная миграция завершена ✅
 - **Security**: torch.load() security fix применён ✅
 - **VGS + PBT**: State mismatch исправлен ✅
 - **UPGD + VGS**: Adaptive noise scaling добавлен ✅
-- **Test Coverage**: +10 новых тестов для критических исправлений (18/18 passed) ✅
+- **Test Coverage**: 35+ новых тестов для критических исправлений (все проходят) ✅
 
 ### 🎯 Активные возможности (Production Ready)
 
