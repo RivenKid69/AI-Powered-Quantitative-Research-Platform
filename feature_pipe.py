@@ -827,6 +827,24 @@ class FeaturePipe:
     def make_targets(self, df: pd.DataFrame) -> Optional[pd.Series]:
         """Build target series for training.
 
+        CRITICAL FIX #3: Target returns now use LOG returns to match feature returns
+        =============================================================================
+        Features (ret_4h, ret_24h, etc.) use LOG returns: ln(P_t / P_{t-1})
+        Old targets used LINEAR returns: (P_t / P_{t-1}) - 1
+        This created a scale mismatch, especially for large returns.
+
+        New behavior:
+        - Targets use LOG returns for consistency with features
+        - Cost adjustments applied additively (costs are small, log(1-c) ≈ -c)
+
+        Mathematical relationship:
+        - Linear return r_L = 10% → Log return r_log = 9.53% (5% difference)
+        - Linear return r_L = 50% → Log return r_log = 40.5% (19% difference!)
+
+        References:
+        - Cont, R. (2001). "Empirical properties of asset returns" (log returns preferred)
+        - Hudson, R. & Gregoriou, A. (2015). "Calculating and Comparing Returns"
+
         If ``label_col`` is provided and present in ``df`` the existing
         column is returned.  Otherwise the method computes a next-step return
         based on ``price_col``.
@@ -837,7 +855,11 @@ class FeaturePipe:
 
         price = df[self.price_col].astype(float)
         future_price = df.groupby("symbol")[self.price_col].shift(-1)
-        target = future_price.div(price) - 1.0
+
+        # CRITICAL FIX #3: Use LOG returns to match features
+        # Old: target = future_price / price - 1.0 (linear returns)
+        # New: target = log(future_price / price) (log returns)
+        target = np.log(future_price.div(price))
 
         if not self._bar_mode_active:
             return target.rename("target")
@@ -846,6 +868,9 @@ class FeaturePipe:
         if cost_series is None:
             return target.rename("target")
 
+        # Costs are already in linear scale (small values ~0.001-0.01)
+        # For small costs: log(1 - c) ≈ -c, so we can subtract directly
+        # This is a standard approximation in finance (Taylor series expansion)
         adjusted = target - cost_series
         adjusted.name = "target"
         return adjusted

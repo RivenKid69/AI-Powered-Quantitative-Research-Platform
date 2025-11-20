@@ -199,7 +199,13 @@ def _try_calculate_yang_zhang(ohlc_bars: List[Dict[str, float]], n: int) -> Opti
         if rs_count == 0:
             return None
 
-        sigma_rs_sq = rs_sum / rs_count
+        # CRITICAL FIX #2: Apply Bessel's correction to Rogers-Satchell component
+        # Use (n-1) instead of n for consistent sample variance estimation
+        # This aligns with σ_o and σ_c which already use (len-1)
+        # Reference: Casella & Berger (2002) "Statistical Inference" - unbiased sample variance
+        if rs_count < 2:
+            return None
+        sigma_rs_sq = rs_sum / (rs_count - 1)
 
         # Комбинированная Yang-Zhang волатильность
         sigma_yz_sq = sigma_o_sq + k * sigma_c_sq + (1 - k) * sigma_rs_sq
@@ -327,12 +333,21 @@ def _calculate_ewma_volatility(prices: List[float], lambda_decay: float = 0.94) 
         if not np.all(np.isfinite(log_returns)):
             return None
 
-        # Инициализируем дисперсию значением первого квадрата доходности
-        # или используем sample variance если достаточно данных
+        # CRITICAL FIX #4: Robust EWMA initialization to prevent cold start bias
+        # Old approach: variance = first_return² (unreliable, 2-5x bias)
+        # New approach: Use median of squared returns (robust to outliers)
+        # Reference: RiskMetrics Technical Document (1996) - EWMA initialization
         if len(log_returns) >= 10:
+            # Sufficient data: use sample variance
             variance = np.var(log_returns, ddof=1)
+        elif len(log_returns) >= 3:
+            # Limited data: use median of squared returns (robust estimator)
+            # Median is less sensitive to first-return spikes than mean
+            variance = float(np.median(log_returns ** 2))
         else:
-            variance = log_returns[0] ** 2
+            # Very limited data (<3 returns): fall back to mean of squared returns
+            # This is more stable than using only first return
+            variance = float(np.mean(log_returns ** 2))
 
         # Рекурсивно вычисляем EWMA
         for ret in log_returns:
