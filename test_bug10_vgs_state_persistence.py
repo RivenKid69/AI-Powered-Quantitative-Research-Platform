@@ -96,6 +96,11 @@ def test_vgs_state_preservation():
             if 'pytorch_variables.pth' in files_in_archive:
                 with archive.open('pytorch_variables.pth') as f:
                     import io
+                    # Security Note: weights_only=False is acceptable here because:
+                    # 1. This is a test file with controlled checkpoint creation
+                    # 2. The checkpoint is created within this test (not from external source)
+                    # 3. We need access to full object structure for debugging
+                    # WARNING: In production code, always use weights_only=True for untrusted checkpoints
                     pytorch_vars = torch.load(io.BytesIO(f.read()), weights_only=False)
                     print(f"   Keys in pytorch_variables.pth:")
                     for key in pytorch_vars.keys():

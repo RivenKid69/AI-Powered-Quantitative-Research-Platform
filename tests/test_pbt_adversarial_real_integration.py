@@ -306,7 +306,8 @@ class TestRealPBT:
         )
 
         # Load checkpoint
-        loaded_state = torch.load(population[0].checkpoint_path)
+        # Security: Use weights_only=True to prevent arbitrary code execution
+        loaded_state = torch.load(population[0].checkpoint_path, weights_only=True)
 
         # Verify loaded state matches
         for key in model.state_dict().keys():

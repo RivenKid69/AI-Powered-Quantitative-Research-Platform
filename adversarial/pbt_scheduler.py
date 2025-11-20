@@ -271,7 +271,13 @@ class PBTScheduler:
                     f"Member {member.member_id} exploiting from member {source_member.member_id} "
                     f"(performance: {member.performance:.4f} -> {source_member.performance:.4f})"
                 )
-                new_state_dict = torch.load(source_member.checkpoint_path)
+                # Security: weights_only=True prevents arbitrary code execution via malicious pickles
+                # See: https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models
+                new_state_dict = torch.load(
+                    source_member.checkpoint_path,
+                    map_location="cpu",
+                    weights_only=True
+                )
                 # Copy hyperparameters from source
                 member.hyperparams = copy.deepcopy(source_member.hyperparams)
                 self._exploitation_count += 1

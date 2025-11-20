@@ -417,7 +417,8 @@ class TestStateConsistency:
         assert os.path.exists(member.checkpoint_path)
 
         # Load checkpoint
-        loaded_state = torch.load(member.checkpoint_path)
+        # Security: Use weights_only=True to prevent arbitrary code execution
+        loaded_state = torch.load(member.checkpoint_path, weights_only=True)
 
         assert "param" in loaded_state
         assert torch.allclose(loaded_state["param"], model_state["param"])

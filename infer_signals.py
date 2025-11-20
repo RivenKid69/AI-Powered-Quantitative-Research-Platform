@@ -12,6 +12,7 @@ Usage:
   python infer_signals.py
 """
 import os, glob, json
+import pickle
 from pathlib import Path
 import pandas as pd
 import numpy as np
@@ -31,8 +32,23 @@ def _load_model():
     if pt_candidates:
         try:
             import torch
+            import warnings
             path = pt_candidates[0]
-            model = torch.load(path, map_location="cpu")
+
+            # Security: Try loading with weights_only=True to prevent arbitrary code execution
+            # See: https://github.com/pytorch/pytorch/blob/main/SECURITY.md#untrusted-models
+            try:
+                model = torch.load(path, map_location="cpu", weights_only=True)
+            except (pickle.UnpicklingError, RuntimeError, AttributeError) as e:
+                # Fallback for legacy models that contain custom objects
+                # TODO: Re-save models using secure format (state_dict only)
+                warnings.warn(
+                    f"Model {path} contains non-tensor data and cannot be loaded securely. "
+                    f"Falling back to unsafe loading. Please re-save this model. Error: {e}",
+                    UserWarning
+                )
+                model = torch.load(path, map_location="cpu", weights_only=False)
+
             model.eval()
             return ("torch", model, path)
         except Exception:
