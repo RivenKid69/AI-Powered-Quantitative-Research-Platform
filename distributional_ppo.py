@@ -2543,10 +2543,9 @@ class DistributionalPPO(RecurrentPPO):
                 raise ValueError("target_distribution required for categorical critic")
 
             # Compute cross-entropy loss: -sum(target * log(pred))
-            pred_probs_1 = torch.softmax(value_logits_1, dim=1)
-            pred_probs_1 = torch.clamp(pred_probs_1, min=1e-8)
-            pred_probs_1 = pred_probs_1 / pred_probs_1.sum(dim=1, keepdim=True)
-            log_predictions_1 = torch.log(pred_probs_1)
+            # CRITICAL FIX #1: Use F.log_softmax for numerical stability
+            # Avoid log(softmax) which can cause gradient explosion with near-zero values
+            log_predictions_1 = F.log_softmax(value_logits_1, dim=1)
 
             if reduction == "none":
                 loss_1 = -(target_distribution * log_predictions_1).sum(dim=1)
@@ -2572,10 +2571,9 @@ class DistributionalPPO(RecurrentPPO):
             min_values = torch.min(value_est_1, value_est_2)
         else:
             # Categorical critic: use cross-entropy loss
-            pred_probs_2 = torch.softmax(value_logits_2, dim=1)
-            pred_probs_2 = torch.clamp(pred_probs_2, min=1e-8)
-            pred_probs_2 = pred_probs_2 / pred_probs_2.sum(dim=1, keepdim=True)
-            log_predictions_2 = torch.log(pred_probs_2)
+            # CRITICAL FIX #1: Use F.log_softmax for numerical stability
+            # Avoid log(softmax) which can cause gradient explosion with near-zero values
+            log_predictions_2 = F.log_softmax(value_logits_2, dim=1)
 
             if reduction == "none":
                 loss_2 = -(target_distribution * log_predictions_2).sum(dim=1)
@@ -2587,7 +2585,9 @@ class DistributionalPPO(RecurrentPPO):
                 raise ValueError(f"Invalid reduction: {reduction}")
 
             # For logging: compute minimum value estimates
+            # Only compute softmax when needed (for value estimation, not for loss)
             pred_probs_1 = torch.softmax(value_logits_1, dim=1)
+            pred_probs_2 = torch.softmax(value_logits_2, dim=1)
             value_est_1 = (pred_probs_1 * policy.atoms).sum(dim=1, keepdim=True)
             value_est_2 = (pred_probs_2 * policy.atoms).sum(dim=1, keepdim=True)
             min_values = torch.min(value_est_1, value_est_2)
@@ -2773,7 +2773,10 @@ class DistributionalPPO(RecurrentPPO):
                 partial = predicted_quantiles[:, full_mass] * frac
             expectation = mass * (tail_sum + partial)
             tail_mass = max(alpha, mass * (full_mass + frac))
-            return expectation / tail_mass
+            # CRITICAL FIX #3: Protect against division by very small tail_mass
+            # When alpha < 0.01, division can cause gradient explosion (1000x+ norm)
+            tail_mass_safe = max(tail_mass, 1e-6)
+            return expectation / tail_mass_safe
 
         # Interpolate to find values at interval boundaries
         # alpha falls in interval [alpha_idx/N, (alpha_idx+1)/N)
@@ -2825,7 +2828,10 @@ class DistributionalPPO(RecurrentPPO):
         expectation = full_mass_contribution + partial_contribution
 
         # Normalize by alpha to get CVaR
-        return expectation / alpha
+        # CRITICAL FIX #3: Protect against division by very small alpha
+        # When alpha < 0.01, division can cause gradient explosion (1000x+ norm)
+        alpha_safe = max(alpha, 1e-6)
+        return expectation / alpha_safe
 
     def _project_categorical_distribution(
         self,
@@ -3106,11 +3112,29 @@ class DistributionalPPO(RecurrentPPO):
             elif optimizer_name == "AdaptiveUPGD":
                 # AdaptiveUPGD: Recommended for most deep RL applications
                 kwargs.setdefault("weight_decay", 0.001)
-                kwargs.setdefault("sigma", 0.001)
                 kwargs.setdefault("beta_utility", 0.999)
                 kwargs.setdefault("beta1", 0.9)
                 kwargs.setdefault("beta2", 0.999)
                 kwargs.setdefault("eps", 1e-8)
+
+                # CRITICAL FIX #2: Enable adaptive noise when VGS is active
+                # VGS scales gradients down, which amplifies fixed noise by 2-3x
+                # Adaptive noise maintains constant noise-to-signal ratio after VGS scaling
+                vgs_enabled = (
+                    hasattr(self, "_variance_gradient_scaler")
+                    and self._variance_gradient_scaler is not None
+                    and getattr(self._variance_gradient_scaler, "enabled", False)
+                )
+                if vgs_enabled:
+                    # With VGS: use adaptive noise to prevent amplification
+                    kwargs.setdefault("adaptive_noise", True)
+                    kwargs.setdefault("sigma", 0.0005)  # Lower base sigma for VGS
+                    kwargs.setdefault("noise_beta", 0.999)
+                    kwargs.setdefault("min_noise_std", 1e-6)
+                else:
+                    # Without VGS: use fixed noise (original behavior)
+                    kwargs.setdefault("adaptive_noise", False)
+                    kwargs.setdefault("sigma", 0.001)
             elif optimizer_name == "UPGDW":
                 # UPGDW: AdamW-style decoupled weight decay
                 kwargs.setdefault("weight_decay", 0.01)
@@ -10132,6 +10156,18 @@ class DistributionalPPO(RecurrentPPO):
                         constraint_term = cvar_raw.new_tensor(0.0)
 
                     loss_weighted = loss * loss.new_tensor(weight)
+
+                    # CRITICAL FIX #5: Check for NaN/Inf before backward() to prevent silent propagation
+                    if torch.isnan(loss_weighted).any() or torch.isinf(loss_weighted).any():
+                        self.logger.record("error/nan_or_inf_loss_detected", 1.0)
+                        self.logger.record("error/loss_value_at_nan", float(loss.item()))
+                        self.logger.record("error/policy_loss_at_nan", float(policy_loss.item()))
+                        self.logger.record("error/critic_loss_at_nan", float(critic_loss.item()))
+                        self.logger.record("error/cvar_term_at_nan", float(cvar_term.item()))
+                        # Skip backward for this batch to prevent parameter corruption
+                        # Continue with next batch rather than crashing
+                        continue
+
                     loss_weighted.backward()
 
                     bucket_policy_loss_value += float(policy_loss.item()) * weight
@@ -10189,6 +10225,22 @@ class DistributionalPPO(RecurrentPPO):
                 )
                 self.logger.record("train/grad_norm_pre_clip", float(grad_norm_value))
                 self.logger.record("train/max_grad_norm_used", float(max_grad_norm))
+
+                # CRITICAL FIX #4: Monitor LSTM gradient norms per layer to detect gradient explosion
+                # LSTM layers are particularly prone to gradient explosion in recurrent architectures
+                for name, module in self.policy.named_modules():
+                    if isinstance(module, torch.nn.LSTM):
+                        lstm_grad_norm = 0.0
+                        param_count = 0
+                        for param_name, param in module.named_parameters():
+                            if param.grad is not None:
+                                lstm_grad_norm += param.grad.norm().item() ** 2
+                                param_count += 1
+                        if param_count > 0:
+                            lstm_grad_norm = lstm_grad_norm ** 0.5
+                            # Log per-layer LSTM gradient norms
+                            safe_name = name.replace('.', '_')
+                            self.logger.record(f"train/lstm_grad_norm/{safe_name}", float(lstm_grad_norm))
 
                 post_clip_norm_sq = 0.0
                 for param in self.policy.parameters():
