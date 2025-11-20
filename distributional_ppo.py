@@ -6139,32 +6139,44 @@ class DistributionalPPO(RecurrentPPO):
                 # This ensures _setup_dependent_components() will be called again after load
                 return
             else:
-                # FIX Bug #9: Always create fresh VGS to avoid stale parameter references
-                # Old VGS (if unpickled) will have stale _parameters from before save
-                self._variance_gradient_scaler = VarianceGradientScaler(
-                    parameters=self.policy.parameters(),
-                    enabled=True,
-                    beta=vgs_beta,
-                    alpha=vgs_alpha,
-                    warmup_steps=vgs_warmup_steps,
-                    logger=self.logger,
-                )
+                # FIX Bug #10: Check if VGS already exists and has state restored
+                # If VGS exists, it may have been created during load and state restored via set_parameters()
+                # In this case, DON'T recreate it (would lose restored state), just update parameters
+                if self._variance_gradient_scaler is not None:
+                    logger.info("_setup_dependent_components: VGS already exists, updating parameters only")
+                    # Just update parameter references (Bug #9 fix)
+                    self._variance_gradient_scaler.update_parameters(self.policy.parameters())
+                else:
+                    # FIX Bug #9: Create fresh VGS to avoid stale parameter references
+                    # Old VGS (if unpickled) will have stale _parameters from before save
+                    self._variance_gradient_scaler = VarianceGradientScaler(
+                        parameters=self.policy.parameters(),
+                        enabled=True,
+                        beta=vgs_beta,
+                        alpha=vgs_alpha,
+                        warmup_steps=vgs_warmup_steps,
+                        logger=self.logger,
+                    )
 
-                # Restore VGS state if available
-                vgs_saved_state = getattr(self, "_vgs_saved_state_for_restore", None)
-                if vgs_saved_state is not None:
-                    try:
-                        self._variance_gradient_scaler.load_state_dict(vgs_saved_state)
-                    except Exception as e:
-                        logger.warning(f"Failed to restore VGS state: {e}")
-                    delattr(self, "_vgs_saved_state_for_restore")
+                    # Restore VGS state if available
+                    vgs_saved_state = getattr(self, "_vgs_saved_state_for_restore", None)
+                    if vgs_saved_state is not None:
+                        logger.info(f"_setup_dependent_components: Restoring VGS saved state (step_count={vgs_saved_state.get('step_count', 'N/A')})")
+                        try:
+                            self._variance_gradient_scaler.load_state_dict(vgs_saved_state)
+                            logger.info(f"_setup_dependent_components: VGS state restored successfully (step_count={self._variance_gradient_scaler._step_count})")
+                        except Exception as e:
+                            logger.warning(f"Failed to restore VGS state: {e}")
+                        delattr(self, "_vgs_saved_state_for_restore")
+                    else:
+                        logger.debug("_setup_dependent_components: No VGS saved state to restore")
 
-                # FIX Bug #9: CRITICAL - Update parameters to ensure VGS tracks current policy params
-                # This is essential after load because:
-                # 1. VGS.__init__ gets parameters via generator which creates a list snapshot
-                # 2. After load, policy may have been updated via load_state_dict
-                # 3. We must relink VGS to the CURRENT policy parameter objects
-                self._variance_gradient_scaler.update_parameters(self.policy.parameters())
+                    # FIX Bug #9: CRITICAL - Update parameters to ensure VGS tracks current policy params
+                    # This is essential after load because:
+                    # 1. VGS.__init__ gets parameters via generator which creates a list snapshot
+                    # 2. After load, policy may have been updated via load_state_dict
+                    # 3. We must relink VGS to the CURRENT policy parameter objects
+                    self._variance_gradient_scaler.update_parameters(self.policy.parameters())
 
                 self.logger.record("config/vgs_enabled", float(vgs_enabled))
                 self.logger.record("config/vgs_beta", float(vgs_beta))
@@ -11017,9 +11029,54 @@ class DistributionalPPO(RecurrentPPO):
         integral_limit = self._kl_integral_limit()
         self._kl_err_int = float(np.clip(self._kl_err_int, -integral_limit, integral_limit))
 
+    def _serialize_vgs_state(self) -> Optional[dict[str, Any]]:
+        """
+        Serialize VGS state for save/load.
+
+        Returns VGS state_dict if VGS is enabled and initialized, None otherwise.
+        This allows proper restoration of VGS statistics after model load.
+        """
+        if self._variance_gradient_scaler is None:
+            return None
+        try:
+            return self._variance_gradient_scaler.state_dict()
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to serialize VGS state: {e}")
+            return None
+
+    def _restore_vgs_state(self, state: Optional[Mapping[str, Any]]) -> None:
+        """
+        Restore VGS state after load.
+
+        If VGS is not yet initialized (happens during load), save the state
+        for later restoration in _setup_dependent_components().
+        """
+        logger = logging.getLogger(__name__)
+
+        if not isinstance(state, Mapping):
+            logger.debug("_restore_vgs_state: No VGS state to restore (state is None or not a Mapping)")
+            return
+
+        logger.info(f"_restore_vgs_state: VGS state received with step_count={state.get('step_count', 'N/A')}")
+
+        if self._variance_gradient_scaler is None:
+            # VGS will be created in _setup_dependent_components()
+            # Save state for later restoration
+            self._vgs_saved_state_for_restore = dict(state)
+            logger.info(f"_restore_vgs_state: VGS not yet created, saved state for later (step_count={state.get('step_count', 'N/A')})")
+        else:
+            # VGS already exists, restore immediately
+            try:
+                self._variance_gradient_scaler.load_state_dict(state)
+                logger.info(f"_restore_vgs_state: VGS state restored immediately (step_count={self._variance_gradient_scaler._step_count})")
+            except Exception as e:
+                logger.warning(f"Failed to restore VGS state: {e}")
+
     def get_parameters(self) -> dict[str, dict]:
         params = super().get_parameters()
         params["kl_penalty_state"] = self._serialize_kl_penalty_state()
+        params["vgs_state"] = self._serialize_vgs_state()
         return params
 
     def set_parameters(
@@ -11039,8 +11096,10 @@ class DistributionalPPO(RecurrentPPO):
             params = dict(params_loaded)
 
         kl_state = params.pop("kl_penalty_state", None)
+        vgs_state = params.pop("vgs_state", None)
         super().set_parameters(params, exact_match=exact_match, device=device)
         self._restore_kl_penalty_state(kl_state)
+        self._restore_vgs_state(vgs_state)
 
     def learn(
         self,
