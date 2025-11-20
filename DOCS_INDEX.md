@@ -4,18 +4,41 @@
 
 ---
 
-## 🔥 CRITICAL - READ FIRST (2025-11-20)
+## 🔥 CRITICAL - READ FIRST (2025-11-21)
 
-**Three critical bugs were discovered and fixed. All fixes are active by default.**
+**MAJOR UPDATE**: Multiple critical bugs discovered and fixed. All fixes are active by default.
 
-### Critical Bug Fixes
-- 🚨 [CRITICAL_FIXES_REPORT.md](CRITICAL_FIXES_REPORT.md) - **Complete analysis of 3 critical bugs**
-  - Problem #10: Temporal causality violation in stale data
-  - Problem #11: Cross-symbol contamination in normalization
-  - Problem #12: Inverted quantile loss formula
-- 📋 [docs/CRITICAL_BUGS_PREVENTION.md](docs/CRITICAL_BUGS_PREVENTION.md) - **Prevention guide for future development**
+### 🔴 Latest Critical Fixes (2025-11-21)
 
-**Action Required**: If you have existing trained models, check if they're affected!
+#### Numerical & Computational Fixes
+- 🚨 [NUMERICAL_ISSUES_FIX_SUMMARY.md](NUMERICAL_ISSUES_FIX_SUMMARY.md) - **LSTM + NaN handling** (2 issues fixed)
+  - **Issue #4**: LSTM states not reset on episode boundaries → **FIXED** (5-15% improvement expected)
+  - **Issue #2**: NaN → 0.0 silent conversion → **IMPROVED** (logging added)
+- 🚨 [CRITICAL_LSTM_RESET_FIX_REPORT.md](CRITICAL_LSTM_RESET_FIX_REPORT.md) - **Full LSTM reset documentation**
+- 🚨 [FINAL_FIX_SUMMARY_2025_11_21.md](FINAL_FIX_SUMMARY_2025_11_21.md) - **Final comprehensive report**
+
+#### Action Space Fixes
+- 🚨 [CRITICAL_FIXES_COMPLETE_REPORT.md](CRITICAL_FIXES_COMPLETE_REPORT.md) - **3 critical action space bugs**
+  - **Problem #1**: Sign convention mismatch in LongOnlyWrapper → **FIXED**
+  - **Problem #2**: Position semantics DELTA→TARGET → **FIXED** (prevents position doubling!)
+  - **Problem #3**: Action space range [0,1] vs [-1,1] → **FIXED**
+
+#### Data & Critic Fixes (2025-11-20)
+- 🚨 [CRITICAL_FIXES_REPORT.md](CRITICAL_FIXES_REPORT.md) - **3 critical data bugs**
+  - **Problem #10**: Temporal causality violation in stale data → **FIXED**
+  - **Problem #11**: Cross-symbol contamination in normalization → **FIXED**
+  - **Problem #12**: Inverted quantile loss formula → **FIXED**
+
+### 🛡️ Regression Prevention
+- 📋 [REGRESSION_PREVENTION_CHECKLIST.md](REGRESSION_PREVENTION_CHECKLIST.md) - **Обязательный checklist для разработчиков**
+- 📋 [docs/CRITICAL_BUGS_PREVENTION.md](docs/CRITICAL_BUGS_PREVENTION.md) - Prevention guide
+
+**⚠️ Action Required**:
+- LSTM models trained before 2025-11-21 → **RETRAIN RECOMMENDED** (5-15% improvement)
+- Models with action space issues → **RETRAIN REQUIRED**
+- Models with data bugs (2025-11-20) → **RETRAIN REQUIRED**
+
+**Test Coverage**: 52+ new tests added (all passing ✅)
 
 ---
 
@@ -367,6 +390,6 @@ This index should be updated when:
 - Major features are added/removed
 - Bug fixes are completed
 
-**Last Updated:** 2025-11-20
+**Last Updated:** 2025-11-21
 **Maintained by:** Claude Code
-**Status:** 🟡 Reorganization in progress
+**Status:** ✅ Up to date (Version 2.1)

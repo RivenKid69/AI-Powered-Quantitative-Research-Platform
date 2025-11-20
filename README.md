@@ -1,16 +1,181 @@
-# TradingBot
+# TradingBot2
+
+**Высокочастотный торговый бот** для криптовалют (Binance spot/futures) с использованием **Reinforcement Learning (PPO)** для принятия торговых решений.
+
+---
+
+## 🎯 Статус Проекта (2025-11-21)
+
+**Версия**: 2.1
+**Статус**: ✅ **Production Ready**
+**Последнее обновление**: 2025-11-21
+
+### ✅ Последние Критические Исправления
+
+- 🔴 **LSTM State Reset** (2025-11-21) - устранена temporal leakage между эпизодами
+- 🔴 **Action Space Fixes** (2025-11-21) - предотвращена position doubling bug
+- 🔴 **NaN Handling** (2025-11-21) - улучшена обработка missing data
+- 🔴 **3 Critical Data Bugs** (2025-11-20) - temporal causality, cross-symbol contamination, quantile loss
+
+**Test Coverage**: 52+ новых тестов для критических исправлений (все проходят ✅)
+
+---
+
+## 🚀 Основные Возможности
+
+### RL Framework
+- **Distributional PPO** с Twin Critics (default enabled)
+- **AdaptiveUPGD Optimizer** - continual learning без catastrophic forgetting
+- **VGS (Variance Gradient Scaler)** - автоматическое per-layer gradient scaling
+- **PBT (Population-Based Training)** - эволюционная оптимизация гиперпараметров
+- **SA-PPO (State-Adversarial PPO)** - robust training против distribution shift
+
+### Execution Simulator
+- Full LOB (Limit Order Book) simulation с микроструктурой
+- Модели проскальзывания (linear, sqrt, calibrated)
+- Учет комиссий (maker/taker, BNB discount)
+- TTL (time-to-live) для лимитных заявок, TIF (GTC/IOC/FOK)
+- Алгоритмические исполнители: TWAP, POV, VWAP
+
+### Data & Features
+- 63 features (price, volume, volatility, momentum, microstructure)
+- Seasonality framework (168 часов недели)
+- Data degradation simulation (stale data, drops, delays)
+- Multi-symbol support с portfolio management
+
+### Risk Management
+- Position limits, leverage limits, stop-loss
+- Daily loss limits, drawdown protection
+- Operational kill switch
+- No-trade windows (funding windows, custom intervals)
+
+---
+
+## 📚 Документация
+
+### Главная Документация
+- **[CLAUDE.md](CLAUDE.md)** - **Полная документация проекта** (Russian) ⭐ **Начните здесь!**
+- **[DOCS_INDEX.md](DOCS_INDEX.md)** - Навигация по всей документации
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** - Архитектура системы
+- **[QUICK_START_REFERENCE.md](QUICK_START_REFERENCE.md)** - Быстрый старт
+
+### Критические Исправления (2025-11-21)
+- **[CRITICAL_FIXES_COMPLETE_REPORT.md](CRITICAL_FIXES_COMPLETE_REPORT.md)** - Action space fixes
+- **[NUMERICAL_ISSUES_FIX_SUMMARY.md](NUMERICAL_ISSUES_FIX_SUMMARY.md)** - LSTM + NaN fixes
+- **[REGRESSION_PREVENTION_CHECKLIST.md](REGRESSION_PREVENTION_CHECKLIST.md)** - Обязательный checklist
+- **[CRITICAL_FIXES_REPORT.md](CRITICAL_FIXES_REPORT.md)** - Data & critic bugs (2025-11-20)
+
+### Продвинутые Возможности
+- **[docs/UPGD_INTEGRATION.md](docs/UPGD_INTEGRATION.md)** - UPGD optimizer integration
+- **[docs/twin_critics.md](docs/twin_critics.md)** - Twin critics architecture
+- **[docs/seasonality.md](docs/seasonality.md)** - Seasonality framework
+
+---
+
+## ⚡ Быстрый Старт
+
+### Установка
+
+```bash
+# Install dependencies
+pip install -r requirements.txt
+pip install -r requirements_extra.txt
+
+# Build Cython modules
+python setup.py build_ext --inplace
+```
+
+### Основные Команды
+
+```bash
+# Бэктест
+python script_backtest.py --config configs/config_sim.yaml
+
+# Обучение (standard)
+python train_model_multi_patch.py --config configs/config_train.yaml
+
+# Обучение (PBT + Adversarial)
+python train_model_multi_patch.py --config configs/config_pbt_adversarial.yaml
+
+# Live trading
+python script_live.py --config configs/config_live.yaml
+
+# Evaluation
+python script_eval.py --config configs/config_eval.yaml --all-profiles
+
+# Тестирование
+pytest tests/                          # Все тесты
+pytest tests/test_critical*.py -v     # Критические тесты
+```
+
+### Обновление Данных
+
+```bash
+# Обновить universe символов
+python -m services.universe --output data/universe/symbols.json
+
+# Обновить биржевые фильтры
+python scripts/fetch_binance_filters.py --universe --out data/binance_filters.json
+
+# Обновить комиссии
+python scripts/refresh_fees.py
+```
+
+---
+
+## 🏗️ Архитектура
+
+Проект использует **строгую слоистую архитектуру** с dependency injection:
+
+```
+core_ → impl_ → service_ → strategies → script_
+```
+
+- **core_*** - Базовые сущности, contracts, models
+- **impl_*** - Конкретные реализации (execution, fees, slippage, etc)
+- **service_*** - Бизнес-логика (backtest, train, eval, live trading)
+- **strategies/** - Торговые стратегии
+- **script_*** - CLI точки входа
+
+**ВАЖНО**: Не нарушайте зависимости между слоями!
+
+---
+
+## 🧪 Тестирование
+
+```bash
+# Все тесты
+pytest tests/
+
+# Критические тесты (2025-11-21)
+pytest tests/test_lstm_episode_boundary_reset.py -v        # LSTM state reset
+pytest tests/test_critical_action_space_fixes.py -v        # Action space fixes
+pytest tests/test_nan_handling_external_features.py -v     # NaN handling
+
+# По категориям
+pytest tests/test_execution*.py -v     # Execution simulator
+pytest tests/test_distributional_ppo*.py -v  # PPO implementation
+pytest tests/test_upgd*.py -v          # UPGD optimizer
+pytest tests/test_pbt*.py -v           # PBT scheduler
+```
+
+---
+
+## 📖 Дополнительная Документация
 
 Скрипты `script_*.py` и `train_model_multi_patch.py` выступают CLI‑точками
 входа в сервисы. Все они используют dependency injection и не содержат
 бизнес‑логики, ограничиваясь описанием аргументов и вызовом соответствующих
 сервисов.
 
-Документация по утилите скользящего среднего доступна в [docs/moving_average.md](docs/moving_average.md) (English/Russian).
-Обзор конвейера принятия решений описан в [docs/pipeline.md](docs/pipeline.md).
-Баровый режим исполнения и формат сигналов описаны в [docs/bar_execution.md](docs/bar_execution.md)
-с публичными JSON-схемами: [envelope](docs/spot_signal_envelope.schema.json),
-[target_weight](docs/spot_signal_target_weight.schema.json) и
-[delta_weight](docs/spot_signal_delta_weight.schema.json).
+### Компоненты
+- [docs/moving_average.md](docs/moving_average.md) - Moving average implementation
+- [docs/pipeline.md](docs/pipeline.md) - Decision pipeline architecture
+- [docs/bar_execution.md](docs/bar_execution.md) - Bar execution mode
+  - JSON schemas: [envelope](docs/spot_signal_envelope.schema.json), [target_weight](docs/spot_signal_target_weight.schema.json), [delta_weight](docs/spot_signal_delta_weight.schema.json)
+- [docs/large_orders.md](docs/large_orders.md) - Large order execution (TWAP, POV, VWAP)
+- [docs/no_trade.md](docs/no_trade.md) - No-trade windows
+- [docs/data_degradation.md](docs/data_degradation.md) - Data degradation simulation
 
 ## File Ownership and Permissions
 

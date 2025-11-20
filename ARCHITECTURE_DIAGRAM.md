@@ -390,11 +390,15 @@ TOTAL: 3 + 2 + 13 + 3 + 6 + 5 + 21 + 3 = 56 features
 │              ГЛАВНЫЕ КОМПОНЕНТЫ                        │
 ├─────────────────────────────────────────────────────────┤
 │                                                         │
-│  1. ОБУЧЕНИЕ МОДЕЛИ                                    │
+│  1. ОБУЧЕНИЕ МОДЕЛИ (⭐ Updated 2025-11-21)            │
 │     └─ train_model_multi_patch.py                      │
 │        └─ distributional_ppo.py (Distributional PPO)  │
-│           └─ custom_policy_patch1.py (кастомная политика)
-│              └─ Optuna HPO (гиперпараметры)           │
+│           ├─ Twin Critics (default enabled)           │
+│           ├─ LSTM State Reset (CRITICAL FIX)          │
+│           ├─ AdaptiveUPGD Optimizer (default)         │
+│           ├─ VGS (Variance Gradient Scaler)           │
+│           ├─ PBT (Population-Based Training)          │
+│           └─ SA-PPO (State-Adversarial PPO)           │
 │                                                         │
 │  2. ГЛАВНЫЙ ИСПОЛНИТЕЛЬ СИГНАЛОВ                       │
 │     └─ service_signal_runner.py                        │
