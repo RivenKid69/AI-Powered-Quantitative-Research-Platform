@@ -320,8 +320,22 @@ else:
 
 @dataclass
 class ExecAction:
+    """
+    Execution action representation.
+
+    CRITICAL (2025-11-21): volume_frac semantics
+    ============================================
+    volume_frac represents **TARGET position** as fraction of max_position.
+    NOT a delta/change! See ActionProto in action_proto.py for full contract.
+
+    WARNING: Do NOT interpret as delta - this causes position doubling!
+    ✅ Correct: target = volume_frac * max_position
+    ❌ WRONG:   delta = volume_frac * max_position; next = current + delta
+
+    See docs/ACTION_SPACE_CRITICAL_GUIDE.md for details.
+    """
     action_type: int
-    volume_frac: float = 0.0
+    volume_frac: float = 0.0  # TARGET position ∈ [-1, 1], NOT delta!
     price_offset_ticks: int = 0
     abs_price: Optional[float] = None
     tif: str = "GTC"

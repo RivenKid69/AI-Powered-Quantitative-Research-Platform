@@ -116,21 +116,27 @@ class RiskGuard:
         """
         Проверяет, не приведёт ли ДЕЙСТВИЕ к нарушению лимита по абсолютной позиции.
         Возвращает RiskEvent (NONE или POSITION_LIMIT).
+
+        CRITICAL FIX (2025-11-21):
+        - volume_frac теперь интерпретируется как **TARGET position**, а не DELTA
+        - Это предотвращает risk of position doubling при повторных действиях
         """
         cfg = self.cfg
         ts = cfg.ts_provider()
 
-        # предполагаемая позиция после применения volume_frac * max_position
+        # volume_frac ∈ [-1, 1] представляет TARGET position as fraction of max
         max_pos = self._get_max_position_from_state_or_cfg(state, cfg)
-        # volume_frac ∈ [-1, 1], знак => направление
-        delta_units = float(proto.volume_frac) * float(max_pos)
 
         # политики типа HOLD не изменяют позицию
         if proto.action_type == ActionType.HOLD:
             self._last_event = RiskEvent.NONE
             return self._last_event
 
-        next_units = float(state.units) + delta_units
+        # ✅ FIXED: Interpret volume_frac as TARGET, not delta
+        # target_units = volume_frac * max_position
+        target_units = float(proto.volume_frac) * float(max_pos)
+        next_units = target_units  # Direct target, not adding to current
+
         if abs(next_units) > cfg.max_abs_position + 1e-12:
             evt = RiskEvent.POSITION_LIMIT
             eb.log_risk({

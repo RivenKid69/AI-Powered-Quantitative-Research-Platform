@@ -6,7 +6,16 @@ action_proto.py
 Определения:
 - ActionType: IntEnum со значениями, совместимыми со старым кодом (0=HOLD,1=MARKET,2=LIMIT,3=CANCEL_ALL).
 - ActionProto: dataclass с полями action_type, volume_frac, price_offset_ticks, tif, client_tag.
-  volume_frac в диапазоне [-1.0, 1.0]; знак определяет сторону: >0 BUY, <0 SELL; 0 допускается для HOLD/CANCEL_ALL.
+
+  **volume_frac** ∈ [-1.0, 1.0]: **TARGET position** as fraction of max_position.
+    - **CRITICAL**: This specifies the DESIRED END STATE, NOT a delta/change!
+    - Positive: LONG target (e.g., 0.5 → target 50% long position)
+    - Negative: SHORT target (e.g., -0.5 → target 50% short position)
+    - Zero: FLAT target (no position / all cash)
+    - The execution layer calculates: delta = target_position - current_position
+    - Example: current=30 units, max=100, volume_frac=0.8
+      → target=80 units → delta=+50 units (BUY 50)
+
   price_offset_ticks — целочисленный сдвиг цены от референсной (mid/last) в тиках для LIMIT; 0 означает по текущей.
   tif — строка TimeInForce из core_models.TimeInForce.value ('GTC'|'IOC'|'FOK').
 
@@ -31,8 +40,22 @@ class ActionType(IntEnum):
 
 @dataclass(frozen=True)
 class ActionProto:
+    """
+    Structured trading action with TARGET position semantics.
+
+    Attributes:
+        action_type: Type of action (HOLD, MARKET, LIMIT, CANCEL_ALL)
+        volume_frac: **TARGET position** as fraction of max_position ∈ [-1, 1]
+                     NOT a delta! Specifies desired end state.
+                     Positive = long, Negative = short, Zero = flat.
+        price_offset_ticks: Price offset from reference in ticks (for LIMIT orders)
+        ttl_steps: Time-to-live in simulation steps
+        abs_price: Absolute price override (optional)
+        tif: Time-in-force ('GTC', 'IOC', 'FOK')
+        client_tag: Optional client identifier
+    """
     action_type: ActionType
-    volume_frac: float
+    volume_frac: float  # TARGET position ∈ [-1, 1], NOT delta
     price_offset_ticks: int = 0
     ttl_steps: int = 0
     abs_price: float | None = None

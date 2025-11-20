@@ -882,19 +882,39 @@ class TradingEnv(gym.Env):
         return clip_value
 
     def _signal_position_from_proto(self, proto: ActionProto, previous: float) -> float:
+        """
+        Extract TARGET position from ActionProto.
+
+        CRITICAL NOTE (2025-11-21):
+        - volume_frac represents TARGET position ∈ [-1, 1], not delta
+        - Returns target position directly (not added to previous)
+        - Long-only clipping should be handled by LongOnlyActionWrapper upstream
+        """
         action_type = getattr(proto, "action_type", ActionType.HOLD)
         if action_type in (ActionType.MARKET, ActionType.LIMIT):
             pos_val = self._safe_float(getattr(proto, "volume_frac", 0.0))
             if pos_val is None:
                 return 0.0
+            # For long-only mode: should already be in [0, 1] if wrapper applied
+            # But clip defensively to prevent violations
             if self._signal_long_only:
                 return float(np.clip(pos_val, 0.0, 1.0))
+            # For long/short mode: enforce [-1, 1] contract
             return float(np.clip(pos_val, -1.0, 1.0))
         if action_type == ActionType.CANCEL_ALL:
-            return 0.0
+            return 0.0  # Flat position
+        # HOLD: return previous TARGET (not current position!)
         return float(previous)
 
     def _to_proto(self, action) -> ActionProto:
+        """
+        Convert policy action to ActionProto.
+
+        CRITICAL FIX (2025-11-21):
+        - Changed bounds from [0, 1] to [-1, 1] to match ActionProto contract
+        - volume_frac ∈ [-1, 1] represents TARGET position (not delta)
+        - Negative values = short target (or reduce long if long-only wrapper used)
+        """
         if isinstance(action, ActionProto):
             return action
 
@@ -917,8 +937,9 @@ class TradingEnv(gym.Env):
                     raise TypeError(f"Unsupported score payload: {value!r}") from exc
             if not math.isfinite(scalar):
                 raise ValueError(f"Policy produced non-finite score: {scalar}")
-            if scalar < 0.0 or scalar > 1.0:
-                scalar = float(np.clip(scalar, 0.0, 1.0))
+            # ✅ FIXED: Enforce [-1, 1] bounds per ActionProto contract
+            if scalar < -1.0 or scalar > 1.0:
+                scalar = float(np.clip(scalar, -1.0, 1.0))
             return scalar
 
         score = _coerce_score(action)
