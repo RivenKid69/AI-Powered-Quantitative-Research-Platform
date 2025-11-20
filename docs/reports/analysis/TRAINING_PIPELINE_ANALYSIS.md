@@ -1,5 +1,14 @@
 # TradingBot2 Training Pipeline - Comprehensive Error Analysis Report
 
+> **⚠️ DOCUMENT STATUS (2025-11-21):**
+> This analysis was created in November 2025 and reflects the training pipeline at that time.
+> **IMPORTANT NOTES:**
+> - **PopArt**: This document mentions PopArt as an active component. However, **PopArt is DISABLED** by default in the current implementation (see distributional_ppo.py:33-37). Code exists but is not used.
+> - **LSTM State Reset**: This analysis does not reflect the critical LSTM state reset fix implemented on 2025-11-21. See [NUMERICAL_ISSUES_FIX_SUMMARY.md](../../../NUMERICAL_ISSUES_FIX_SUMMARY.md) for details.
+> - **Action Space Fixes**: Recent critical fixes to action space semantics (TARGET vs DELTA) are not covered. See [CRITICAL_FIXES_COMPLETE_REPORT.md](../../../CRITICAL_FIXES_COMPLETE_REPORT.md).
+>
+> For the most current documentation, refer to [CLAUDE.md](../../../CLAUDE.md) and the critical fixes reports.
+
 ## Executive Summary
 The training pipeline in TradingBot2 is a sophisticated multi-stage system using Distributional PPO (Policy Gradient optimization) with Optuna hyperparameter optimization. The code has been extensively refactored with improvements for EV (Explained Variance) stability, CVaR (Conditional Value at Risk) integration, and data leakage prevention.
 

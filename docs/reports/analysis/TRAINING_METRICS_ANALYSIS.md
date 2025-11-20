@@ -1,5 +1,15 @@
 # COMPREHENSIVE TRAINING METRICS ANALYSIS
 
+> **⚠️ DOCUMENT STATUS (2025-11-21):**
+> This comprehensive metrics analysis was created in November 2025 and documents all training metrics in the distributional PPO implementation.
+> **IMPORTANT NOTES:**
+> - **LSTM State Reset (2025-11-21)**: This analysis **does not reflect** the critical LSTM state reset fix which improves value loss convergence by 5-15%. The documented loss patterns may differ from current behavior. See [NUMERICAL_ISSUES_FIX_SUMMARY.md](../../../NUMERICAL_ISSUES_FIX_SUMMARY.md).
+> - **PopArt**: Mentions of PopArt reflect code structure but **PopArt is DISABLED** by default (see distributional_ppo.py:33-37).
+> - **Action Space**: Does not cover 2025-11-21 action space semantics changes (TARGET vs DELTA). See [CRITICAL_FIXES_COMPLETE_REPORT.md](../../../CRITICAL_FIXES_COMPLETE_REPORT.md).
+> - **CVaR Bugs**: Some documented bugs (e.g., CVaR violation sign inversion) may have been addressed. Check latest code.
+>
+> **RECOMMENDATION**: Use this document for understanding **what metrics exist and how they're calculated**, but verify current behavior against latest code and critical fixes reports. For production training, refer to [CLAUDE.md](../../../CLAUDE.md) section "Distributional PPO".
+
 ## Summary
 This document provides a complete analysis of ALL training metrics logged during model training in the distributional PPO implementation. It includes metric definitions, calculation formulas, potential issues, and methodological concerns.
 
