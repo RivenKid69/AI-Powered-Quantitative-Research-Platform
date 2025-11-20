@@ -572,16 +572,103 @@ python script_calibrate_slippage.py --config configs/slippage_calibrate.yaml
 - [ ] Проведён sim reality check (`sim_reality_check.py`)
 - [ ] Все тесты проходят (`pytest tests/`)
 
+## Документация проекта
+
+### Основная документация
+
+- **[DOCS_INDEX.md](DOCS_INDEX.md)** — Главный индекс всей документации проекта
+- **[README.md](README.md)** — Обзор проекта и быстрый старт
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — Архитектура системы
+- **[CLAUDE.md](CLAUDE.md)** — Полная документация проекта (этот файл)
+- **[CONTRIBUTING.md](CONTRIBUTING.md)** — Руководство по участию в разработке
+- **[CHANGELOG.md](CHANGELOG.md)** — История изменений
+- **[BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md)** — Инструкции по сборке
+
+### Быстрые справочники
+
+- **[QUICK_START_REFERENCE.md](QUICK_START_REFERENCE.md)** — Быстрый старт
+- **[FILE_REFERENCE.md](FILE_REFERENCE.md)** — Справочник по файлам
+- **[VERIFICATION_INSTRUCTIONS.md](VERIFICATION_INSTRUCTIONS.md)** — Инструкции по верификации
+
+### Отчеты и анализы
+
+Все отчеты, анализы и документация по исправлениям организованы в `docs/reports/`:
+
+#### Отчеты об ошибках ([docs/reports/bugs/](docs/reports/bugs/))
+- Отчеты об ошибках (BUG_REPORT_*.md)
+- Исправления ошибок (BUG_FIX_*.md)
+- Критические ошибки
+- Специфичные для компонентов ошибки
+
+#### Отчеты аудита ([docs/reports/audits/](docs/reports/audits/))
+- Аудит функций (Feature audits)
+- Системные аудиты (System audits)
+- Аудит документации (Documentation audits)
+- Глубокие аудиты (Deep audits)
+
+#### Интеграция и миграция ([docs/reports/integration/](docs/reports/integration/))
+- **[INTEGRATION_SUCCESS_REPORT.md](docs/reports/integration/INTEGRATION_SUCCESS_REPORT.md)** — Текущий успешный статус интеграции
+- **[INTEGRATION_TESTING_SUMMARY.md](docs/reports/integration/INTEGRATION_TESTING_SUMMARY.md)** — Итоги тестирования интеграции
+- Руководства по миграции (56→62, 62→63 features)
+- Миграция Pydantic v2
+
+#### Функции и компоненты ([docs/reports/features/](docs/reports/features/))
+- Маппинг функций (56, 62, 63 features)
+- Адаптация функций
+- Специфичные компоненты (GARCH, TBR, и т.д.)
+
+#### Анализы ([docs/reports/analysis/](docs/reports/analysis/))
+- Анализ данных
+- Анализ алгоритмов
+- Системный анализ
+- Анализ производительности
+
+#### Исправления ([docs/reports/fixes/](docs/reports/fixes/))
+- Исправления PPO и value function
+- Статистические исправления
+- Исправления квантилей и loss functions
+- Оптимизационные исправления
+- Исправления данных
+
+#### Тесты и верификация ([docs/reports/tests/](docs/reports/tests/))
+- Отчеты о покрытии тестами
+- Отчеты верификации
+- Глубокая валидация
+- Компонентное тестирование
+
+#### Специализированные отчеты
+- **[UPGD & VGS](docs/reports/upgd_vgs/)** — UPGD оптимизатор и VGS
+- **[Twin Critics](docs/reports/twin_critics/)** — Twin Critics архитектура
+- **[Self-Review](docs/reports/self_review/)** — Самопроверка и критический анализ
+- **[Summaries](docs/reports/summaries/)** — Итоговые документы
+
+### Архив документации
+
+- **[docs/archive/deprecated/](docs/archive/deprecated/)** — Устаревшая документация
+- **[docs/archive/uncategorized/](docs/archive/uncategorized/)** — Некатегоризованные документы
+
+### Скрипт реорганизации
+
+Для поддержания порядка в документации используйте:
+```bash
+# Просмотр того, что будет перемещено (dry-run)
+python scripts/reorganize_docs.py --dry-run --verbose
+
+# Создание README файлов для категорий
+python scripts/reorganize_docs.py --create-readmes
+
+# Выполнение реорганизации
+python scripts/reorganize_docs.py
+```
+
 ## Полезные ссылки
 
+- **Documentation Index**: [DOCS_INDEX.md](DOCS_INDEX.md) — Главная навигация по документации
 - **Issues**: `/home/user/TradingBot2/issues/`
 - **Benchmarks**: `/home/user/TradingBot2/benchmarks/`
 - **Artifacts**: `/home/user/TradingBot2/artifacts/`
 - **Data**: `/home/user/TradingBot2/data/`
 - **Logs**: `/home/user/TradingBot2/logs/` (автоматически создаются)
-- **CHANGELOG**: `CHANGELOG.md`
-- **ARCHITECTURE**: `ARCHITECTURE.md`
-- **CONTRIBUTING**: `CONTRIBUTING.md`
 
 ## Заключение
 
