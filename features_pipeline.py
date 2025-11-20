@@ -157,11 +157,18 @@ class FeaturePipeline:
         if not frames:
             raise ValueError("No rows available to fit FeaturePipeline after applying training filters.")
 
-        big = pd.concat(frames, axis=0, ignore_index=True)
-        if "close_orig" in big.columns:
-            pass
-        elif "close" in big.columns:
-            big["close"] = big["close"].shift(1)
+        # FIX: Apply shift() per-symbol BEFORE concat to prevent cross-symbol contamination
+        # Each frame corresponds to one symbol, so we shift each independently
+        shifted_frames: List[pd.DataFrame] = []
+        for frame in frames:
+            if "close_orig" not in frame.columns and "close" in frame.columns:
+                frame_copy = frame.copy()
+                frame_copy["close"] = frame_copy["close"].shift(1)
+                shifted_frames.append(frame_copy)
+            else:
+                shifted_frames.append(frame)
+
+        big = pd.concat(shifted_frames, axis=0, ignore_index=True)
         cols = _columns_to_scale(big)
         stats = {}
         for c in cols:
@@ -208,10 +215,15 @@ class FeaturePipeline:
         if not self.stats:
             raise ValueError("FeaturePipeline is empty; call fit() or load().")
         out = df.copy()
-        if "close_orig" in out.columns:
-            pass
-        elif "close" in out.columns:
-            out["close"] = out["close"].shift(1)
+
+        # FIX: Apply shift() per-symbol if 'symbol' column exists
+        if "close_orig" not in out.columns and "close" in out.columns:
+            if "symbol" in out.columns:
+                # Per-symbol shift to prevent cross-symbol contamination
+                out["close"] = out.groupby("symbol", group_keys=False)["close"].shift(1)
+            else:
+                # Single symbol case - standard shift
+                out["close"] = out["close"].shift(1)
         for c, ms in self.stats.items():
             if c not in out.columns:
                 # silently skip columns missing in this DF

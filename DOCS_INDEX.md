@@ -2,14 +2,31 @@
 
 > **Navigation Hub** для всей документации проекта
 
+---
+
+## 🔥 CRITICAL - READ FIRST (2025-11-20)
+
+**Three critical bugs were discovered and fixed. All fixes are active by default.**
+
+### Critical Bug Fixes
+- 🚨 [CRITICAL_FIXES_REPORT.md](CRITICAL_FIXES_REPORT.md) - **Complete analysis of 3 critical bugs**
+  - Problem #10: Temporal causality violation in stale data
+  - Problem #11: Cross-symbol contamination in normalization
+  - Problem #12: Inverted quantile loss formula
+- 📋 [docs/CRITICAL_BUGS_PREVENTION.md](docs/CRITICAL_BUGS_PREVENTION.md) - **Prevention guide for future development**
+
+**Action Required**: If you have existing trained models, check if they're affected!
+
+---
+
 ## 📚 Core Documentation
 
 ### Essential Documents
 - [README.md](README.md) - Project overview and quick start
 - [ARCHITECTURE.md](ARCHITECTURE.md) - System architecture and design principles
-- [CLAUDE.md](CLAUDE.md) - Complete project documentation (Russian)
+- [CLAUDE.md](CLAUDE.md) - Complete project documentation (Russian) ⭐ **Updated with critical fixes**
 - [CONTRIBUTING.md](CONTRIBUTING.md) - Contribution guidelines
-- [CHANGELOG.md](CHANGELOG.md) - Version history and changes
+- [CHANGELOG.md](CHANGELOG.md) - Version history and changes ⭐ **Updated with bugs #10-12**
 - [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md) - Build and compilation instructions
 
 ### Quick References

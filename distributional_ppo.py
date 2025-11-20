@@ -4941,7 +4941,7 @@ class DistributionalPPO(RecurrentPPO):
         optimizer_lr_min: Optional[float] = None,
         scheduler_min_lr: Optional[float] = None,
         optimizer_lr_max: Optional[float] = None,
-        optimizer_class: Optional[Union[str, Type[torch.optim.Optimizer]]] = None,
+        optimizer_class: Optional[Union[str, Type[torch.optim.Optimizer]]] = "adaptive_upgd",
         optimizer_kwargs: Optional[dict] = None,
         ev_reserve_apply_mask: bool = True,
         variance_gradient_scaling: bool = True,
@@ -5138,6 +5138,10 @@ class DistributionalPPO(RecurrentPPO):
         optimizer_class_candidate = kwargs_local.pop("optimizer_class", optimizer_class)
         optimizer_kwargs_candidate = kwargs_local.pop("optimizer_kwargs", optimizer_kwargs)
 
+        # If optimizer_class is None (either default or explicitly passed), use AdaptiveUPGD
+        if optimizer_class_candidate is None:
+            optimizer_class_candidate = "adaptive_upgd"
+
         self._optimizer_class: Optional[Union[str, Type[torch.optim.Optimizer]]] = None
         self._optimizer_kwargs: dict = {}
 
@@ -5153,6 +5157,29 @@ class DistributionalPPO(RecurrentPPO):
             if not isinstance(optimizer_kwargs_candidate, Mapping):
                 raise TypeError("'optimizer_kwargs' must be a dictionary")
             self._optimizer_kwargs = dict(optimizer_kwargs_candidate)
+
+        # Set default optimizer_kwargs for AdaptiveUPGD if not provided
+        if self._optimizer_class is not None:
+            optimizer_class_str = (
+                self._optimizer_class.lower()
+                if isinstance(self._optimizer_class, str)
+                else None
+            )
+
+            # Check if we're using AdaptiveUPGD (default or explicit)
+            if optimizer_class_str == "adaptive_upgd":
+                # Default parameters for AdaptiveUPGD based on research and testing
+                default_upgd_kwargs = {
+                    "weight_decay": 0.001,
+                    "sigma": 0.001,
+                    "beta_utility": 0.999,
+                    "beta1": 0.9,
+                    "beta2": 0.999,
+                    "eps": 1e-8,
+                }
+                # Merge defaults with user-provided kwargs (user values take precedence)
+                for key, default_value in default_upgd_kwargs.items():
+                    self._optimizer_kwargs.setdefault(key, default_value)
 
         if math.isfinite(optimizer_lr_max_value) and optimizer_lr_max_value < optimizer_lr_min_value:
             optimizer_lr_max_value = optimizer_lr_min_value
@@ -5673,17 +5700,17 @@ class DistributionalPPO(RecurrentPPO):
             self._quantile_huber_kappa = float(
                 getattr(self.policy, "quantile_huber_kappa", 1.0)
             )
-            # QUANTILE LOSS FIX: Disabled by default for backward compatibility
-            # Set policy.use_fixed_quantile_loss_asymmetry = True to enable the fix
-            # See QUANTILE_LOSS_FIX.md for details
+            # QUANTILE LOSS FIX: Enabled by default (2025-11-20)
+            # Uses correct formula from Dabney et al. 2018: delta = T - Q
+            # Set policy.use_fixed_quantile_loss_asymmetry = False to use legacy formula (not recommended)
             self._use_fixed_quantile_loss_asymmetry = bool(
-                getattr(self.policy, "use_fixed_quantile_loss_asymmetry", False)
+                getattr(self.policy, "use_fixed_quantile_loss_asymmetry", True)
             )
         else:
             # During loading, these will be set after super().__init__() creates the policy
             self._use_quantile_value = False
             self._quantile_huber_kappa = 1.0
-            self._use_fixed_quantile_loss_asymmetry = False
+            self._use_fixed_quantile_loss_asymmetry = True  # Default to correct formula
 
         self._ensure_score_action_space()
 

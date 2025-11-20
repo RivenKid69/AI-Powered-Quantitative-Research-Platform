@@ -17,9 +17,9 @@ import test_distributional_ppo_raw_outliers  # noqa: F401
 
 def test_quantile_loss_fix_disabled_by_default():
     """
-    Test that the quantile loss fix is DISABLED by default.
+    Test that the quantile loss fix is ENABLED by default (as of 2025-11-20).
 
-    This ensures backward compatibility with existing models.
+    This uses the correct formula (T - Q) from Dabney et al. 2018.
     """
     torch = pytest.importorskip("torch")
     from distributional_ppo import DistributionalPPO
@@ -37,13 +37,13 @@ def test_quantile_loss_fix_disabled_by_default():
 
     algo.policy = _PolicyStub()
 
-    # Should default to False
+    # Should default to True (changed 2025-11-20)
     algo._use_fixed_quantile_loss_asymmetry = bool(
-        getattr(algo.policy, "use_fixed_quantile_loss_asymmetry", False)
+        getattr(algo.policy, "use_fixed_quantile_loss_asymmetry", True)
     )
 
-    assert algo._use_fixed_quantile_loss_asymmetry is False, \
-        "Fix should be disabled by default"
+    assert algo._use_fixed_quantile_loss_asymmetry is True, \
+        "Fix should be enabled by default (as of 2025-11-20)"
 
 
 def test_quantile_loss_fix_can_be_enabled():

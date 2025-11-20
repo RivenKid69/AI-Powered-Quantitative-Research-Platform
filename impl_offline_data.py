@@ -136,7 +136,21 @@ class OfflineCSVBarSource(MarketDataSource):
                         if delay_ms > 0:
                             delay_cnt += 1
                             time.sleep(delay_ms / 1000.0)
-                    yield prev_bar
+                    # FIX: Create new bar with CURRENT timestamp but STALE prices/volume
+                    # to preserve temporal causality
+                    stale_bar = Bar(
+                        ts=ts,  # Current timestamp (not prev_bar.ts)
+                        symbol=prev_bar.symbol,
+                        open=prev_bar.open,
+                        high=prev_bar.high,
+                        low=prev_bar.low,
+                        close=prev_bar.close,
+                        volume_base=prev_bar.volume_base,
+                        trades=prev_bar.trades,
+                        taker_buy_base=prev_bar.taker_buy_base,
+                        is_final=prev_bar.is_final,
+                    )
+                    yield stale_bar
                     continue
                 close_ts = bar_close_ms(ts, interval_ms_cfg)
                 is_final = True
