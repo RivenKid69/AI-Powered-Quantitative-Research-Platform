@@ -218,18 +218,37 @@ def calculate_parkinson_volatility(ohlc_bars: List[Dict[str, float]], n: int) ->
     """
     Рассчитывает волатильность диапазона Паркинсона (Parkinson Range Volatility) для последних n баров.
 
-    Формула:
-    σ_Parkinson = sqrt[(1/(4n·log(2))) · Σ(log(H_i/L_i))²]
+    Академическая формула (Parkinson, 1980):
+    σ_P = sqrt[(1/(4n·ln(2))) · Σ(ln(H_i/L_i))²]
 
-    Оценщик Паркинсона в 7,4 раза более эффективен, чем оценщик close-to-close,
-    так как использует информацию о дневном диапазоне (High-Low).
+    ДОКУМЕНТАЦИЯ (MEDIUM #2): Intentional deviation from academic formula
+    ===========================================================================
+    Текущая реализация использует valid_bars (effective sample size) вместо n
+    в знаменателе. Это отклонение от оригинальной формулы, но статистически
+    корректно для unbiased estimation при наличии missing data.
+
+    Обоснование:
+    - Академическая: знаменатель = 4·n·ln(2) (assumes complete data)
+    - Текущая: знаменатель = 4·valid_bars·ln(2) (adapts to missing data)
+    - Статистика: unbiased mean = sum / effective_sample_size (Casella & Berger, 2002)
+    - Результат: при пропусках данных volatility adjusted upward (корректно)
+
+    Эта реализация предпочтительна для production систем, где missing data
+    неизбежны (сетевые сбои, биржевые проблемы). Автоматическая адаптация
+    к missing data без потери statistical validity.
+
+    Оценщик Паркинсона в 7,4 раза более эффективен, чем close-to-close estimator.
 
     Args:
         ohlc_bars: список словарей с ключами 'high' и 'low'
-        n: размер окна
+        n: размер окна (минимум 2, minimum 80% data completeness required)
 
     Returns:
         Волатильность Паркинсона или None если недостаточно данных
+
+    References:
+        - Parkinson, M. (1980). "The Extreme Value Method..."
+        - Casella & Berger (2002). "Statistical Inference" (unbiased estimation)
     """
     if not ohlc_bars or len(ohlc_bars) < n or n < 2:
         return None

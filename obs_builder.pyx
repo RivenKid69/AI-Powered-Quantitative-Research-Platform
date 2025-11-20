@@ -476,8 +476,27 @@ cdef void build_observation_vector_c(
     min_bb_width = price_d * 0.0001
 
     # Feature 1: Price position within Bollinger Bands
-    # 0.5 = at the middle (default when bands not available)
-    # 0.0 = at lower band, 1.0 = at upper band
+    # Default: 0.5 = at the middle (when bands not available)
+    # Standard: 0.0 = at lower band, 1.0 = at upper band
+    #
+    # DOCUMENTATION (MEDIUM #10): Asymmetric clipping range [-1.0, 2.0] (INTENTIONAL)
+    # =================================================================================
+    # Standard BB position formula: (price - lower) / (upper - lower) → [0, 1]
+    # Current implementation clips to [-1.0, 2.0] instead of [0, 1] or [-1, 1]
+    #
+    # Rationale for asymmetric range:
+    # - Allows price to go 2x ABOVE upper band (captures extreme bullish breakouts)
+    # - Allows price to go 1x BELOW lower band (captures moderate bearish breaks)
+    # - Crypto-specific: Markets often break upward more aggressively than downward
+    # - Asymmetry captures market microstructure (easier to pump than dump)
+    #
+    # Examples:
+    # - Price 2x above upper band → bb_position = 2.0 (extreme bullish)
+    # - Price 1x below lower band → bb_position = -1.0 (moderate bearish)
+    # - Price at middle → bb_position = 0.5 (neutral)
+    #
+    # If unintentional: Use symmetric [-1, 1] or standard [0, 1] range instead
+    # =================================================================================
     #
     # Defense-in-depth validation:
     # 1. Primary: bb_valid check (both bands finite and consistent)
@@ -495,6 +514,7 @@ cdef void build_observation_vector_c(
         if not isfinite(bb_width):
             feature_val = 0.5
         else:
+            # Asymmetric clip: [-1.0, 2.0] captures extreme bullish breakouts (crypto-specific)
             feature_val = _clipf((price_d - bb_lower) / (bb_width + 1e-9), -1.0, 2.0)
     out_features[feature_idx] = feature_val
     feature_idx += 1

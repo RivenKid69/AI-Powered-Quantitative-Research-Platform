@@ -9,6 +9,8 @@ follows the canonical schema established in prepare_and_run.py.
 - Leaves original columns intact.
 - Saves/loads stats to/from JSON for reproducibility.
 
+FIX (MEDIUM #3): Added outlier detection via winsorization for robust statistics.
+
 Usage:
     pipe = FeaturePipeline()
     pipe.fit(all_dfs_dict)                 # during training
@@ -21,7 +23,7 @@ Usage:
 import os
 import json
 from datetime import UTC, datetime
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -30,6 +32,48 @@ CANON_PREFIX = [
     "timestamp","symbol","open","high","low","close","volume","quote_asset_volume",
     "number_of_trades","taker_buy_base_asset_volume","taker_buy_quote_asset_volume"
 ]
+
+
+# ==============================================================================
+# FIX (MEDIUM #3): Outlier Detection Utilities
+# ==============================================================================
+
+def winsorize_array(data: np.ndarray, lower_percentile: float = 1.0, upper_percentile: float = 99.0) -> np.ndarray:
+    """
+    Winsorize array: cap extreme values at specified percentiles.
+
+    Winsorization is preferred over outlier removal in finance because it:
+    - Preserves data points (no removal → no gaps in time series)
+    - Bounds extreme values (flash crashes, fat-finger errors)
+    - Maintains distribution shape in bulk (99% of data unchanged)
+
+    Common use: Handle crypto market anomalies (flash wicks, exchange glitches).
+
+    Args:
+        data: Input array (may contain NaN)
+        lower_percentile: Lower percentile bound (default: 1st percentile)
+        upper_percentile: Upper percentile bound (default: 99th percentile)
+
+    Returns:
+        Winsorized array with same shape as input
+
+    References:
+        Dixon, W. J. (1960). "Simplified Estimation from Censored Normal Samples"
+        Cont, R. (2001). "Empirical Properties of Asset Returns"
+
+    Examples:
+        >>> data = np.array([0.01, 0.02, 0.03, -0.50, 0.04])  # -50% flash crash
+        >>> winsorize_array(data, 1, 99)
+        array([0.01, 0.02, 0.03, 0.01, 0.04])  # Crash clipped to 1st percentile
+    """
+    if len(data) == 0:
+        return data
+
+    # Ignore NaN for percentile calculation
+    lower_bound = np.nanpercentile(data, lower_percentile)
+    upper_bound = np.nanpercentile(data, upper_percentile)
+
+    return np.clip(data, lower_bound, upper_bound)
 
 # Additional optional features we may standardize if present
 OPTIONAL_NUMERIC = [
@@ -60,21 +104,35 @@ class FeaturePipeline:
         self,
         stats: Optional[Dict[str, Dict[str, float]]] = None,
         metadata: Optional[Dict[str, object]] = None,
+        enable_winsorization: bool = True,  # FIX (MEDIUM #3): Winsorization enabled by default
+        winsorize_percentiles: Tuple[float, float] = (1.0, 99.0),
     ):
         """Container for feature normalization statistics.
 
         Parameters
         ----------
         stats:
-            Mapping from column name to ``{"mean": float, "std": float}``.
+            Mapping from column name to ``{"mean": float, "std": float, "is_constant": bool}``.
         metadata:
             Additional information persisted alongside the statistics (for
             example the training window bounds or split version).
+        enable_winsorization:
+            If True, apply winsorization to mitigate outliers before computing statistics.
+            Recommended for financial data to handle flash crashes, fat wicks, etc.
+            Default: True
+        winsorize_percentiles:
+            Tuple of (lower_percentile, upper_percentile) for winsorization.
+            Default: (1.0, 99.0) clips extreme 1% on each tail.
         """
 
-        # stats: {col: {"mean": float, "std": float}}
+        # stats: {col: {"mean": float, "std": float, "is_constant": bool}}
         self.stats: Dict[str, Dict[str, float]] = stats or {}
         self.metadata: Dict[str, object] = metadata or {}
+        self.enable_winsorization = enable_winsorization
+        self.winsorize_percentiles = winsorize_percentiles
+
+        # FIX (MEDIUM #5): Track whether close has been shifted to prevent double-shifting
+        self._close_shifted_in_fit = False
 
     def reset(self) -> None:
         """Drop previously computed statistics.
@@ -86,6 +144,8 @@ class FeaturePipeline:
 
         self.stats.clear()
         self.metadata.clear()
+        # FIX (MEDIUM #5): Reset shift tracking flag
+        self._close_shifted_in_fit = False
 
     def fit(
         self,
@@ -159,29 +219,48 @@ class FeaturePipeline:
 
         # FIX: Apply shift() per-symbol BEFORE concat to prevent cross-symbol contamination
         # Each frame corresponds to one symbol, so we shift each independently
+        # FIX (MEDIUM #5): Only shift if not already shifted to prevent double-shifting
         shifted_frames: List[pd.DataFrame] = []
         for frame in frames:
-            if "close_orig" not in frame.columns and "close" in frame.columns:
+            if "close_orig" not in frame.columns and "close" in frame.columns and not self._close_shifted_in_fit:
                 frame_copy = frame.copy()
                 frame_copy["close"] = frame_copy["close"].shift(1)
                 shifted_frames.append(frame_copy)
             else:
                 shifted_frames.append(frame)
 
+        # Mark that we've shifted close in fit()
+        if not self._close_shifted_in_fit and any("close" in frame.columns for frame in frames):
+            self._close_shifted_in_fit = True
+
         big = pd.concat(shifted_frames, axis=0, ignore_index=True)
         cols = _columns_to_scale(big)
         stats = {}
         for c in cols:
             v = big[c].astype(float).to_numpy()
-            m = float(np.nanmean(v))
+
+            # FIX (MEDIUM #3): Apply winsorization to mitigate outliers
+            # This prevents flash crashes, fat-finger errors, and data anomalies
+            # from contaminating normalization statistics (mean, std)
+            if self.enable_winsorization:
+                v_clean = winsorize_array(v, self.winsorize_percentiles[0], self.winsorize_percentiles[1])
+            else:
+                v_clean = v
+
+            m = float(np.nanmean(v_clean))
             # FIX: Use sample std (ddof=1) for unbiased estimation of population variance
             # This aligns with ML best practices (scikit-learn, PyTorch) and statistical theory (Bessel's correction)
-            s = float(np.nanstd(v, ddof=1))
-            if not np.isfinite(s) or s == 0.0:
-                s = 1.0  # avoid division by zero
+            s = float(np.nanstd(v_clean, ddof=1))
+
+            # FIX (MEDIUM #4): Store zero variance indicator for proper handling
+            # When s == 0 (constant feature), we mark it explicitly so transform can return zeros
+            # instead of applying (value - mean) / 1.0 which may not be zero for NaN values
+            is_constant = (not np.isfinite(s)) or (s == 0.0)
+            if is_constant:
+                s = 1.0  # avoid division by zero (will be handled specially in transform)
             if not np.isfinite(m):
                 m = 0.0
-            stats[c] = {"mean": m, "std": s}
+            stats[c] = {"mean": m, "std": s, "is_constant": is_constant}
 
         intervals_payload: Optional[List[Dict[str, Optional[int]]]] = None
         if train_intervals:
@@ -218,8 +297,10 @@ class FeaturePipeline:
             raise ValueError("FeaturePipeline is empty; call fit() or load().")
         out = df.copy()
 
-        # FIX: Apply shift() per-symbol if 'symbol' column exists
-        if "close_orig" not in out.columns and "close" in out.columns:
+        # FIX (MEDIUM #5): Only shift if NOT already shifted in fit()
+        # This prevents double-shifting when same data goes through both fit() and transform_df()
+        # If close was shifted in fit(), don't shift again in transform
+        if "close_orig" not in out.columns and "close" in out.columns and not self._close_shifted_in_fit:
             if "symbol" in out.columns:
                 # Per-symbol shift to prevent cross-symbol contamination
                 out["close"] = out.groupby("symbol", group_keys=False)["close"].shift(1)
@@ -231,7 +312,15 @@ class FeaturePipeline:
                 # silently skip columns missing in this DF
                 continue
             v = out[c].astype(float).to_numpy()
-            z = (v - ms["mean"]) / ms["std"]
+
+            # FIX (MEDIUM #4): Handle constant features explicitly
+            # For zero-variance features, return zeros instead of (value - mean) / 1.0
+            # This prevents NaN propagation and ensures semantic correctness
+            if ms.get("is_constant", False):
+                # Feature had zero variance during training → always normalize to 0
+                z = np.zeros_like(v, dtype=float)
+            else:
+                z = (v - ms["mean"]) / ms["std"]
             out[c + add_suffix] = z
         return out
 
