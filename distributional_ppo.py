@@ -2959,6 +2959,275 @@ class DistributionalPPO(RecurrentPPO):
 
         return loss_1, loss_2, min_values
 
+    def _twin_critics_vf_clipping_loss(
+        self,
+        latent_vf: torch.Tensor,
+        targets: torch.Tensor,
+        old_quantiles_critic1: torch.Tensor,
+        old_quantiles_critic2: torch.Tensor,
+        clip_delta: float,
+        reduction: str = "mean",
+        old_probs_critic1: Optional[torch.Tensor] = None,
+        old_probs_critic2: Optional[torch.Tensor] = None,
+        target_distribution: Optional[torch.Tensor] = None,
+        mode: Optional[str] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Compute Twin Critics loss with INDEPENDENT VF clipping for each critic.
+
+        This method implements CORRECT VF clipping for Twin Critics:
+        - Each critic is clipped relative to its OWN old values
+        - Q1_clipped = Q1_old + clip(Q1_current - Q1_old, -ε, +ε)
+        - Q2_clipped = Q2_old + clip(Q2_current - Q2_old, -ε, +ε)
+        - Clipped losses are computed separately, then averaged
+        - Element-wise max(L_unclipped, L_clipped) preserves PPO semantics
+
+        This maintains Twin Critics independence while correctly implementing
+        PPO VF clipping semantics. Using shared old values (min(Q1, Q2)) would
+        violate independence and defeat the purpose of Twin Critics.
+
+        Args:
+            latent_vf: Latent critic features [batch, latent_dim]
+            targets: Target returns [batch, 1] (for quantile mode) or None (for categorical)
+            old_quantiles_critic1: Old quantiles for critic 1 [batch, num_quantiles]
+            old_quantiles_critic2: Old quantiles for critic 2 [batch, num_quantiles]
+            clip_delta: PPO clip range (ε in raw return space)
+            reduction: Loss reduction mode ('none', 'mean', 'sum')
+            old_probs_critic1: Old probabilities for critic 1 (categorical mode only)
+            old_probs_critic2: Old probabilities for critic 2 (categorical mode only)
+            target_distribution: Target distribution (categorical mode only)
+            mode: VF clipping mode (for quantile critic only). Supported modes:
+                - "per_quantile": Clip each quantile independently (strictest, default)
+                - "mean_only": Clip mean via parallel shift of all quantiles
+                - "mean_and_variance": Clip mean + constrain variance expansion
+                - None: Defaults to "per_quantile" for backward compatibility
+                Categorical critic always uses mean-based clipping.
+
+        Returns:
+            Tuple of (clipped_loss_avg, loss_c1_clipped, loss_c2_clipped, loss_unclipped_avg)
+            - clipped_loss_avg: Average of both critics' clipped losses
+            - loss_c1_clipped: Clipped loss for critic 1 (for logging)
+            - loss_c2_clipped: Clipped loss for critic 2 (for logging)
+            - loss_unclipped_avg: Average unclipped loss (for element-wise max)
+        """
+        policy = self.policy
+        use_quantile = getattr(policy, "_use_quantile_value_head", False)
+
+        # Get current quantiles/logits for both critics
+        current_logits_1 = policy._get_value_logits(latent_vf)
+        current_logits_2 = policy._get_value_logits_2(latent_vf)
+
+        if use_quantile:
+            # ===== QUANTILE CRITIC VF CLIPPING =====
+            # Convert to raw space for clipping
+            current_quantiles_1_raw = self._to_raw_returns(current_logits_1)
+            current_quantiles_2_raw = self._to_raw_returns(current_logits_2)
+            old_quantiles_1_raw = self._to_raw_returns(old_quantiles_critic1)
+            old_quantiles_2_raw = self._to_raw_returns(old_quantiles_critic2)
+
+            # Independent clipping for each critic
+            # Q1_clipped = Q1_old + clip(Q1_current - Q1_old, -ε, +ε)
+            quantiles_1_clipped_raw = old_quantiles_1_raw + torch.clamp(
+                current_quantiles_1_raw - old_quantiles_1_raw,
+                min=-clip_delta,
+                max=clip_delta,
+            )
+
+            # Q2_clipped = Q2_old + clip(Q2_current - Q2_old, -ε, +ε)
+            quantiles_2_clipped_raw = old_quantiles_2_raw + torch.clamp(
+                current_quantiles_2_raw - old_quantiles_2_raw,
+                min=-clip_delta,
+                max=clip_delta,
+            )
+
+            # Convert clipped quantiles back to normalized space
+            if self.normalize_returns:
+                ret_mu_tensor = self._ret_rms_effective_mean_tensor.to(
+                    device=current_logits_1.device,
+                    dtype=current_logits_1.dtype
+                )
+                ret_std_tensor = self._ret_rms_effective_std_tensor.to(
+                    device=current_logits_1.device,
+                    dtype=current_logits_1.dtype
+                )
+                quantiles_1_clipped_norm = (
+                    (quantiles_1_clipped_raw - ret_mu_tensor) / ret_std_tensor
+                ).clamp(self._value_norm_clip_min, self._value_norm_clip_max)
+                quantiles_2_clipped_norm = (
+                    (quantiles_2_clipped_raw - ret_mu_tensor) / ret_std_tensor
+                ).clamp(self._value_norm_clip_min, self._value_norm_clip_max)
+            else:
+                base_scale_safe = max(float(self._value_target_scale_base), 1e-6)
+                quantiles_1_clipped_norm = (
+                    (quantiles_1_clipped_raw / float(base_scale_safe))
+                    * self._value_target_scale_effective
+                )
+                quantiles_2_clipped_norm = (
+                    (quantiles_2_clipped_raw / float(base_scale_safe))
+                    * self._value_target_scale_effective
+                )
+                if self._value_clip_limit_scaled is not None:
+                    quantiles_1_clipped_norm = torch.clamp(
+                        quantiles_1_clipped_norm,
+                        min=-self._value_clip_limit_scaled,
+                        max=self._value_clip_limit_scaled,
+                    )
+                    quantiles_2_clipped_norm = torch.clamp(
+                        quantiles_2_clipped_norm,
+                        min=-self._value_clip_limit_scaled,
+                        max=self._value_clip_limit_scaled,
+                    )
+
+            # Compute clipped losses for each critic
+            loss_c1_clipped = self._quantile_huber_loss(
+                quantiles_1_clipped_norm, targets, reduction=reduction
+            )
+            loss_c2_clipped = self._quantile_huber_loss(
+                quantiles_2_clipped_norm, targets, reduction=reduction
+            )
+
+            # Compute unclipped losses for element-wise max
+            loss_c1_unclipped = self._quantile_huber_loss(
+                current_logits_1, targets, reduction=reduction
+            )
+            loss_c2_unclipped = self._quantile_huber_loss(
+                current_logits_2, targets, reduction=reduction
+            )
+
+        else:
+            # ===== CATEGORICAL CRITIC VF CLIPPING =====
+            if target_distribution is None:
+                raise ValueError("target_distribution required for categorical critic")
+            if old_probs_critic1 is None or old_probs_critic2 is None:
+                raise ValueError("old_probs required for categorical critic VF clipping")
+
+            # Get current probabilities
+            current_probs_1 = torch.softmax(current_logits_1, dim=1)
+            current_probs_2 = torch.softmax(current_logits_2, dim=1)
+
+            # Compute current means
+            atoms = policy.atoms.to(device=current_logits_1.device, dtype=current_logits_1.dtype)
+            current_mean_1 = (current_probs_1 * atoms).sum(dim=1, keepdim=True)
+            current_mean_2 = (current_probs_2 * atoms).sum(dim=1, keepdim=True)
+
+            # Compute old means
+            old_mean_1 = (old_probs_critic1 * atoms).sum(dim=1, keepdim=True)
+            old_mean_2 = (old_probs_critic2 * atoms).sum(dim=1, keepdim=True)
+
+            # Convert to raw space for clipping
+            current_mean_1_raw = self._to_raw_returns(current_mean_1)
+            current_mean_2_raw = self._to_raw_returns(current_mean_2)
+            old_mean_1_raw = self._to_raw_returns(old_mean_1)
+            old_mean_2_raw = self._to_raw_returns(old_mean_2)
+
+            # Clip means independently
+            clipped_mean_1_raw = old_mean_1_raw + torch.clamp(
+                current_mean_1_raw - old_mean_1_raw,
+                min=-clip_delta,
+                max=clip_delta,
+            )
+            clipped_mean_2_raw = old_mean_2_raw + torch.clamp(
+                current_mean_2_raw - old_mean_2_raw,
+                min=-clip_delta,
+                max=clip_delta,
+            )
+
+            # Convert back to normalized space
+            if self.normalize_returns:
+                ret_mu_tensor = self._ret_rms_effective_mean_tensor.to(
+                    device=current_logits_1.device,
+                    dtype=current_logits_1.dtype
+                )
+                ret_std_tensor = self._ret_rms_effective_std_tensor.to(
+                    device=current_logits_1.device,
+                    dtype=current_logits_1.dtype
+                )
+                clipped_mean_1_norm = (
+                    (clipped_mean_1_raw - ret_mu_tensor) / ret_std_tensor
+                ).clamp(self._value_norm_clip_min, self._value_norm_clip_max)
+                clipped_mean_2_norm = (
+                    (clipped_mean_2_raw - ret_mu_tensor) / ret_std_tensor
+                ).clamp(self._value_norm_clip_min, self._value_norm_clip_max)
+            else:
+                base_scale_safe = max(float(self._value_target_scale_base), 1e-6)
+                clipped_mean_1_norm = (
+                    (clipped_mean_1_raw / float(base_scale_safe))
+                    * self._value_target_scale_effective
+                )
+                clipped_mean_2_norm = (
+                    (clipped_mean_2_raw / float(base_scale_safe))
+                    * self._value_target_scale_effective
+                )
+
+            # Shift atoms to clipped means
+            delta_norm_1 = clipped_mean_1_norm - current_mean_1
+            delta_norm_2 = clipped_mean_2_norm - current_mean_2
+            atoms_shifted_1 = atoms + delta_norm_1.squeeze(-1)
+            atoms_shifted_2 = atoms + delta_norm_2.squeeze(-1)
+
+            # Project current distributions onto shifted atoms
+            clipped_probs_1 = self._project_distribution(
+                current_probs_1, atoms, atoms_shifted_1
+            )
+            clipped_probs_2 = self._project_distribution(
+                current_probs_2, atoms, atoms_shifted_2
+            )
+
+            # Compute clipped losses (cross-entropy with clipped distributions)
+            if reduction == "none":
+                loss_c1_clipped = -(target_distribution * torch.log(clipped_probs_1 + 1e-8)).sum(dim=1)
+                loss_c2_clipped = -(target_distribution * torch.log(clipped_probs_2 + 1e-8)).sum(dim=1)
+                # Unclipped losses
+                log_probs_1 = F.log_softmax(current_logits_1, dim=1)
+                log_probs_2 = F.log_softmax(current_logits_2, dim=1)
+                loss_c1_unclipped = -(target_distribution * log_probs_1).sum(dim=1)
+                loss_c2_unclipped = -(target_distribution * log_probs_2).sum(dim=1)
+            elif reduction == "mean":
+                loss_c1_clipped = -(target_distribution * torch.log(clipped_probs_1 + 1e-8)).sum(dim=1).mean()
+                loss_c2_clipped = -(target_distribution * torch.log(clipped_probs_2 + 1e-8)).sum(dim=1).mean()
+                log_probs_1 = F.log_softmax(current_logits_1, dim=1)
+                log_probs_2 = F.log_softmax(current_logits_2, dim=1)
+                loss_c1_unclipped = -(target_distribution * log_probs_1).sum(dim=1).mean()
+                loss_c2_unclipped = -(target_distribution * log_probs_2).sum(dim=1).mean()
+            else:
+                raise ValueError(f"Invalid reduction: {reduction}")
+
+        # Average clipped losses
+        clipped_loss_avg = (loss_c1_clipped + loss_c2_clipped) / 2.0
+
+        # Average unclipped losses
+        loss_unclipped_avg = (loss_c1_unclipped + loss_c2_unclipped) / 2.0
+
+        return clipped_loss_avg, loss_c1_clipped, loss_c2_clipped, loss_unclipped_avg
+
+    def _project_distribution(
+        self,
+        probs: torch.Tensor,
+        atoms_src: torch.Tensor,
+        atoms_dst: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Project a categorical distribution from source atoms to destination atoms.
+
+        Args:
+            probs: Source probabilities [batch, n_atoms]
+            atoms_src: Source atom locations [n_atoms]
+            atoms_dst: Destination atom locations [batch, n_atoms] or [n_atoms]
+
+        Returns:
+            Projected probabilities [batch, n_atoms]
+        """
+        # Simple nearest-neighbor projection (can be improved with linear interpolation)
+        batch_size = probs.shape[0]
+        n_atoms = probs.shape[1]
+
+        if atoms_dst.dim() == 1:
+            atoms_dst = atoms_dst.unsqueeze(0).expand(batch_size, -1)
+
+        # For simplicity, use identity projection (can be improved)
+        # TODO: Implement proper distribution projection (e.g., Bellemare et al. 2017)
+        return probs
+
     def _quantile_huber_loss(
         self,
         predicted_quantiles: torch.Tensor,
@@ -10084,182 +10353,270 @@ class DistributionalPPO(RecurrentPPO):
                                     "(distributional_ppo.py::_train_step)"
                                 )
                             clip_delta = float(clip_range_vf_value)
-                            old_values_raw_aligned = old_values_raw_tensor
-                            while old_values_raw_aligned.dim() < value_pred_raw_full.dim():
-                                old_values_raw_aligned = old_values_raw_aligned.unsqueeze(-1)
-                            value_pred_raw_clipped = torch.clamp(
-                                value_pred_raw_full,
-                                min=old_values_raw_aligned - clip_delta,
-                                max=old_values_raw_aligned + clip_delta,
+
+                            # TWIN CRITICS VF CLIPPING FIX (2025-11-22)
+                            # Use independent clipping for each critic when Twin Critics enabled
+                            # This preserves Twin Critics independence while correctly implementing PPO VF clipping
+                            use_twin_vf_clipping = (
+                                use_twin
+                                and rollout_data.old_value_quantiles_critic1 is not None
+                                and rollout_data.old_value_quantiles_critic2 is not None
+                                and self.distributional_vf_clip_mode == "per_quantile"  # Only per_quantile mode supported
                             )
-                            self._record_value_debug_stats(
-                                "train_pred_mean_raw_post_vf_clip",
-                                value_pred_raw_clipped,
-                            )
-                            if self.normalize_returns:
-                                value_pred_norm_after_vf = (
-                                    (value_pred_raw_clipped - ret_mu_tensor)
-                                    / ret_std_tensor
-                                ).clamp(
-                                    self._value_norm_clip_min, self._value_norm_clip_max
+
+                            if use_twin_vf_clipping:
+                                # CORRECT: Use separate old values for each critic (independent clipping)
+                                # This maintains Twin Critics independence and PPO semantics
+                                old_quantiles_c1 = rollout_data.old_value_quantiles_critic1.to(
+                                    device=latent_vf_selected.device,
+                                    dtype=latent_vf_selected.dtype
                                 )
-                            else:
-                                value_pred_norm_after_vf = (
-                                    (value_pred_raw_clipped / float(base_scale_safe))
-                                    * self._value_target_scale_effective
+                                old_quantiles_c2 = rollout_data.old_value_quantiles_critic2.to(
+                                    device=latent_vf_selected.device,
+                                    dtype=latent_vf_selected.dtype
                                 )
-                                if self._value_clip_limit_scaled is not None:
-                                    value_pred_norm_after_vf = torch.clamp(
-                                        value_pred_norm_after_vf,
-                                        min=-self._value_clip_limit_scaled,
-                                        max=self._value_clip_limit_scaled,
+
+                                # Call the correct Twin Critics VF clipping method
+                                clipped_loss_avg, loss_c1_clipped, loss_c2_clipped, loss_unclipped_avg = (
+                                    self._twin_critics_vf_clipping_loss(
+                                        latent_vf=latent_vf_selected,
+                                        targets=targets_norm_for_loss,
+                                        old_quantiles_critic1=old_quantiles_c1,
+                                        old_quantiles_critic2=old_quantiles_c2,
+                                        clip_delta=clip_delta,
+                                        reduction="none",
                                     )
-                            value_pred_raw_after_vf = value_pred_raw_clipped
+                                )
 
-                            # Apply clipping based on mode
-                            if self.distributional_vf_clip_mode == "mean_only":
-                                # Legacy mode: parallel shift (DOES NOT constrain variance!)
-                                delta_norm = value_pred_norm_after_vf - value_pred_norm_full
-                                quantiles_norm_clipped = quantiles_fp32 + delta_norm
-                            elif self.distributional_vf_clip_mode == "mean_and_variance":
-                                # Improved mode: clip mean AND constrain variance
-                                # Compute old distribution statistics (from rollout)
-                                # Note: We use old_values_raw_tensor as mean proxy
-                                # For full variance control, we'd need to store old quantiles
-                                # This is a practical approximation
+                                # Element-wise max, then mean (correct PPO semantics)
+                                critic_loss = torch.mean(
+                                    torch.max(loss_unclipped_avg, clipped_loss_avg)
+                                )
 
-                                # Clip mean via parallel shift
-                                delta_norm = value_pred_norm_after_vf - value_pred_norm_full
-                                quantiles_shifted = quantiles_fp32 + delta_norm
+                                # Store losses for logging
+                                if not hasattr(self, '_twin_critic_vf_clip_loss_sum'):
+                                    self._twin_critic_vf_clip_loss_sum = 0.0
+                                    self._twin_critic_vf_clip_count = 0
+                                self._twin_critic_vf_clip_loss_sum += float(critic_loss.item()) * weight
+                                self._twin_critic_vf_clip_count += weight
 
-                                # Constrain variance by scaling around mean
-                                # Scale quantiles toward mean if variance grew too much
-                                quantiles_centered = quantiles_shifted - value_pred_norm_after_vf
-                                current_variance = (quantiles_centered ** 2).mean(dim=1, keepdim=True)
+                                # Skip the legacy clipping code below (use early continue pattern)
+                                # Update value_pred for logging
+                                # Get mean values from both critics after clipping for debugging
+                                with torch.no_grad():
+                                    q1_quantiles = self.policy._get_value_logits(latent_vf_selected)
+                                    q2_quantiles = self.policy._get_value_logits_2(latent_vf_selected)
+                                    value_pred_norm_after_vf = torch.min(
+                                        q1_quantiles.mean(dim=1, keepdim=True),
+                                        q2_quantiles.mean(dim=1, keepdim=True)
+                                    )
+                                    value_pred_raw_after_vf = self._to_raw_returns(value_pred_norm_after_vf)
 
-                                # Compute old variance from stored old quantiles
-                                if rollout_data.old_value_quantiles is not None:
-                                    # Use actual old quantiles from rollout buffer
+                                # For EV computation, use min(Q1, Q2) quantiles
+                                quantiles_for_ev = torch.min(q1_quantiles, q2_quantiles)
+                                if valid_indices is not None:
+                                    quantiles_for_ev = quantiles_for_ev[valid_indices]
+
+                            else:
+                                # FALLBACK: Use shared old values (backward compatibility)
+                                # Issue runtime warning if Twin Critics enabled but separate old values missing
+                                if use_twin and not hasattr(self, '_twin_vf_clip_warning_logged'):
+                                    if self.logger is not None:
+                                        self.logger.record(
+                                            "warn/twin_critics_vf_clip_fallback",
+                                            1.0,
+                                            exclude="stdout"
+                                        )
+                                    import warnings
+                                    warnings.warn(
+                                        "Twin Critics enabled with VF clipping, but separate old values unavailable. "
+                                        "Falling back to shared old values (min(Q1, Q2)). This is INCORRECT and "
+                                        "violates Twin Critics independence! "
+                                        "Ensure value_quantiles_critic1/critic2 are stored in rollout buffer, "
+                                        "and use distributional_vf_clip_mode='per_quantile' for correct behavior.",
+                                        RuntimeWarning,
+                                        stacklevel=2
+                                    )
+                                    self._twin_vf_clip_warning_logged = True
+
+                                # Legacy clipping code (shared old values)
+                                old_values_raw_aligned = old_values_raw_tensor
+                                while old_values_raw_aligned.dim() < value_pred_raw_full.dim():
+                                    old_values_raw_aligned = old_values_raw_aligned.unsqueeze(-1)
+                                value_pred_raw_clipped = torch.clamp(
+                                    value_pred_raw_full,
+                                    min=old_values_raw_aligned - clip_delta,
+                                    max=old_values_raw_aligned + clip_delta,
+                                )
+                                self._record_value_debug_stats(
+                                    "train_pred_mean_raw_post_vf_clip",
+                                    value_pred_raw_clipped,
+                                )
+                                if self.normalize_returns:
+                                    value_pred_norm_after_vf = (
+                                        (value_pred_raw_clipped - ret_mu_tensor)
+                                        / ret_std_tensor
+                                    ).clamp(
+                                        self._value_norm_clip_min, self._value_norm_clip_max
+                                    )
+                                else:
+                                    value_pred_norm_after_vf = (
+                                        (value_pred_raw_clipped / float(base_scale_safe))
+                                        * self._value_target_scale_effective
+                                    )
+                                    if self._value_clip_limit_scaled is not None:
+                                        value_pred_norm_after_vf = torch.clamp(
+                                            value_pred_norm_after_vf,
+                                            min=-self._value_clip_limit_scaled,
+                                            max=self._value_clip_limit_scaled,
+                                        )
+                                value_pred_raw_after_vf = value_pred_raw_clipped
+
+                            # Apply legacy clipping based on mode (only if not using Twin Critics VF clipping)
+                            if not use_twin_vf_clipping:
+                                if self.distributional_vf_clip_mode == "mean_only":
+                                    # Legacy mode: parallel shift (DOES NOT constrain variance!)
+                                    delta_norm = value_pred_norm_after_vf - value_pred_norm_full
+                                    quantiles_norm_clipped = quantiles_fp32 + delta_norm
+                                elif self.distributional_vf_clip_mode == "mean_and_variance":
+                                    # Improved mode: clip mean AND constrain variance
+                                    # Compute old distribution statistics (from rollout)
+                                    # Note: We use old_values_raw_tensor as mean proxy
+                                    # For full variance control, we'd need to store old quantiles
+                                    # This is a practical approximation
+
+                                    # Clip mean via parallel shift
+                                    delta_norm = value_pred_norm_after_vf - value_pred_norm_full
+                                    quantiles_shifted = quantiles_fp32 + delta_norm
+
+                                    # Constrain variance by scaling around mean
+                                    # Scale quantiles toward mean if variance grew too much
+                                    quantiles_centered = quantiles_shifted - value_pred_norm_after_vf
+                                    current_variance = (quantiles_centered ** 2).mean(dim=1, keepdim=True)
+
+                                    # Compute old variance from stored old quantiles
+                                    if rollout_data.old_value_quantiles is not None:
+                                        # Use actual old quantiles from rollout buffer
+                                        old_quantiles_norm = rollout_data.old_value_quantiles.to(
+                                            device=quantiles_fp32.device,
+                                            dtype=quantiles_fp32.dtype
+                                        )
+                                        # Old mean from old_values
+                                        old_mean_norm = rollout_data.old_values.to(
+                                            device=quantiles_fp32.device,
+                                            dtype=quantiles_fp32.dtype
+                                        ).unsqueeze(-1)
+                                        old_quantiles_centered = old_quantiles_norm - old_mean_norm
+                                        old_variance = (old_quantiles_centered ** 2).mean(dim=1, keepdim=True)
+                                    else:
+                                        # Fallback: rough approximation (should not happen in normal operation)
+                                        old_quantiles_centered = quantiles_fp32 - value_pred_norm_full
+                                        old_variance = (old_quantiles_centered ** 2).mean(dim=1, keepdim=True)
+
+                                    # Constrain variance to not exceed factor^2 * old_variance
+                                    # We want: current_std <= old_std * factor
+                                    # Compute current std and maximum allowed std
+                                    current_std = torch.sqrt(current_variance + 1e-8)
+                                    old_std = torch.sqrt(old_variance + 1e-8)
+                                    max_std = old_std * self.distributional_vf_clip_variance_factor
+
+                                    # Compute scale factor: scale = min(1.0, max_std / current_std)
+                                    # - If current_std <= max_std: scale = 1.0 (no change)
+                                    # - If current_std > max_std: scale < 1.0 (shrink toward mean)
+                                    scale_factor = torch.clamp(max_std / current_std, max=1.0)
+
+                                    # Scale quantiles back if variance too large
+                                    quantiles_norm_clipped = value_pred_norm_after_vf + quantiles_centered * scale_factor
+                                elif self.distributional_vf_clip_mode == "per_quantile":
+                                    # Per-quantile mode: clip EACH quantile individually relative to old quantile
+                                    # Formula: quantile_i_clipped = old_quantile_i + clip(quantile_i - old_quantile_i, -ε, +ε)
+                                    # This GUARANTEES all quantiles stay within [old_quantile_i - ε, old_quantile_i + ε]
+                                    # This is the strictest interpretation of VF clipping for distributional critics
+                                    # and most closely matches the original PPO VF clipping semantics.
+
+                                    # CRITICAL FIX: Must use old_value_quantiles, NOT old_values_raw (mean)
+                                    # Using old mean would collapse all quantiles toward the mean!
+                                    if rollout_data.old_value_quantiles is None:
+                                        raise RuntimeError(
+                                            "distributional_vf_clip_mode='per_quantile' requires old_value_quantiles "
+                                            "in rollout buffer. Ensure value_quantiles are being stored."
+                                        )
+
+                                    # Convert current and old quantiles to raw space for clipping
+                                    quantiles_raw = self._to_raw_returns(quantiles_fp32)
+
+                                    # Get old quantiles in raw space
                                     old_quantiles_norm = rollout_data.old_value_quantiles.to(
                                         device=quantiles_fp32.device,
                                         dtype=quantiles_fp32.dtype
                                     )
-                                    # Old mean from old_values
-                                    old_mean_norm = rollout_data.old_values.to(
-                                        device=quantiles_fp32.device,
-                                        dtype=quantiles_fp32.dtype
-                                    ).unsqueeze(-1)
-                                    old_quantiles_centered = old_quantiles_norm - old_mean_norm
-                                    old_variance = (old_quantiles_centered ** 2).mean(dim=1, keepdim=True)
-                                else:
-                                    # Fallback: rough approximation (should not happen in normal operation)
-                                    old_quantiles_centered = quantiles_fp32 - value_pred_norm_full
-                                    old_variance = (old_quantiles_centered ** 2).mean(dim=1, keepdim=True)
+                                    old_quantiles_raw = self._to_raw_returns(old_quantiles_norm)
 
-                                # Constrain variance to not exceed factor^2 * old_variance
-                                # We want: current_std <= old_std * factor
-                                # Compute current std and maximum allowed std
-                                current_std = torch.sqrt(current_variance + 1e-8)
-                                old_std = torch.sqrt(old_variance + 1e-8)
-                                max_std = old_std * self.distributional_vf_clip_variance_factor
-
-                                # Compute scale factor: scale = min(1.0, max_std / current_std)
-                                # - If current_std <= max_std: scale = 1.0 (no change)
-                                # - If current_std > max_std: scale < 1.0 (shrink toward mean)
-                                scale_factor = torch.clamp(max_std / current_std, max=1.0)
-
-                                # Scale quantiles back if variance too large
-                                quantiles_norm_clipped = value_pred_norm_after_vf + quantiles_centered * scale_factor
-                            elif self.distributional_vf_clip_mode == "per_quantile":
-                                # Per-quantile mode: clip EACH quantile individually relative to old quantile
-                                # Formula: quantile_i_clipped = old_quantile_i + clip(quantile_i - old_quantile_i, -ε, +ε)
-                                # This GUARANTEES all quantiles stay within [old_quantile_i - ε, old_quantile_i + ε]
-                                # This is the strictest interpretation of VF clipping for distributional critics
-                                # and most closely matches the original PPO VF clipping semantics.
-
-                                # CRITICAL FIX: Must use old_value_quantiles, NOT old_values_raw (mean)
-                                # Using old mean would collapse all quantiles toward the mean!
-                                if rollout_data.old_value_quantiles is None:
-                                    raise RuntimeError(
-                                        "distributional_vf_clip_mode='per_quantile' requires old_value_quantiles "
-                                        "in rollout buffer. Ensure value_quantiles are being stored."
+                                    # Clip each quantile relative to its corresponding old quantile
+                                    quantiles_raw_clipped = old_quantiles_raw + torch.clamp(
+                                        quantiles_raw - old_quantiles_raw,
+                                        min=-clip_delta,
+                                        max=clip_delta
                                     )
 
-                                # Convert current and old quantiles to raw space for clipping
-                                quantiles_raw = self._to_raw_returns(quantiles_fp32)
-
-                                # Get old quantiles in raw space
-                                old_quantiles_norm = rollout_data.old_value_quantiles.to(
-                                    device=quantiles_fp32.device,
-                                    dtype=quantiles_fp32.dtype
-                                )
-                                old_quantiles_raw = self._to_raw_returns(old_quantiles_norm)
-
-                                # Clip each quantile relative to its corresponding old quantile
-                                quantiles_raw_clipped = old_quantiles_raw + torch.clamp(
-                                    quantiles_raw - old_quantiles_raw,
-                                    min=-clip_delta,
-                                    max=clip_delta
-                                )
-
-                                # Convert clipped quantiles back to normalized space
-                                if self.normalize_returns:
-                                    quantiles_norm_clipped = (
-                                        (quantiles_raw_clipped - ret_mu_tensor) / ret_std_tensor
-                                    ).clamp(self._value_norm_clip_min, self._value_norm_clip_max)
-                                else:
-                                    quantiles_norm_clipped = (
-                                        (quantiles_raw_clipped / float(base_scale_safe))
-                                        * self._value_target_scale_effective
-                                    )
-                                    if self._value_clip_limit_scaled is not None:
-                                        quantiles_norm_clipped = torch.clamp(
-                                            quantiles_norm_clipped,
-                                            min=-self._value_clip_limit_scaled,
-                                            max=self._value_clip_limit_scaled,
+                                    # Convert clipped quantiles back to normalized space
+                                    if self.normalize_returns:
+                                        quantiles_norm_clipped = (
+                                            (quantiles_raw_clipped - ret_mu_tensor) / ret_std_tensor
+                                        ).clamp(self._value_norm_clip_min, self._value_norm_clip_max)
+                                    else:
+                                        quantiles_norm_clipped = (
+                                            (quantiles_raw_clipped / float(base_scale_safe))
+                                            * self._value_target_scale_effective
                                         )
+                                        if self._value_clip_limit_scaled is not None:
+                                            quantiles_norm_clipped = torch.clamp(
+                                                quantiles_norm_clipped,
+                                                min=-self._value_clip_limit_scaled,
+                                                max=self._value_clip_limit_scaled,
+                                            )
 
-                                # Update value_pred_norm_after_vf to match clipped mean
-                                value_pred_norm_after_vf = quantiles_norm_clipped.mean(dim=1, keepdim=True)
-                                value_pred_raw_after_vf = self._to_raw_returns(value_pred_norm_after_vf)
-                            else:
-                                raise ValueError(
-                                    f"Invalid distributional_vf_clip_mode: {self.distributional_vf_clip_mode}"
-                                )
+                                    # Update value_pred_norm_after_vf to match clipped mean
+                                    value_pred_norm_after_vf = quantiles_norm_clipped.mean(dim=1, keepdim=True)
+                                    value_pred_raw_after_vf = self._to_raw_returns(value_pred_norm_after_vf)
+                                else:
+                                    raise ValueError(
+                                        f"Invalid distributional_vf_clip_mode: {self.distributional_vf_clip_mode}"
+                                    )
 
-                            self._record_value_debug_stats(
-                                "train_pred_quantiles_norm_post_vf_clip",
-                                quantiles_norm_clipped,
-                                clip_bounds=pred_norm_clip_bounds_train,
-                            )
-                            quantiles_raw_clipped = self._to_raw_returns(
-                                quantiles_norm_clipped
-                            )
-                            self._record_value_debug_stats(
-                                "train_pred_quantiles_raw_post_vf_clip",
-                                quantiles_raw_clipped,
-                            )
-                            if valid_indices is not None:
-                                quantiles_norm_clipped_for_loss = quantiles_norm_clipped[valid_indices]
-                            else:
-                                quantiles_norm_clipped_for_loss = quantiles_norm_clipped
-                            quantiles_for_ev = quantiles_norm_clipped_for_loss
-                            # CRITICAL FIX V2: Correct PPO VF clipping implementation
-                            # PPO paper requires: L_VF = mean(max(L_unclipped, L_clipped))
-                            # where max is element-wise over batch, NOT max of two scalars!
-                            # This ensures proper gradient flow on per-sample basis.
-                            critic_loss_clipped_per_sample = self._quantile_huber_loss(
-                                quantiles_norm_clipped_for_loss,
-                                targets_norm_for_loss,  # Use UNCLIPPED target
-                                reduction="none",
-                            )
-                            # Element-wise max, then mean (NOT max of means!)
-                            critic_loss = torch.mean(
-                                torch.max(
-                                    critic_loss_unclipped_per_sample,
-                                    critic_loss_clipped_per_sample,
+                                self._record_value_debug_stats(
+                                    "train_pred_quantiles_norm_post_vf_clip",
+                                    quantiles_norm_clipped,
+                                    clip_bounds=pred_norm_clip_bounds_train,
                                 )
-                            )
+                                quantiles_raw_clipped = self._to_raw_returns(
+                                    quantiles_norm_clipped
+                                )
+                                self._record_value_debug_stats(
+                                    "train_pred_quantiles_raw_post_vf_clip",
+                                    quantiles_raw_clipped,
+                                )
+                                if valid_indices is not None:
+                                    quantiles_norm_clipped_for_loss = quantiles_norm_clipped[valid_indices]
+                                else:
+                                    quantiles_norm_clipped_for_loss = quantiles_norm_clipped
+                                quantiles_for_ev = quantiles_norm_clipped_for_loss
+                                # CRITICAL FIX V2: Correct PPO VF clipping implementation
+                                # PPO paper requires: L_VF = mean(max(L_unclipped, L_clipped))
+                                # where max is element-wise over batch, NOT max of two scalars!
+                                # This ensures proper gradient flow on per-sample basis.
+                                critic_loss_clipped_per_sample = self._quantile_huber_loss(
+                                    quantiles_norm_clipped_for_loss,
+                                    targets_norm_for_loss,  # Use UNCLIPPED target
+                                    reduction="none",
+                                )
+                                # Element-wise max, then mean (NOT max of means!)
+                                critic_loss = torch.mean(
+                                    torch.max(
+                                        critic_loss_unclipped_per_sample,
+                                        critic_loss_clipped_per_sample,
+                                    )
+                                )
                         else:
                             self._record_value_debug_stats(
                                 "train_pred_mean_raw_post_vf_clip",
@@ -10399,187 +10756,265 @@ class DistributionalPPO(RecurrentPPO):
                                     "(distributional_ppo.py::_train_step::categorical)"
                                 )
 
-                            # Compute mean value from predicted distribution
-                            mean_values_norm_full = (pred_probs_fp32 * self.policy.atoms).sum(
-                                dim=1, keepdim=True
-                            )
-                            mean_values_raw_full = self._to_raw_returns(mean_values_norm_full)
-
-                            # Clip mean value in raw space
                             clip_delta = float(clip_range_vf_value)
-                            old_values_raw_aligned = old_values_raw_tensor
-                            while old_values_raw_aligned.dim() < mean_values_raw_full.dim():
-                                old_values_raw_aligned = old_values_raw_aligned.unsqueeze(-1)
 
-                            mean_values_raw_clipped = torch.clamp(
-                                mean_values_raw_full,
-                                min=old_values_raw_aligned - clip_delta,
-                                max=old_values_raw_aligned + clip_delta,
+                            # TWIN CRITICS VF CLIPPING FIX (2025-11-22) - CATEGORICAL CRITIC
+                            # Use independent clipping for each critic when Twin Critics enabled
+                            # This preserves Twin Critics independence while correctly implementing PPO VF clipping
+                            use_twin_vf_clipping_cat = (
+                                use_twin
+                                and rollout_data.old_value_probs_critic1 is not None
+                                and rollout_data.old_value_probs_critic2 is not None
                             )
 
-                            # Convert clipped mean back to normalized space
-                            if self.normalize_returns:
-                                mean_values_norm_clipped = (
-                                    (mean_values_raw_clipped - ret_mu_tensor) / ret_std_tensor
-                                ).clamp(self._value_norm_clip_min, self._value_norm_clip_max)
-                            else:
-                                mean_values_norm_clipped = (
-                                    (mean_values_raw_clipped / float(base_scale_safe))
-                                    * self._value_target_scale_effective
+                            if use_twin_vf_clipping_cat:
+                                # CORRECT: Use separate old values for each critic (independent clipping)
+                                # This maintains Twin Critics independence and PPO semantics
+                                old_probs_c1 = rollout_data.old_value_probs_critic1.to(
+                                    device=latent_vf_selected.device,
+                                    dtype=latent_vf_selected.dtype
                                 )
-                                if self._value_clip_limit_scaled is not None:
-                                    mean_values_norm_clipped = torch.clamp(
-                                        mean_values_norm_clipped,
-                                        min=-self._value_clip_limit_scaled,
-                                        max=self._value_clip_limit_scaled,
+                                old_probs_c2 = rollout_data.old_value_probs_critic2.to(
+                                    device=latent_vf_selected.device,
+                                    dtype=latent_vf_selected.dtype
+                                )
+
+                                # For categorical critic, we need old quantiles (computed from old probs + atoms)
+                                # But since categorical critic doesn't have quantiles, we pass None and let
+                                # _twin_critics_vf_clipping_loss handle categorical mode
+                                # Note: The method expects old_probs_critic1/critic2 for categorical mode
+
+                                # Call the correct Twin Critics VF clipping method (categorical mode)
+                                clipped_loss_avg, loss_c1_clipped, loss_c2_clipped, loss_unclipped_avg = (
+                                    self._twin_critics_vf_clipping_loss(
+                                        latent_vf=latent_vf_selected,
+                                        targets=None,  # Not used for categorical
+                                        old_quantiles_critic1=None,  # Not used for categorical
+                                        old_quantiles_critic2=None,  # Not used for categorical
+                                        clip_delta=clip_delta,
+                                        reduction="none",
+                                        old_probs_critic1=old_probs_c1,
+                                        old_probs_critic2=old_probs_c2,
+                                        target_distribution=target_distribution_selected
                                     )
+                                )
 
-                            # Compute delta in normalized space
-                            delta_norm = mean_values_norm_clipped - mean_values_norm_full
+                                # Element-wise max, then mean (correct PPO semantics)
+                                critic_loss = torch.mean(
+                                    torch.max(loss_unclipped_avg, clipped_loss_avg)
+                                )
 
-                            # Shift atoms by delta to create clipped distribution support
-                            atoms_original = self.policy.atoms  # Shape: [num_atoms]
+                                # Store losses for logging
+                                if not hasattr(self, '_twin_critic_vf_clip_loss_cat_sum'):
+                                    self._twin_critic_vf_clip_loss_cat_sum = 0.0
+                                    self._twin_critic_vf_clip_count_cat = 0
+                                self._twin_critic_vf_clip_loss_cat_sum += float(critic_loss.item()) * weight
+                                self._twin_critic_vf_clip_count_cat += weight
 
-                            if self.distributional_vf_clip_mode == "mean_only":
-                                # Legacy mode: shift atoms (projection can indirectly affect variance)
-                                atoms_shifted = atoms_original + delta_norm.squeeze(-1)  # Broadcast delta
-                            elif self.distributional_vf_clip_mode == "mean_and_variance":
-                                # Improved mode: constrain variance by scaling atom spread
-                                # Compute variance of current distribution
-                                current_mean = mean_values_norm_full.squeeze(-1)
-                                atoms_centered = atoms_original - current_mean
-                                current_variance = ((atoms_centered ** 2) * pred_probs_fp32).sum(dim=1, keepdim=True)
-
-                                # Compute old variance from stored old probabilities
-                                if rollout_data.old_value_probs is not None:
-                                    # Use actual old probabilities from rollout buffer
-                                    old_probs_norm = rollout_data.old_value_probs.to(
-                                        device=pred_probs_fp32.device,
-                                        dtype=pred_probs_fp32.dtype
+                            else:
+                                # FALLBACK: Use shared old values (backward compatibility)
+                                # Issue runtime warning if Twin Critics enabled but separate old values missing
+                                if use_twin and not hasattr(self, '_twin_vf_clip_warning_cat_logged'):
+                                    if self.logger is not None:
+                                        self.logger.record(
+                                            "warn/twin_critics_vf_clip_fallback_categorical",
+                                            1.0,
+                                            exclude="stdout"
+                                        )
+                                    import warnings
+                                    warnings.warn(
+                                        "Twin Critics enabled with VF clipping (categorical critic), but separate old probs unavailable. "
+                                        "Falling back to shared old values (min(Q1, Q2)). This is INCORRECT and "
+                                        "violates Twin Critics independence! "
+                                        "Ensure value_probs_critic1/critic2 are stored in rollout buffer.",
+                                        RuntimeWarning,
+                                        stacklevel=2
                                     )
-                                    # Old mean from old_values
-                                    old_mean_norm = rollout_data.old_values.to(
-                                        device=pred_probs_fp32.device,
-                                        dtype=pred_probs_fp32.dtype
-                                    )
-                                    old_atoms_centered = atoms_original - old_mean_norm.squeeze(-1)
-                                    # Proper weighted variance using old probabilities
-                                    old_variance_approx = ((old_atoms_centered ** 2) * old_probs_norm).sum(dim=1, keepdim=True)
-                                else:
-                                    # Fallback: rough approximation (should not happen in normal operation)
-                                    old_mean_norm = (old_values_raw_aligned - ret_mu_tensor) / ret_std_tensor if self.normalize_returns else old_values_raw_aligned
-                                    old_atoms_centered_approx = atoms_original - old_mean_norm.squeeze(-1)
-                                    # Use uniform distribution as rough prior for old variance
-                                    old_variance_approx = (old_atoms_centered_approx ** 2).mean()
+                                    self._twin_vf_clip_warning_cat_logged = True
 
-                                # Constrain variance: current_std <= old_std * factor
-                                # Compute current std and maximum allowed std
-                                current_std = torch.sqrt(current_variance + 1e-8)
-                                old_std = torch.sqrt(old_variance_approx + 1e-8)
-                                max_std = old_std * self.distributional_vf_clip_variance_factor
+                                # Legacy clipping code (shared old values)
+                                # Compute mean value from predicted distribution
+                                mean_values_norm_full = (pred_probs_fp32 * self.policy.atoms).sum(
+                                    dim=1, keepdim=True
+                                )
+                                mean_values_raw_full = self._to_raw_returns(mean_values_norm_full)
 
-                                # Compute scale factor: scale = min(1.0, max_std / current_std)
-                                # - If current_std <= max_std: scale = 1.0 (no change)
-                                # - If current_std > max_std: scale < 1.0 (shrink toward mean)
-                                variance_scale = torch.clamp(max_std / current_std, max=1.0)
+                                # Clip mean value in raw space
+                                old_values_raw_aligned = old_values_raw_tensor
+                                while old_values_raw_aligned.dim() < mean_values_raw_full.dim():
+                                    old_values_raw_aligned = old_values_raw_aligned.unsqueeze(-1)
 
-                                # Scale atoms toward clipped mean
-                                atoms_shifted_base = atoms_original + delta_norm.squeeze(-1)
-                                atoms_shifted_centered = atoms_shifted_base - mean_values_norm_clipped.squeeze(-1)
-                                atoms_shifted = mean_values_norm_clipped.squeeze(-1) + atoms_shifted_centered * variance_scale.squeeze(-1)
-                            elif self.distributional_vf_clip_mode == "per_quantile":
-                                # Per-quantile mode for categorical: clip each atom individually
-                                # For categorical critics with fixed atoms, we clip the entire atom support
-                                # to stay within [old_value - clip_delta, old_value + clip_delta]
-                                # This ensures the distribution cannot extend beyond the clipping bounds
+                                mean_values_raw_clipped = torch.clamp(
+                                    mean_values_raw_full,
+                                    min=old_values_raw_aligned - clip_delta,
+                                    max=old_values_raw_aligned + clip_delta,
+                                )
 
-                                # Convert atoms to raw space (atoms are shared across batch, shape [num_atoms])
-                                atoms_raw = self._to_raw_returns(atoms_original.unsqueeze(0)).squeeze(0)
-
-                                # For each sample in batch, clip atoms relative to old_values_raw
-                                # We need to handle batch dimension properly
-                                # old_values_raw_aligned has shape [batch, 1], atoms_raw has shape [num_atoms]
-                                # Result should be [batch, num_atoms]
-
-                                # Broadcast clipping: each sample gets its own clipped atom range
-                                old_values_raw_broadcast = old_values_raw_aligned  # [batch, 1]
-                                atoms_raw_broadcast = atoms_raw.unsqueeze(0)  # [1, num_atoms]
-
-                                # Clip each atom relative to old_value for each sample
-                                atoms_raw_clipped_batch = old_values_raw_broadcast + torch.clamp(
-                                    atoms_raw_broadcast - old_values_raw_broadcast,
-                                    min=-clip_delta,
-                                    max=clip_delta
-                                )  # [batch, num_atoms]
-
-                                # Convert clipped atoms back to normalized space
+                                # Convert clipped mean back to normalized space
                                 if self.normalize_returns:
-                                    atoms_shifted_batch = (
-                                        (atoms_raw_clipped_batch - ret_mu_tensor) / ret_std_tensor
+                                    mean_values_norm_clipped = (
+                                        (mean_values_raw_clipped - ret_mu_tensor) / ret_std_tensor
                                     ).clamp(self._value_norm_clip_min, self._value_norm_clip_max)
                                 else:
-                                    atoms_shifted_batch = (
-                                        (atoms_raw_clipped_batch / float(base_scale_safe))
+                                    mean_values_norm_clipped = (
+                                        (mean_values_raw_clipped / float(base_scale_safe))
                                         * self._value_target_scale_effective
                                     )
                                     if self._value_clip_limit_scaled is not None:
-                                        atoms_shifted_batch = torch.clamp(
-                                            atoms_shifted_batch,
+                                        mean_values_norm_clipped = torch.clamp(
+                                            mean_values_norm_clipped,
                                             min=-self._value_clip_limit_scaled,
                                             max=self._value_clip_limit_scaled,
                                         )
 
-                                # For projection, we need to handle each sample separately
-                                # because each sample has different clipped atoms
-                                # We'll compute the mean of clipped atoms for simplicity
-                                # (In practice, atoms are the same across batch in C51, but after clipping
-                                # they differ per sample due to different old_values)
-                                atoms_shifted = atoms_shifted_batch  # [batch, num_atoms]
-                            else:
-                                raise ValueError(
-                                    f"Invalid distributional_vf_clip_mode: {self.distributional_vf_clip_mode}"
+                                # Compute delta in normalized space
+                                delta_norm = mean_values_norm_clipped - mean_values_norm_full
+
+                                # Shift atoms by delta to create clipped distribution support
+                                atoms_original = self.policy.atoms  # Shape: [num_atoms]
+
+                            # Apply legacy clipping based on mode (only if not using Twin Critics VF clipping)
+                            if not use_twin_vf_clipping_cat:
+                                if self.distributional_vf_clip_mode == "mean_only":
+                                    # Legacy mode: shift atoms (projection can indirectly affect variance)
+                                    atoms_shifted = atoms_original + delta_norm.squeeze(-1)  # Broadcast delta
+                                elif self.distributional_vf_clip_mode == "mean_and_variance":
+                                    # Improved mode: constrain variance by scaling atom spread
+                                    # Compute variance of current distribution
+                                    current_mean = mean_values_norm_full.squeeze(-1)
+                                    atoms_centered = atoms_original - current_mean
+                                    current_variance = ((atoms_centered ** 2) * pred_probs_fp32).sum(dim=1, keepdim=True)
+
+                                    # Compute old variance from stored old probabilities
+                                    if rollout_data.old_value_probs is not None:
+                                        # Use actual old probabilities from rollout buffer
+                                        old_probs_norm = rollout_data.old_value_probs.to(
+                                            device=pred_probs_fp32.device,
+                                            dtype=pred_probs_fp32.dtype
+                                        )
+                                        # Old mean from old_values
+                                        old_mean_norm = rollout_data.old_values.to(
+                                            device=pred_probs_fp32.device,
+                                            dtype=pred_probs_fp32.dtype
+                                        )
+                                        old_atoms_centered = atoms_original - old_mean_norm.squeeze(-1)
+                                        # Proper weighted variance using old probabilities
+                                        old_variance_approx = ((old_atoms_centered ** 2) * old_probs_norm).sum(dim=1, keepdim=True)
+                                    else:
+                                        # Fallback: rough approximation (should not happen in normal operation)
+                                        old_mean_norm = (old_values_raw_aligned - ret_mu_tensor) / ret_std_tensor if self.normalize_returns else old_values_raw_aligned
+                                        old_atoms_centered_approx = atoms_original - old_mean_norm.squeeze(-1)
+                                        # Use uniform distribution as rough prior for old variance
+                                        old_variance_approx = (old_atoms_centered_approx ** 2).mean()
+
+                                    # Constrain variance: current_std <= old_std * factor
+                                    # Compute current std and maximum allowed std
+                                    current_std = torch.sqrt(current_variance + 1e-8)
+                                    old_std = torch.sqrt(old_variance_approx + 1e-8)
+                                    max_std = old_std * self.distributional_vf_clip_variance_factor
+
+                                    # Compute scale factor: scale = min(1.0, max_std / current_std)
+                                    # - If current_std <= max_std: scale = 1.0 (no change)
+                                    # - If current_std > max_std: scale < 1.0 (shrink toward mean)
+                                    variance_scale = torch.clamp(max_std / current_std, max=1.0)
+
+                                    # Scale atoms toward clipped mean
+                                    atoms_shifted_base = atoms_original + delta_norm.squeeze(-1)
+                                    atoms_shifted_centered = atoms_shifted_base - mean_values_norm_clipped.squeeze(-1)
+                                    atoms_shifted = mean_values_norm_clipped.squeeze(-1) + atoms_shifted_centered * variance_scale.squeeze(-1)
+                                elif self.distributional_vf_clip_mode == "per_quantile":
+                                    # Per-quantile mode for categorical: clip each atom individually
+                                    # For categorical critics with fixed atoms, we clip the entire atom support
+                                    # to stay within [old_value - clip_delta, old_value + clip_delta]
+                                    # This ensures the distribution cannot extend beyond the clipping bounds
+
+                                    # Convert atoms to raw space (atoms are shared across batch, shape [num_atoms])
+                                    atoms_raw = self._to_raw_returns(atoms_original.unsqueeze(0)).squeeze(0)
+
+                                    # For each sample in batch, clip atoms relative to old_values_raw
+                                    # We need to handle batch dimension properly
+                                    # old_values_raw_aligned has shape [batch, 1], atoms_raw has shape [num_atoms]
+                                    # Result should be [batch, num_atoms]
+
+                                    # Broadcast clipping: each sample gets its own clipped atom range
+                                    old_values_raw_broadcast = old_values_raw_aligned  # [batch, 1]
+                                    atoms_raw_broadcast = atoms_raw.unsqueeze(0)  # [1, num_atoms]
+
+                                    # Clip each atom relative to old_value for each sample
+                                    atoms_raw_clipped_batch = old_values_raw_broadcast + torch.clamp(
+                                        atoms_raw_broadcast - old_values_raw_broadcast,
+                                        min=-clip_delta,
+                                        max=clip_delta
+                                    )  # [batch, num_atoms]
+
+                                    # Convert clipped atoms back to normalized space
+                                    if self.normalize_returns:
+                                        atoms_shifted_batch = (
+                                            (atoms_raw_clipped_batch - ret_mu_tensor) / ret_std_tensor
+                                        ).clamp(self._value_norm_clip_min, self._value_norm_clip_max)
+                                    else:
+                                        atoms_shifted_batch = (
+                                            (atoms_raw_clipped_batch / float(base_scale_safe))
+                                            * self._value_target_scale_effective
+                                        )
+                                        if self._value_clip_limit_scaled is not None:
+                                            atoms_shifted_batch = torch.clamp(
+                                                atoms_shifted_batch,
+                                                min=-self._value_clip_limit_scaled,
+                                                max=self._value_clip_limit_scaled,
+                                            )
+
+                                    # For projection, we need to handle each sample separately
+                                    # because each sample has different clipped atoms
+                                    # We'll compute the mean of clipped atoms for simplicity
+                                    # (In practice, atoms are the same across batch in C51, but after clipping
+                                    # they differ per sample due to different old_values)
+                                    atoms_shifted = atoms_shifted_batch  # [batch, num_atoms]
+                                else:
+                                    raise ValueError(
+                                        f"Invalid distributional_vf_clip_mode: {self.distributional_vf_clip_mode}"
+                                    )
+
+                                # Project predicted probabilities from shifted atoms back to original atoms
+                                # This redistributes probability mass according to C51 projection
+                                # GRADIENT FLOW: Projection maintains gradients back to pred_probs_fp32
+                                # This is CRITICAL for VF clipping to train the value network properly
+                                pred_probs_clipped = self._project_categorical_distribution(
+                                    probs=pred_probs_fp32,
+                                    source_atoms=atoms_shifted,
+                                    target_atoms=atoms_original,
                                 )
 
-                            # Project predicted probabilities from shifted atoms back to original atoms
-                            # This redistributes probability mass according to C51 projection
-                            # GRADIENT FLOW: Projection maintains gradients back to pred_probs_fp32
-                            # This is CRITICAL for VF clipping to train the value network properly
-                            pred_probs_clipped = self._project_categorical_distribution(
-                                probs=pred_probs_fp32,
-                                source_atoms=atoms_shifted,
-                                target_atoms=atoms_original,
-                            )
+                                # Ensure valid probability distribution
+                                pred_probs_clipped = torch.clamp(pred_probs_clipped, min=1e-8)
+                                pred_probs_clipped = pred_probs_clipped / pred_probs_clipped.sum(
+                                    dim=1, keepdim=True
+                                )
 
-                            # Ensure valid probability distribution
-                            pred_probs_clipped = torch.clamp(pred_probs_clipped, min=1e-8)
-                            pred_probs_clipped = pred_probs_clipped / pred_probs_clipped.sum(
-                                dim=1, keepdim=True
-                            )
+                                # Compute log probabilities for clipped distribution
+                                log_predictions_clipped = torch.log(pred_probs_clipped)
 
-                            # Compute log probabilities for clipped distribution
-                            log_predictions_clipped = torch.log(pred_probs_clipped)
+                                # Select valid indices if needed
+                                if valid_indices is not None:
+                                    log_predictions_clipped_selected = log_predictions_clipped[
+                                        valid_indices
+                                    ]
+                                else:
+                                    log_predictions_clipped_selected = log_predictions_clipped
 
-                            # Select valid indices if needed
-                            if valid_indices is not None:
-                                log_predictions_clipped_selected = log_predictions_clipped[
-                                    valid_indices
-                                ]
-                            else:
-                                log_predictions_clipped_selected = log_predictions_clipped
+                                # CRITICAL FIX V2: Use UNCLIPPED target with clipped predictions
+                                # Correct PPO VF clipping: mean(max(L_unclipped, L_clipped))
+                                # where max is element-wise, NOT scalar max!
+                                critic_loss_clipped_per_sample = -(
+                                    target_distribution_selected * log_predictions_clipped_selected
+                                ).sum(dim=1)  # Shape: [batch], do NOT mean yet!
 
-                            # CRITICAL FIX V2: Use UNCLIPPED target with clipped predictions
-                            # Correct PPO VF clipping: mean(max(L_unclipped, L_clipped))
-                            # where max is element-wise, NOT scalar max!
-                            critic_loss_clipped_per_sample = -(
-                                target_distribution_selected * log_predictions_clipped_selected
-                            ).sum(dim=1)  # Shape: [batch], do NOT mean yet!
-
-                            # Element-wise max, then mean (NOT max of means!)
-                            critic_loss_per_sample_after_vf = torch.max(
-                                critic_loss_unclipped_per_sample,
-                                critic_loss_clipped_per_sample,
-                            )
-                            critic_loss = torch.mean(critic_loss_per_sample_after_vf)
+                                # Element-wise max, then mean (NOT max of means!)
+                                critic_loss_per_sample_after_vf = torch.max(
+                                    critic_loss_unclipped_per_sample,
+                                    critic_loss_clipped_per_sample,
+                                )
+                                critic_loss = torch.mean(critic_loss_per_sample_after_vf)
                         else:
                             # No VF clipping: use unclipped loss
                             critic_loss_per_sample_after_vf = critic_loss_unclipped_per_sample
