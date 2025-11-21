@@ -460,8 +460,8 @@ class TestIntegration:
             assert np.allclose(result['constant_feature_z'].dropna(), 0.0, atol=1e-6), \
                 "Constant feature should be zeros"
 
-        # 3. Close shifted only once
-        assert pipe._close_shifted_in_fit == True, "Close should be marked as shifted"
+        # 3. Close shifted correctly (first row should be NaN after shift)
+        assert pd.isna(result['close'].iloc[0]), "Close should be shifted (first row NaN)"
 
         # 4. Pipeline completed without errors
         assert result is not None, "Pipeline should complete successfully"
