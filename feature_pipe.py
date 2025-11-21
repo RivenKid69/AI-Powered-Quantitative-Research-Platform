@@ -841,9 +841,21 @@ class FeaturePipe:
         - Linear return r_L = 10% → Log return r_log = 9.53% (5% difference)
         - Linear return r_L = 50% → Log return r_log = 40.5% (19% difference!)
 
+        CRITICAL FIX #4: Price validation for log-return safety
+        ========================================================
+        Log returns require strictly positive prices: ln(P_t / P_{t-1})
+        Invalid prices (≤0, NaN, inf) would produce -inf/NaN in targets
+        → direct injection into training loop → gradient explosions!
+
+        New validation:
+        - Replace non-positive prices with NaN (invalid for log returns)
+        - Replace non-finite prices with NaN (inf, -inf, NaN)
+        - Log returns of invalid prices → NaN (safe for training)
+
         References:
         - Cont, R. (2001). "Empirical properties of asset returns" (log returns preferred)
         - Hudson, R. & Gregoriou, A. (2015). "Calculating and Comparing Returns"
+        - Goodfellow et al. (2016). "Deep Learning" Ch. 8 (NaN handling in optimization)
 
         If ``label_col`` is provided and present in ``df`` the existing
         column is returned.  Otherwise the method computes a next-step return
@@ -856,9 +868,16 @@ class FeaturePipe:
         price = df[self.price_col].astype(float)
         future_price = df.groupby("symbol")[self.price_col].shift(-1)
 
+        # CRITICAL FIX #4: Validate prices for safe log-return computation
+        # Replace non-positive and non-finite prices with NaN
+        # This prevents -inf/NaN injection into training targets
+        price = price.where((price > 0) & np.isfinite(price), np.nan)
+        future_price = future_price.where((future_price > 0) & np.isfinite(future_price), np.nan)
+
         # CRITICAL FIX #3: Use LOG returns to match features
         # Old: target = future_price / price - 1.0 (linear returns)
         # New: target = log(future_price / price) (log returns)
+        # If either price is NaN, result will be NaN (safe for training)
         target = np.log(future_price.div(price))
 
         if not self._bar_mode_active:

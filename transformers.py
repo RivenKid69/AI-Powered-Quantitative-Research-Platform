@@ -533,6 +533,46 @@ def calculate_garch_volatility(prices: List[float], n: int) -> Optional[float]:
     return None
 
 
+def _convert_minutes_to_bars_with_validation(
+    window_minutes: int,
+    bar_duration_minutes: int,
+    window_name: str = "window"
+) -> int:
+    """
+    Конвертирует окно из минут в бары с валидацией кратности.
+
+    Args:
+        window_minutes: Размер окна в минутах
+        bar_duration_minutes: Длительность одного бара в минутах
+        window_name: Имя окна для сообщений об ошибках
+
+    Returns:
+        Размер окна в барах (минимум 1)
+
+    Warnings:
+        UserWarning если окно не кратно bar_duration_minutes
+    """
+    bars = max(1, window_minutes // bar_duration_minutes)
+    actual_minutes = bars * bar_duration_minutes
+
+    # Предупреждение если окно не кратно длительности бара
+    if actual_minutes != window_minutes:
+        discrepancy_minutes = window_minutes - actual_minutes
+        discrepancy_pct = 100.0 * abs(discrepancy_minutes) / window_minutes
+        warnings.warn(
+            f"{window_name} {window_minutes} minutes is not divisible by "
+            f"bar_duration_minutes={bar_duration_minutes}. "
+            f"Actual window will be {actual_minutes} minutes ({bars} bars), "
+            f"discrepancy: {discrepancy_minutes} minutes ({discrepancy_pct:.2f}%). "
+            f"Consider using windows that are multiples of {bar_duration_minutes} "
+            f"for exact alignment.",
+            UserWarning,
+            stacklevel=3
+        )
+
+    return bars
+
+
 @dataclass
 class FeatureSpec:
     """
@@ -593,10 +633,14 @@ class FeatureSpec:
         # CRITICAL FIX #1: Сохраняем исходные значения в минутах для именования признаков
         self._lookbacks_prices_minutes = list(self.lookbacks_prices)
 
-        # CRITICAL FIX #1: Конвертируем окна из минут в бары
+        # CRITICAL FIX #1 (ENHANCED): Конвертируем окна из минут в бары с валидацией
+        # Проверяем кратность окон bar_duration_minutes для предотвращения несоответствия
         # Для 4h интервала (bar_duration_minutes=240): 240 минут = 1 бар
         self.lookbacks_prices = [
-            max(1, x // self.bar_duration_minutes) for x in self.lookbacks_prices
+            _convert_minutes_to_bars_with_validation(
+                w, self.bar_duration_minutes, "lookbacks_prices"
+            )
+            for w in self.lookbacks_prices
         ]
 
         self.rsi_period = int(self.rsi_period)
@@ -617,9 +661,12 @@ class FeatureSpec:
         # CRITICAL FIX #1: Сохраняем исходные значения в минутах для именования признаков
         self._yang_zhang_windows_minutes = list(self.yang_zhang_windows)
 
-        # CRITICAL FIX #1: Конвертируем окна из минут в бары
+        # CRITICAL FIX #1 (ENHANCED): Конвертируем окна из минут в бары с валидацией
         self.yang_zhang_windows = [
-            max(1, x // self.bar_duration_minutes) for x in self.yang_zhang_windows
+            _convert_minutes_to_bars_with_validation(
+                w, self.bar_duration_minutes, "yang_zhang_windows"
+            )
+            for w in self.yang_zhang_windows
         ]
 
         # Инициализация окон Parkinson для 4h интервала: 48ч, 7д в минутах
@@ -637,9 +684,12 @@ class FeatureSpec:
         # CRITICAL FIX #1: Сохраняем исходные значения в минутах для именования признаков
         self._parkinson_windows_minutes = list(self.parkinson_windows)
 
-        # CRITICAL FIX #1: Конвертируем окна из минут в бары
+        # CRITICAL FIX #1 (ENHANCED): Конвертируем окна из минут в бары с валидацией
         self.parkinson_windows = [
-            max(1, x // self.bar_duration_minutes) for x in self.parkinson_windows
+            _convert_minutes_to_bars_with_validation(
+                w, self.bar_duration_minutes, "parkinson_windows"
+            )
+            for w in self.parkinson_windows
         ]
 
         # Инициализация окон Taker Buy Ratio скользящего среднего для 4h интервала: 8ч, 16ч, 24ч в минутах
@@ -658,9 +708,12 @@ class FeatureSpec:
         # CRITICAL FIX #1: Сохраняем исходные значения в минутах для именования признаков
         self._taker_buy_ratio_windows_minutes = list(self.taker_buy_ratio_windows)
 
-        # CRITICAL FIX #1: Конвертируем окна из минут в бары
+        # CRITICAL FIX #1 (ENHANCED): Конвертируем окна из минут в бары с валидацией
         self.taker_buy_ratio_windows = [
-            max(1, x // self.bar_duration_minutes) for x in self.taker_buy_ratio_windows
+            _convert_minutes_to_bars_with_validation(
+                w, self.bar_duration_minutes, "taker_buy_ratio_windows"
+            )
+            for w in self.taker_buy_ratio_windows
         ]
 
         # Инициализация окон моментума Taker Buy Ratio для 4h интервала: 4ч, 8ч, 12ч, 24ч в минутах
@@ -686,9 +739,12 @@ class FeatureSpec:
         # CRITICAL FIX #1: Сохраняем исходные значения в минутах для именования признаков
         self._taker_buy_ratio_momentum_minutes = list(self.taker_buy_ratio_momentum)
 
-        # CRITICAL FIX #1: Конвертируем окна из минут в бары
+        # CRITICAL FIX #1 (ENHANCED): Конвертируем окна из минут в бары с валидацией
         self.taker_buy_ratio_momentum = [
-            max(1, x // self.bar_duration_minutes) for x in self.taker_buy_ratio_momentum
+            _convert_minutes_to_bars_with_validation(
+                w, self.bar_duration_minutes, "taker_buy_ratio_momentum"
+            )
+            for w in self.taker_buy_ratio_momentum
         ]
 
         # Инициализация окон Cumulative Volume Delta: 24ч, 7д в минутах (без изменений)
@@ -704,9 +760,12 @@ class FeatureSpec:
         # CRITICAL FIX #1: Сохраняем исходные значения в минутах для именования признаков
         self._cvd_windows_minutes = list(self.cvd_windows)
 
-        # CRITICAL FIX #1: Конвертируем окна из минут в бары
+        # CRITICAL FIX #1 (ENHANCED): Конвертируем окна из минут в бары с валидацией
         self.cvd_windows = [
-            max(1, x // self.bar_duration_minutes) for x in self.cvd_windows
+            _convert_minutes_to_bars_with_validation(
+                w, self.bar_duration_minutes, "cvd_windows"
+            )
+            for w in self.cvd_windows
         ]
 
         # Инициализация окон GARCH для 4h интервала: 200h, 14д, 30д в минутах
@@ -729,9 +788,12 @@ class FeatureSpec:
         # CRITICAL FIX #1: Сохраняем исходные значения в минутах для именования признаков
         self._garch_windows_minutes = list(self.garch_windows)
 
-        # CRITICAL FIX #1: Конвертируем окна из минут в бары
+        # CRITICAL FIX #1 (ENHANCED): Конвертируем окна из минут в бары с валидацией
         self.garch_windows = [
-            max(1, x // self.bar_duration_minutes) for x in self.garch_windows
+            _convert_minutes_to_bars_with_validation(
+                w, self.bar_duration_minutes, "garch_windows"
+            )
+            for w in self.garch_windows
         ]
 
 
@@ -966,9 +1028,17 @@ class OnlineFeatureTransformer:
                 old_price = float(seq[-(lb + 1)])
                 # Используем форматированное значение для имени returns (4h, 24h, 200h)
                 ret_name = f"ret_{_format_window_name(lb_minutes)}"
-                feats[ret_name] = (
-                    float(math.log(price / old_price)) if old_price > 0 else 0.0
-                )
+
+                # CRITICAL FIX #4: Validate both prices for safe log-return computation
+                # Log returns require BOTH prices > 0 (division by old_price and log domain)
+                # Invalid: old_price ≤ 0 or price ≤ 0 → would produce -inf/NaN
+                # Safe fallback: NaN instead of 0.0 (more explicit about missing data)
+                if old_price > 0 and price > 0:
+                    feats[ret_name] = float(math.log(price / old_price))
+                else:
+                    # NaN is safer than 0.0 for invalid log returns
+                    # Training loops should handle NaN (drop or mask)
+                    feats[ret_name] = float("nan")
 
         # CRITICAL FIX: Handle edge cases for RSI calculation (Wilder's formula)
         if st["avg_gain"] is not None and st["avg_loss"] is not None:
