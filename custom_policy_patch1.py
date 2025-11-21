@@ -1349,6 +1349,26 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
         return torch.min(self._last_value_quantiles, self._last_value_quantiles_2)
 
     @property
+    def last_value_quantiles_critic1(self) -> Optional[torch.Tensor]:
+        """First critic quantiles (FIX 2025-11-22: Twin Critics VF clipping)."""
+        return self._last_value_quantiles
+
+    @property
+    def last_value_quantiles_critic2(self) -> Optional[torch.Tensor]:
+        """Second critic quantiles (FIX 2025-11-22: Twin Critics VF clipping)."""
+        return self._last_value_quantiles_2
+
+    @property
+    def last_value_logits_critic1(self) -> Optional[torch.Tensor]:
+        """First critic logits (FIX 2025-11-22: Twin Critics VF clipping)."""
+        return self._last_value_logits
+
+    @property
+    def last_value_logits_critic2(self) -> Optional[torch.Tensor]:
+        """Second critic logits (FIX 2025-11-22: Twin Critics VF clipping)."""
+        return self._last_value_logits_2
+
+    @property
     def last_raw_actions(self) -> Optional[torch.Tensor]:
         return self._last_raw_actions
 

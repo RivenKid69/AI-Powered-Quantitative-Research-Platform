@@ -693,6 +693,11 @@ class RawRecurrentRolloutBufferSamples(NamedTuple):
     sample_indices: torch.Tensor  # FIX
     old_value_quantiles: Optional[torch.Tensor]  # For distributional VF clipping (quantile critic)
     old_value_probs: Optional[torch.Tensor]  # For distributional VF clipping (categorical critic)
+    # Twin Critics VF clipping support (FIX 2025-11-22)
+    old_value_quantiles_critic1: Optional[torch.Tensor]  # First critic quantiles (quantile mode)
+    old_value_quantiles_critic2: Optional[torch.Tensor]  # Second critic quantiles (quantile mode)
+    old_value_probs_critic1: Optional[torch.Tensor]  # First critic probs (categorical mode)
+    old_value_probs_critic2: Optional[torch.Tensor]  # Second critic probs (categorical mode)
 
 
 @dataclass(slots=True)
@@ -1400,6 +1405,11 @@ class RawRecurrentRolloutBuffer(RecurrentRolloutBuffer):
         # For distributional VF clipping - initialized on first add()
         self.value_quantiles: Optional[np.ndarray] = None  # Shape: [buffer_size, n_envs, n_quantiles]
         self.value_probs: Optional[np.ndarray] = None  # Shape: [buffer_size, n_envs, n_atoms]
+        # Twin Critics VF clipping support (FIX 2025-11-22)
+        self.value_quantiles_critic1: Optional[np.ndarray] = None  # First critic quantiles
+        self.value_quantiles_critic2: Optional[np.ndarray] = None  # Second critic quantiles
+        self.value_probs_critic1: Optional[np.ndarray] = None  # First critic probs
+        self.value_probs_critic2: Optional[np.ndarray] = None  # Second critic probs
 
     @staticmethod
     def _to_numpy(value: Any) -> np.ndarray:
@@ -1415,6 +1425,10 @@ class RawRecurrentRolloutBuffer(RecurrentRolloutBuffer):
         log_prob_raw: Any,
         value_quantiles: Optional[Any] = None,
         value_probs: Optional[Any] = None,
+        value_quantiles_critic1: Optional[Any] = None,
+        value_quantiles_critic2: Optional[Any] = None,
+        value_probs_critic1: Optional[Any] = None,
+        value_probs_critic2: Optional[Any] = None,
         **kwargs: Any,
     ) -> None:
         if actions_raw is None or log_prob_raw is None:
@@ -1454,6 +1468,44 @@ class RawRecurrentRolloutBuffer(RecurrentRolloutBuffer):
                 )
             self.value_probs[pos] = probs_np.astype(np.float32, copy=False)
 
+        # Twin Critics VF clipping support (FIX 2025-11-22)
+        # Store separate quantiles/probs from both critics for independent clipping
+        if value_quantiles_critic1 is not None:
+            quantiles_c1_np = self._to_numpy(value_quantiles_critic1)
+            if self.value_quantiles_critic1 is None:
+                self.value_quantiles_critic1 = np.zeros(
+                    (self.buffer_size, self.n_envs, quantiles_c1_np.shape[-1]),
+                    dtype=np.float32
+                )
+            self.value_quantiles_critic1[pos] = quantiles_c1_np.astype(np.float32, copy=False)
+
+        if value_quantiles_critic2 is not None:
+            quantiles_c2_np = self._to_numpy(value_quantiles_critic2)
+            if self.value_quantiles_critic2 is None:
+                self.value_quantiles_critic2 = np.zeros(
+                    (self.buffer_size, self.n_envs, quantiles_c2_np.shape[-1]),
+                    dtype=np.float32
+                )
+            self.value_quantiles_critic2[pos] = quantiles_c2_np.astype(np.float32, copy=False)
+
+        if value_probs_critic1 is not None:
+            probs_c1_np = self._to_numpy(value_probs_critic1)
+            if self.value_probs_critic1 is None:
+                self.value_probs_critic1 = np.zeros(
+                    (self.buffer_size, self.n_envs, probs_c1_np.shape[-1]),
+                    dtype=np.float32
+                )
+            self.value_probs_critic1[pos] = probs_c1_np.astype(np.float32, copy=False)
+
+        if value_probs_critic2 is not None:
+            probs_c2_np = self._to_numpy(value_probs_critic2)
+            if self.value_probs_critic2 is None:
+                self.value_probs_critic2 = np.zeros(
+                    (self.buffer_size, self.n_envs, probs_c2_np.shape[-1]),
+                    dtype=np.float32
+                )
+            self.value_probs_critic2[pos] = probs_c2_np.astype(np.float32, copy=False)
+
     def get(
         self, batch_size: Optional[int] = None
     ) -> Generator[RawRecurrentRolloutBufferSamples, None, None]:
@@ -1483,6 +1535,15 @@ class RawRecurrentRolloutBuffer(RecurrentRolloutBuffer):
                 tensor_list.append("value_quantiles")
             if self.value_probs is not None:
                 tensor_list.append("value_probs")
+            # Add Twin Critics tensors if present (FIX 2025-11-22)
+            if self.value_quantiles_critic1 is not None:
+                tensor_list.append("value_quantiles_critic1")
+            if self.value_quantiles_critic2 is not None:
+                tensor_list.append("value_quantiles_critic2")
+            if self.value_probs_critic1 is not None:
+                tensor_list.append("value_probs_critic1")
+            if self.value_probs_critic2 is not None:
+                tensor_list.append("value_probs_critic2")
 
             for tensor in tensor_list:
                 self.__dict__[tensor] = self.swap_and_flatten(self.__dict__[tensor])
@@ -1600,6 +1661,27 @@ class RawRecurrentRolloutBuffer(RecurrentRolloutBuffer):
             old_value_probs_np = self.pad_and_flatten(self.value_probs[batch_inds])
             old_value_probs = _to_tensor(old_value_probs_np, convert_floats=True)
 
+        # Extract Twin Critics data if present (FIX 2025-11-22)
+        old_value_quantiles_critic1 = None
+        if self.value_quantiles_critic1 is not None:
+            old_value_quantiles_critic1_np = self.pad_and_flatten(self.value_quantiles_critic1[batch_inds])
+            old_value_quantiles_critic1 = _to_tensor(old_value_quantiles_critic1_np, convert_floats=True)
+
+        old_value_quantiles_critic2 = None
+        if self.value_quantiles_critic2 is not None:
+            old_value_quantiles_critic2_np = self.pad_and_flatten(self.value_quantiles_critic2[batch_inds])
+            old_value_quantiles_critic2 = _to_tensor(old_value_quantiles_critic2_np, convert_floats=True)
+
+        old_value_probs_critic1 = None
+        if self.value_probs_critic1 is not None:
+            old_value_probs_critic1_np = self.pad_and_flatten(self.value_probs_critic1[batch_inds])
+            old_value_probs_critic1 = _to_tensor(old_value_probs_critic1_np, convert_floats=True)
+
+        old_value_probs_critic2 = None
+        if self.value_probs_critic2 is not None:
+            old_value_probs_critic2_np = self.pad_and_flatten(self.value_probs_critic2[batch_inds])
+            old_value_probs_critic2 = _to_tensor(old_value_probs_critic2_np, convert_floats=True)
+
         return RawRecurrentRolloutBufferSamples(
             observations=observations,
             actions=actions,
@@ -1615,6 +1697,10 @@ class RawRecurrentRolloutBuffer(RecurrentRolloutBuffer):
             sample_indices=sample_indices,
             old_value_quantiles=old_value_quantiles,
             old_value_probs=old_value_probs,
+            old_value_quantiles_critic1=old_value_quantiles_critic1,
+            old_value_quantiles_critic2=old_value_quantiles_critic2,
+            old_value_probs_critic1=old_value_probs_critic1,
+            old_value_probs_critic2=old_value_probs_critic2,
         )
 
 
@@ -7618,6 +7704,36 @@ class DistributionalPPO(RecurrentPPO):
             else:
                 value_probs_for_buffer = probs.detach()
 
+            # TWIN CRITICS VF CLIPPING FIX (2025-11-22):
+            # Store separate quantiles/probs from BOTH critics for independent clipping
+            # This ensures each critic is clipped relative to its own old values,
+            # preserving the mathematical correctness of PPO VF clipping:
+            #   Q1_clipped = clip(Q1_current, Q1_old - ε, Q1_old + ε)
+            #   Q2_clipped = clip(Q2_current, Q2_old - ε, Q2_old + ε)
+            # Previously, we only stored min(Q1, Q2), which violated PPO semantics.
+            value_quantiles_critic1_for_buffer = None
+            value_quantiles_critic2_for_buffer = None
+            value_probs_critic1_for_buffer = None
+            value_probs_critic2_for_buffer = None
+
+            if self._use_twin_critics:
+                if self._use_quantile_value:
+                    # Quantile critic: store separate quantiles from both critics
+                    quantiles_c1 = self.policy.last_value_quantiles_critic1
+                    quantiles_c2 = self.policy.last_value_quantiles_critic2
+                    if quantiles_c1 is not None and quantiles_c2 is not None:
+                        value_quantiles_critic1_for_buffer = quantiles_c1.detach()
+                        value_quantiles_critic2_for_buffer = quantiles_c2.detach()
+                else:
+                    # Categorical critic: store separate probs from both critics
+                    logits_c1 = self.policy.last_value_logits_critic1
+                    logits_c2 = self.policy.last_value_logits_critic2
+                    if logits_c1 is not None and logits_c2 is not None:
+                        probs_c1 = torch.softmax(logits_c1, dim=1)
+                        probs_c2 = torch.softmax(logits_c2, dim=1)
+                        value_probs_critic1_for_buffer = probs_c1.detach()
+                        value_probs_critic2_for_buffer = probs_c2.detach()
+
             rollout_buffer.add(
                 self._last_obs,
                 actions_np,
@@ -7630,6 +7746,10 @@ class DistributionalPPO(RecurrentPPO):
                 log_prob_raw=old_log_prob_raw_tensor,
                 value_quantiles=value_quantiles_for_buffer,
                 value_probs=value_probs_for_buffer,
+                value_quantiles_critic1=value_quantiles_critic1_for_buffer,
+                value_quantiles_critic2=value_quantiles_critic2_for_buffer,
+                value_probs_critic1=value_probs_critic1_for_buffer,
+                value_probs_critic2=value_probs_critic2_for_buffer,
             )
 
             buffer_index = (rollout_buffer.pos - 1) % buffer_size
