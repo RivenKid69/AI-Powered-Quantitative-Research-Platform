@@ -2922,15 +2922,15 @@ class DistributionalPPO(RecurrentPPO):
             )
 
         # Quantile regression loss formula: choose between old (buggy) and fixed version
-        # The fix is DISABLED BY DEFAULT for backward compatibility
-        # Set policy.use_fixed_quantile_loss_asymmetry = True to enable the correct formula
+        # The fix is ENABLED BY DEFAULT (since 2025-11-20) for all new training runs
+        # Set policy.use_fixed_quantile_loss_asymmetry = False to revert to legacy formula (not recommended)
         #
-        # FIXED formula (Dabney et al. 2018):
+        # FIXED formula (Dabney et al. 2018) - DEFAULT:
         #   ρ_τ(u) = |τ - I{u < 0}| · L_κ(u), where u = target - predicted
         #   This ensures: underestimation (Q < T) gets penalty τ,
         #                 overestimation (Q ≥ T) gets penalty (1 - τ)
         #
-        # OLD formula (MATHEMATICALLY INCORRECT):
+        # OLD formula (MATHEMATICALLY INCORRECT) - LEGACY:
         #   Uses u = predicted - target, which inverts the asymmetry
         if getattr(self, "_use_fixed_quantile_loss_asymmetry", False):
             delta = targets - predicted_quantiles  # FIXED: T - Q (correct asymmetry)

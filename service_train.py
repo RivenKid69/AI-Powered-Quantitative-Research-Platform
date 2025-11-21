@@ -98,6 +98,24 @@ class ServiceTrain:
         logger.info(f"Общее количество образцов: {total_samples}")
         logger.info("-" * 80)
 
+        # Guard against empty design matrix
+        if total_features == 0:
+            logger.error("=" * 80)
+            logger.error("❌ КРИТИЧЕСКАЯ ОШИБКА: Design matrix не содержит признаков!")
+            logger.error("=" * 80)
+            logger.error(f"Количество образцов: {total_samples}")
+            logger.error(f"Колонки в датафрейме: {list(X.columns)}")
+            logger.error("-" * 80)
+            logger.error("Возможные причины:")
+            logger.error("  1. Ошибка в конфигурации feature pipeline")
+            logger.error("  2. Все признаки были отфильтрованы")
+            logger.error("  3. Неправильная подготовка данных")
+            logger.error("=" * 80)
+            raise ValueError(
+                "Cannot train model with zero features. "
+                "Please check feature configuration and data preparation pipeline."
+            )
+
         # Подсчет статистики по каждому признаку
         features_stats = []
         fully_filled = 0

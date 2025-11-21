@@ -4199,6 +4199,13 @@ def _log_features_statistics_per_symbol(
         logger.info(f"  Общее количество признаков: {total_features}")
         logger.info(f"  Общее количество образцов (train): {total_samples}")
 
+        # Guard against empty feature set
+        if total_features == 0:
+            logger.warning(f"  ⚠️  Символ {symbol}: нет признаков после исключения служебных колонок")
+            logger.warning(f"      Служебные колонки исключены: {service_cols}")
+            logger.warning(f"      Все колонки датафрейма: {set(train_df.columns)}")
+            continue
+
         # Подсчет статистики
         features_stats = []
         fully_filled = 0
