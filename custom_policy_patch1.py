@@ -264,7 +264,13 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
         critic_cfg = self._critic_cfg or {}
 
         distributional_flag = critic_cfg.get("distributional")
-        self._use_quantile_value_head = bool(distributional_flag)
+        categorical_flag = critic_cfg.get("categorical")
+
+        # Determine critic type:
+        # - Quantile critic: distributional=True, categorical=False/None
+        # - Categorical critic: distributional=True, categorical=True
+        # - Scalar critic: distributional=False/None
+        self._use_quantile_value_head = bool(distributional_flag) and not bool(categorical_flag)
 
         # Twin Critics configuration: enables dual value networks for bias reduction
         # Default is True to reduce overestimation bias in value estimates

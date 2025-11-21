@@ -64,15 +64,15 @@ def test_twin_critics_configuration_validation():
     assert policy.dist_head_2 is not None
     print("✓ Categorical mode OK")
 
-    # Test 3: Default behavior (twin critics disabled)
-    print("Test 3: Default (Twin Critics disabled)")
+    # Test 3: Default behavior (twin critics ENABLED by default since 2025-11-21)
+    print("Test 3: Default (Twin Critics enabled by default)")
     arch_params = {'hidden_dim': 32, 'critic': {'distributional': True, 'num_quantiles': 16}}
     policy = CustomActorCriticPolicy(
         observation_space, action_space, lambda x: 0.001, arch_params=arch_params
     )
-    assert policy._use_twin_critics == False
-    assert policy.quantile_head_2 is None
-    print("✓ Default behavior OK")
+    assert policy._use_twin_critics == True  # Default is True!
+    assert policy.quantile_head_2 is not None  # Should exist!
+    print("✓ Default behavior OK (Twin Critics enabled)")
 
     print("✅ Configuration validation passed")
 
