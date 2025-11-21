@@ -220,19 +220,25 @@ def test_quantile_mean_and_variance_constrains():
     quantiles_centered = quantiles_shifted - value_pred_norm_after_vf
     current_variance = (quantiles_centered ** 2).mean(dim=1, keepdim=True)
 
-    old_quantiles_centered = quantiles_fp32 - value_pred_norm_full
+    # CRITICAL FIX: Use OLD mean (not NEW mean) to compute old_variance
+    old_quantiles_centered = quantiles_fp32 - old_mean  # Fixed: was value_pred_norm_full (new mean)
     old_variance = (old_quantiles_centered ** 2).mean(dim=1, keepdim=True)
 
     variance_factor = 2.0
-    max_variance = old_variance * (variance_factor ** 2)
 
-    # FIXED: Correct variance ratio calculation
-    variance_ratio_unconstrained = current_variance / (old_variance + 1e-8)
-    variance_ratio_constrained = torch.clamp(variance_ratio_unconstrained, max=variance_factor ** 2)
-    std_ratio = torch.sqrt(variance_ratio_constrained)
+    # FIXED: Correct variance clipping formula (matches distributional_ppo.py fix)
+    # Compute current std and maximum allowed std
+    current_std = torch.sqrt(current_variance + 1e-8)
+    old_std = torch.sqrt(old_variance + 1e-8)
+    max_std = old_std * variance_factor
+
+    # Compute scale factor: scale = min(1.0, max_std / current_std)
+    # - If current_std <= max_std: scale = 1.0 (no change)
+    # - If current_std > max_std: scale < 1.0 (shrink toward mean)
+    scale_factor = torch.clamp(max_std / current_std, max=1.0)
 
     # Scale quantiles back
-    quantiles_norm_clipped = value_pred_norm_after_vf + quantiles_centered * std_ratio
+    quantiles_norm_clipped = value_pred_norm_after_vf + quantiles_centered * scale_factor
 
     # Check results
     clipped_std = quantiles_norm_clipped.std(dim=1)

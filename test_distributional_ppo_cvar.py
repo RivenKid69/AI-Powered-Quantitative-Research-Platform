@@ -233,10 +233,11 @@ def test_cvar_violation_uses_fraction_units() -> None:
     model = _make_cvar_model()
     model.cvar_limit = -0.01
 
-    violation = model._compute_cvar_violation(-0.02)
+    # FIXED: Use correct method name _compute_cvar_headroom (not _compute_cvar_violation)
+    violation = model._compute_cvar_headroom(-0.02)
     assert violation == pytest.approx(0.01)
 
-    no_violation = model._compute_cvar_violation(-0.005)
+    no_violation = model._compute_cvar_headroom(-0.005)
     assert no_violation == pytest.approx(0.0)
 
 

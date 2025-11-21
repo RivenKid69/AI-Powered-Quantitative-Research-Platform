@@ -9913,19 +9913,19 @@ class DistributionalPPO(RecurrentPPO):
                                     old_variance = (old_quantiles_centered ** 2).mean(dim=1, keepdim=True)
 
                                 # Constrain variance to not exceed factor^2 * old_variance
-                                # variance_ratio = new_var / old_var
-                                # We want: new_var <= old_var * factor^2
-                                # So: variance_ratio <= factor^2
-                                variance_ratio_unconstrained = current_variance / (old_variance + 1e-8)
-                                variance_ratio_constrained = torch.clamp(
-                                    variance_ratio_unconstrained,
-                                    max=self.distributional_vf_clip_variance_factor ** 2
-                                )
-                                # Convert variance ratio to std ratio: std_ratio = sqrt(var_ratio)
-                                std_ratio = torch.sqrt(variance_ratio_constrained)
+                                # We want: current_std <= old_std * factor
+                                # Compute current std and maximum allowed std
+                                current_std = torch.sqrt(current_variance + 1e-8)
+                                old_std = torch.sqrt(old_variance + 1e-8)
+                                max_std = old_std * self.distributional_vf_clip_variance_factor
+
+                                # Compute scale factor: scale = min(1.0, max_std / current_std)
+                                # - If current_std <= max_std: scale = 1.0 (no change)
+                                # - If current_std > max_std: scale < 1.0 (shrink toward mean)
+                                scale_factor = torch.clamp(max_std / current_std, max=1.0)
 
                                 # Scale quantiles back if variance too large
-                                quantiles_norm_clipped = value_pred_norm_after_vf + quantiles_centered * std_ratio
+                                quantiles_norm_clipped = value_pred_norm_after_vf + quantiles_centered * scale_factor
                             elif self.distributional_vf_clip_mode == "per_quantile":
                                 # Per-quantile mode: clip EACH quantile individually relative to old quantile
                                 # Formula: quantile_i_clipped = old_quantile_i + clip(quantile_i - old_quantile_i, -ε, +ε)
@@ -10228,15 +10228,16 @@ class DistributionalPPO(RecurrentPPO):
                                     # Use uniform distribution as rough prior for old variance
                                     old_variance_approx = (old_atoms_centered_approx ** 2).mean()
 
-                                # Constrain variance
-                                # variance_ratio = new_var / old_var <= factor^2
-                                variance_ratio_unconstrained = current_variance / (old_variance_approx + 1e-8)
-                                variance_ratio_constrained = torch.clamp(
-                                    variance_ratio_unconstrained,
-                                    max=self.distributional_vf_clip_variance_factor ** 2
-                                )
-                                # Convert variance ratio to std ratio
-                                variance_scale = torch.sqrt(variance_ratio_constrained)
+                                # Constrain variance: current_std <= old_std * factor
+                                # Compute current std and maximum allowed std
+                                current_std = torch.sqrt(current_variance + 1e-8)
+                                old_std = torch.sqrt(old_variance_approx + 1e-8)
+                                max_std = old_std * self.distributional_vf_clip_variance_factor
+
+                                # Compute scale factor: scale = min(1.0, max_std / current_std)
+                                # - If current_std <= max_std: scale = 1.0 (no change)
+                                # - If current_std > max_std: scale < 1.0 (shrink toward mean)
+                                variance_scale = torch.clamp(max_std / current_std, max=1.0)
 
                                 # Scale atoms toward clipped mean
                                 atoms_shifted_base = atoms_original + delta_norm.squeeze(-1)
