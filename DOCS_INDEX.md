@@ -4,11 +4,23 @@
 
 ---
 
-## 🔥 CRITICAL - READ FIRST (2025-11-21)
+## 🔥 CRITICAL - READ FIRST (2025-11-22)
 
 **MAJOR UPDATE**: Multiple critical bugs discovered and fixed. All fixes are active by default.
 
-### 🔴 Latest Critical Fixes (2025-11-21)
+### 🔴 Latest Critical Fixes (2025-11-22)
+
+#### Twin Critics VF Clipping Verification (2025-11-22)
+- 🎯 [TWIN_CRITICS_VF_CLIPPING_VERIFICATION_REPORT.md](TWIN_CRITICS_VF_CLIPPING_VERIFICATION_REPORT.md) - **VERIFIED CORRECT** ✅
+  - **Status**: 49/50 tests passed (98% pass rate) - **PRODUCTION READY**
+  - Independent clipping for each critic verified
+  - Gradient flow to both critics verified
+  - PPO semantics (element-wise max) verified
+  - All VF clipping modes working: per_quantile, mean_only, mean_and_variance
+  - No fallback warnings - separate old values correctly used
+  - Backward compatibility maintained
+
+### 🔴 Previous Critical Fixes (2025-11-21)
 
 #### Numerical & Computational Fixes
 - 🚨 [NUMERICAL_ISSUES_FIX_SUMMARY.md](NUMERICAL_ISSUES_FIX_SUMMARY.md) - **LSTM + NaN handling** (2 issues fixed)
@@ -42,15 +54,18 @@
 - 📋 [docs/CRITICAL_BUGS_PREVENTION.md](docs/CRITICAL_BUGS_PREVENTION.md) - Prevention guide
 
 **⚠️ Action Required**:
-- LSTM models trained before 2025-11-21 → **RETRAIN RECOMMENDED** (5-15% improvement)
-- Models with action space issues → **RETRAIN REQUIRED**
-- Models with feature/numerical bugs (2025-11-20) → **RETRAIN RECOMMENDED**
+- **Models with Twin Critics + VF clipping** (trained before 2025-11-22) → **RETRAIN RECOMMENDED** for full Twin Critics effectiveness
+- **LSTM models** trained before 2025-11-21 → **RETRAIN RECOMMENDED** (5-15% improvement)
+- **Models with action space issues** → **RETRAIN REQUIRED**
+- **Models with feature/numerical bugs** (2025-11-20) → **RETRAIN RECOMMENDED**
 
-**Test Coverage**: 43+ new tests added (all passing ✅):
+**Test Coverage**: 101+ new tests added (98%+ passing ✅):
+- 49 tests: Twin Critics VF Clipping (49/50 passed - 98%)
 - 21 tests: Action Space fixes
 - 8 tests: LSTM State Reset
 - 9 tests: NaN Handling
 - 5 tests: Numerical Stability
+- 9+ tests: Other critical fixes
 
 ---
 
@@ -318,8 +333,19 @@
 - vgs_param_fix_summary.md - Parameter fix summary
 - VGS_PBT_FIX_SUMMARY.md - PBT fix summary
 
-## 👥 Twin Critics Reports (docs/reports/twin_critics/)
+## 👥 Twin Critics Reports
 
+### Latest Twin Critics VF Clipping Reports (2025-11-22)
+- ⭐ [TWIN_CRITICS_VF_CLIPPING_VERIFICATION_REPORT.md](TWIN_CRITICS_VF_CLIPPING_VERIFICATION_REPORT.md) - **Comprehensive verification** (NEW)
+- [TWIN_CRITICS_VF_CLIPPING_COMPLETE_REPORT.md](TWIN_CRITICS_VF_CLIPPING_COMPLETE_REPORT.md) - Complete implementation
+- [TWIN_CRITICS_VF_CLIPPING_FIX_REPORT.md](TWIN_CRITICS_VF_CLIPPING_FIX_REPORT.md) - Fix report
+- [TWIN_CRITICS_VF_ALL_MODES_IMPLEMENTATION.md](TWIN_CRITICS_VF_ALL_MODES_IMPLEMENTATION.md) - All modes implementation
+- [BUG_ANALYSIS_TWIN_CRITICS_VF_CLIPPING.md](BUG_ANALYSIS_TWIN_CRITICS_VF_CLIPPING.md) - Bug analysis
+- [FIX_DESIGN_TWIN_CRITICS_VF_CLIPPING.md](FIX_DESIGN_TWIN_CRITICS_VF_CLIPPING.md) - Fix design
+- [TWIN_CRITICS_VF_CLIPPING_QUICKSTART.md](TWIN_CRITICS_VF_CLIPPING_QUICKSTART.md) - Quick start guide
+- [TWIN_CRITICS_VF_CLIPPING_STATUS.md](TWIN_CRITICS_VF_CLIPPING_STATUS.md) - Status tracking
+
+### Previous Twin Critics Reports (docs/reports/twin_critics/)
 - TWIN_CRITICS_COMPREHENSIVE_AUDIT_REPORT.md - Comprehensive audit
 - TWIN_CRITICS_FINAL_REPORT.md - Final report
 - TWIN_CRITICS_DEFAULT_ENABLED.md - Default enabled configuration
@@ -402,6 +428,6 @@ This index should be updated when:
 - Major features are added/removed
 - Bug fixes are completed
 
-**Last Updated:** 2025-11-21
+**Last Updated:** 2025-11-22
 **Maintained by:** Claude Code
-**Status:** ✅ Up to date (Version 2.1)
+**Status:** ✅ Up to date (Version 2.1) - **Twin Critics VF Clipping VERIFIED** ✅

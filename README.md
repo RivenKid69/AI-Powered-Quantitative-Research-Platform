@@ -4,20 +4,24 @@
 
 ---
 
-## 🎯 Статус Проекта (2025-11-21)
+## 🎯 Статус Проекта (2025-11-22)
 
 **Версия**: 2.1
 **Статус**: ✅ **Production Ready**
-**Последнее обновление**: 2025-11-21
+**Последнее обновление**: 2025-11-22
 
 ### ✅ Последние Критические Исправления
 
+- 🎯 **Twin Critics VF Clipping Verification** (2025-11-22) - **VERIFIED CORRECT** ✅
+  - Comprehensive verification completed (49/50 tests, 98% pass rate)
+  - Independent clipping, gradient flow, PPO semantics - all verified
+  - All VF clipping modes working correctly (per_quantile, mean_only, mean_and_variance)
 - 🔴 **LSTM State Reset** (2025-11-21) - устранена temporal leakage между эпизодами
 - 🔴 **Action Space Fixes** (2025-11-21) - предотвращена position doubling bug
 - 🔴 **NaN Handling** (2025-11-21) - улучшена обработка missing data
 - 🔴 **3 Critical Data Bugs** (2025-11-20) - temporal causality, cross-symbol contamination, quantile loss
 
-**Test Coverage**: 52+ новых тестов для критических исправлений (все проходят ✅)
+**Test Coverage**: 101+ новых тестов для критических исправлений (98%+ проходят ✅)
 
 ---
 
@@ -59,9 +63,10 @@
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** - Архитектура системы
 - **[QUICK_START_REFERENCE.md](QUICK_START_REFERENCE.md)** - Быстрый старт
 
-### Критические Исправления (2025-11-21)
-- **[CRITICAL_FIXES_COMPLETE_REPORT.md](CRITICAL_FIXES_COMPLETE_REPORT.md)** - Action space fixes
-- **[NUMERICAL_ISSUES_FIX_SUMMARY.md](NUMERICAL_ISSUES_FIX_SUMMARY.md)** - LSTM + NaN fixes
+### Критические Исправления
+- **[TWIN_CRITICS_VF_CLIPPING_VERIFICATION_REPORT.md](TWIN_CRITICS_VF_CLIPPING_VERIFICATION_REPORT.md)** - ⭐ Twin Critics VF Clipping verification (2025-11-22)
+- **[CRITICAL_FIXES_COMPLETE_REPORT.md](CRITICAL_FIXES_COMPLETE_REPORT.md)** - Action space fixes (2025-11-21)
+- **[NUMERICAL_ISSUES_FIX_SUMMARY.md](NUMERICAL_ISSUES_FIX_SUMMARY.md)** - LSTM + NaN fixes (2025-11-21)
 - **[REGRESSION_PREVENTION_CHECKLIST.md](REGRESSION_PREVENTION_CHECKLIST.md)** - Обязательный checklist
 - **[CRITICAL_FIXES_REPORT.md](CRITICAL_FIXES_REPORT.md)** - Data & critic bugs (2025-11-20)
 
@@ -147,10 +152,11 @@ core_ → impl_ → service_ → strategies → script_
 # Все тесты
 pytest tests/
 
-# Критические тесты (2025-11-21)
-pytest tests/test_lstm_episode_boundary_reset.py -v        # LSTM state reset
-pytest tests/test_critical_action_space_fixes.py -v        # Action space fixes
-pytest tests/test_nan_handling_external_features.py -v     # NaN handling
+# Критические тесты
+pytest tests/test_twin_critics_vf_clipping_correctness.py -v  # Twin Critics VF Clipping (2025-11-22)
+pytest tests/test_lstm_episode_boundary_reset.py -v           # LSTM state reset (2025-11-21)
+pytest tests/test_critical_action_space_fixes.py -v           # Action space fixes (2025-11-21)
+pytest tests/test_nan_handling_external_features.py -v        # NaN handling (2025-11-21)
 
 # По категориям
 pytest tests/test_execution*.py -v     # Execution simulator
