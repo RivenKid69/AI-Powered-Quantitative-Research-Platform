@@ -7360,12 +7360,16 @@ class DistributionalPPO(RecurrentPPO):
                 actions, _, log_probs, self._last_lstm_states = self.policy.forward(
                     obs_tensor, self._last_lstm_states, episode_starts
                 )
-                # Cache value quantiles/logits from first critic for VF clipping
-                # (used in rollout buffer for distributional clipping)
+                # CRITICAL FIX: Use min(Q1, Q2) quantiles/logits for Twin Critics consistency
+                # This ensures VF clipping benefits from Twin Critics architecture by using
+                # pessimistic value estimates, consistent with GAE computation.
+                # Falls back to first critic when Twin Critics disabled.
+                # - Quantile critics: Element-wise min across quantiles (preserves distribution)
+                # - Categorical critics: Logits from critic with minimum expected value
                 if self._use_quantile_value:
-                    value_quantiles = self.policy.last_value_quantiles
+                    value_quantiles = self.policy.last_value_quantiles_min
                 else:
-                    value_logits = self.policy.last_value_logits
+                    value_logits = self.policy.last_value_logits_min
 
                 dist_output = self.policy.get_distribution(
                     obs_tensor,

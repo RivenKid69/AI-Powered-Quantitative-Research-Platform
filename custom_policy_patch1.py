@@ -1279,8 +1279,74 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
         return self._last_value_logits
 
     @property
+    def last_value_logits_min(self) -> Optional[torch.Tensor]:
+        """
+        Returns logits corresponding to minimum values for Twin Critics (categorical).
+
+        For categorical critics with Twin Critics enabled, this computes the
+        logits that would produce min(V1, V2) where V1 and V2 are the expected
+        values from both critics. This is more complex than quantile case because
+        we need to determine which critic gives the minimum expected value.
+
+        Note: For categorical critics, we take a simplified approach - we compute
+        the expected values from both critics and return the logits from whichever
+        critic gives the minimum value. This is not element-wise like quantiles.
+
+        Falls back to first critic's logits when Twin Critics disabled.
+
+        Returns:
+            Logits tensor [batch, num_atoms] or None if not available
+        """
+        if not self._use_twin_critics:
+            # Fall back to single critic
+            return self._last_value_logits
+
+        if self._last_value_logits is None or self._last_value_logits_2 is None:
+            # If either is missing, fall back to first critic
+            return self._last_value_logits
+
+        # For categorical critics, compute expected values and select logits
+        # from whichever critic gives minimum value
+        with torch.no_grad():
+            probs_1 = torch.softmax(self._last_value_logits, dim=-1)
+            probs_2 = torch.softmax(self._last_value_logits_2, dim=-1)
+            value_1 = (probs_1 * self.atoms).sum(dim=-1, keepdim=True)
+            value_2 = (probs_2 * self.atoms).sum(dim=-1, keepdim=True)
+
+            # Select logits from critic with minimum value
+            # Use broadcasting to match logits shape [batch, num_atoms]
+            use_critic_2 = (value_2 < value_1).expand_as(self._last_value_logits)
+            return torch.where(use_critic_2, self._last_value_logits_2, self._last_value_logits)
+
+    @property
     def last_value_quantiles(self) -> Optional[torch.Tensor]:
         return self._last_value_quantiles
+
+    @property
+    def last_value_quantiles_min(self) -> Optional[torch.Tensor]:
+        """
+        Returns minimum of both critics' quantiles element-wise for Twin Critics.
+
+        For distributional critics with Twin Critics enabled, this returns
+        min(Q1_quantiles, Q2_quantiles) element-wise across all quantiles.
+        This preserves the full distributional information while applying
+        the pessimistic Twin Critics philosophy.
+
+        Falls back to first critic's quantiles when Twin Critics disabled.
+
+        Returns:
+            Quantiles tensor [batch, num_quantiles] or None if not available
+        """
+        if not self._use_twin_critics:
+            # Fall back to single critic
+            return self._last_value_quantiles
+
+        if self._last_value_quantiles is None or self._last_value_quantiles_2 is None:
+            # If either is missing, fall back to first critic
+            return self._last_value_quantiles
+
+        # Element-wise minimum across quantiles (preserves distributional info)
+        return torch.min(self._last_value_quantiles, self._last_value_quantiles_2)
 
     @property
     def last_raw_actions(self) -> Optional[torch.Tensor]:
@@ -1313,6 +1379,14 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
         latent_vf = self.mlp_extractor.forward_critic(latent_vf)
 
         values = self._get_value_from_latent(latent_vf)
+
+        # CRITICAL FIX: Cache second critic's quantiles/logits for Twin Critics VF clipping
+        # This ensures last_value_quantiles_min can access both critics' outputs
+        if self._use_twin_critics:
+            _ = self._get_value_logits_2(latent_vf)  # Caches _last_value_quantiles_2 or _last_value_logits_2
+
+        # Cache latent_vf for Twin Critics loss computation
+        self._last_latent_vf = latent_vf.detach()
 
         self._last_raw_actions = None
 
