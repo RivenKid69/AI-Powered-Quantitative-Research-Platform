@@ -3019,28 +3019,130 @@ class DistributionalPPO(RecurrentPPO):
 
         if use_quantile:
             # ===== QUANTILE CRITIC VF CLIPPING =====
-            # Convert to raw space for clipping
+            # Determine clipping mode (default to per_quantile for backward compatibility)
+            effective_mode = mode if mode is not None else "per_quantile"
+
+            # Convert to raw space for clipping (common for all modes)
             current_quantiles_1_raw = self._to_raw_returns(current_logits_1)
             current_quantiles_2_raw = self._to_raw_returns(current_logits_2)
             old_quantiles_1_raw = self._to_raw_returns(old_quantiles_critic1)
             old_quantiles_2_raw = self._to_raw_returns(old_quantiles_critic2)
 
-            # Independent clipping for each critic
-            # Q1_clipped = Q1_old + clip(Q1_current - Q1_old, -ε, +ε)
-            quantiles_1_clipped_raw = old_quantiles_1_raw + torch.clamp(
-                current_quantiles_1_raw - old_quantiles_1_raw,
-                min=-clip_delta,
-                max=clip_delta,
-            )
+            # MODE DISPATCH: Apply clipping according to selected mode
+            if effective_mode == "per_quantile":
+                # ===== PER_QUANTILE MODE =====
+                # Strictest mode: clip EACH quantile independently
+                # This guarantees all quantiles stay within [old_quantile_i - ε, old_quantile_i + ε]
 
-            # Q2_clipped = Q2_old + clip(Q2_current - Q2_old, -ε, +ε)
-            quantiles_2_clipped_raw = old_quantiles_2_raw + torch.clamp(
-                current_quantiles_2_raw - old_quantiles_2_raw,
-                min=-clip_delta,
-                max=clip_delta,
-            )
+                # Independent clipping for each critic
+                # Q1_clipped = Q1_old + clip(Q1_current - Q1_old, -ε, +ε)
+                quantiles_1_clipped_raw = old_quantiles_1_raw + torch.clamp(
+                    current_quantiles_1_raw - old_quantiles_1_raw,
+                    min=-clip_delta,
+                    max=clip_delta,
+                )
 
-            # Convert clipped quantiles back to normalized space
+                # Q2_clipped = Q2_old + clip(Q2_current - Q2_old, -ε, +ε)
+                quantiles_2_clipped_raw = old_quantiles_2_raw + torch.clamp(
+                    current_quantiles_2_raw - old_quantiles_2_raw,
+                    min=-clip_delta,
+                    max=clip_delta,
+                )
+
+            elif effective_mode == "mean_only":
+                # ===== MEAN_ONLY MODE =====
+                # Clip mean value only via parallel shift of all quantiles
+                # This allows variance to change freely while constraining mean updates
+
+                # Compute current and old means
+                current_mean_1_raw = current_quantiles_1_raw.mean(dim=1, keepdim=True)
+                current_mean_2_raw = current_quantiles_2_raw.mean(dim=1, keepdim=True)
+                old_mean_1_raw = old_quantiles_1_raw.mean(dim=1, keepdim=True)
+                old_mean_2_raw = old_quantiles_2_raw.mean(dim=1, keepdim=True)
+
+                # Clip means independently for each critic
+                clipped_mean_1_raw = old_mean_1_raw + torch.clamp(
+                    current_mean_1_raw - old_mean_1_raw,
+                    min=-clip_delta,
+                    max=clip_delta,
+                )
+                clipped_mean_2_raw = old_mean_2_raw + torch.clamp(
+                    current_mean_2_raw - old_mean_2_raw,
+                    min=-clip_delta,
+                    max=clip_delta,
+                )
+
+                # Parallel shift: shift all quantiles by the delta needed to clip mean
+                delta_1_raw = clipped_mean_1_raw - current_mean_1_raw
+                delta_2_raw = clipped_mean_2_raw - current_mean_2_raw
+                quantiles_1_clipped_raw = current_quantiles_1_raw + delta_1_raw
+                quantiles_2_clipped_raw = current_quantiles_2_raw + delta_2_raw
+
+            elif effective_mode == "mean_and_variance":
+                # ===== MEAN_AND_VARIANCE MODE =====
+                # Clip mean AND constrain variance expansion
+                # This is the most balanced mode: constrains both location and spread
+
+                # Step 1: Clip means independently (same as mean_only)
+                current_mean_1_raw = current_quantiles_1_raw.mean(dim=1, keepdim=True)
+                current_mean_2_raw = current_quantiles_2_raw.mean(dim=1, keepdim=True)
+                old_mean_1_raw = old_quantiles_1_raw.mean(dim=1, keepdim=True)
+                old_mean_2_raw = old_quantiles_2_raw.mean(dim=1, keepdim=True)
+
+                clipped_mean_1_raw = old_mean_1_raw + torch.clamp(
+                    current_mean_1_raw - old_mean_1_raw,
+                    min=-clip_delta,
+                    max=clip_delta,
+                )
+                clipped_mean_2_raw = old_mean_2_raw + torch.clamp(
+                    current_mean_2_raw - old_mean_2_raw,
+                    min=-clip_delta,
+                    max=clip_delta,
+                )
+
+                # Step 2: Parallel shift to clipped means
+                delta_1_raw = clipped_mean_1_raw - current_mean_1_raw
+                delta_2_raw = clipped_mean_2_raw - current_mean_2_raw
+                quantiles_1_shifted = current_quantiles_1_raw + delta_1_raw
+                quantiles_2_shifted = current_quantiles_2_raw + delta_2_raw
+
+                # Step 3: Constrain variance for each critic independently
+                # Critic 1: Constrain variance
+                quantiles_1_centered = quantiles_1_shifted - clipped_mean_1_raw
+                current_variance_1 = (quantiles_1_centered ** 2).mean(dim=1, keepdim=True)
+                old_quantiles_1_centered = old_quantiles_1_raw - old_mean_1_raw
+                old_variance_1 = (old_quantiles_1_centered ** 2).mean(dim=1, keepdim=True)
+
+                current_std_1 = torch.sqrt(current_variance_1 + 1e-8)
+                old_std_1 = torch.sqrt(old_variance_1 + 1e-8)
+                max_std_1 = old_std_1 * self.distributional_vf_clip_variance_factor
+
+                # Scale factor: scale = min(1.0, max_std / current_std)
+                # If current_std <= max_std: scale = 1.0 (no change)
+                # If current_std > max_std: scale < 1.0 (shrink toward mean)
+                scale_factor_1 = torch.clamp(max_std_1 / current_std_1, max=1.0)
+                quantiles_1_clipped_raw = clipped_mean_1_raw + quantiles_1_centered * scale_factor_1
+
+                # Critic 2: Constrain variance
+                quantiles_2_centered = quantiles_2_shifted - clipped_mean_2_raw
+                current_variance_2 = (quantiles_2_centered ** 2).mean(dim=1, keepdim=True)
+                old_quantiles_2_centered = old_quantiles_2_raw - old_mean_2_raw
+                old_variance_2 = (old_quantiles_2_centered ** 2).mean(dim=1, keepdim=True)
+
+                current_std_2 = torch.sqrt(current_variance_2 + 1e-8)
+                old_std_2 = torch.sqrt(old_variance_2 + 1e-8)
+                max_std_2 = old_std_2 * self.distributional_vf_clip_variance_factor
+
+                scale_factor_2 = torch.clamp(max_std_2 / current_std_2, max=1.0)
+                quantiles_2_clipped_raw = clipped_mean_2_raw + quantiles_2_centered * scale_factor_2
+
+            else:
+                raise ValueError(
+                    f"Invalid distributional_vf_clip_mode: {effective_mode}. "
+                    f"Supported modes: 'per_quantile', 'mean_only', 'mean_and_variance'"
+                )
+
+            # Convert clipped quantiles back to normalized space (common for all modes)
             if self.normalize_returns:
                 ret_mu_tensor = self._ret_rms_effective_mean_tensor.to(
                     device=current_logits_1.device,
@@ -3078,7 +3180,7 @@ class DistributionalPPO(RecurrentPPO):
                         max=self._value_clip_limit_scaled,
                     )
 
-            # Compute clipped losses for each critic
+            # Compute clipped losses for each critic (common for all modes)
             loss_c1_clipped = self._quantile_huber_loss(
                 quantiles_1_clipped_norm, targets, reduction=reduction
             )
@@ -3086,7 +3188,7 @@ class DistributionalPPO(RecurrentPPO):
                 quantiles_2_clipped_norm, targets, reduction=reduction
             )
 
-            # Compute unclipped losses for element-wise max
+            # Compute unclipped losses for element-wise max (common for all modes)
             loss_c1_unclipped = self._quantile_huber_loss(
                 current_logits_1, targets, reduction=reduction
             )
@@ -7985,7 +8087,7 @@ class DistributionalPPO(RecurrentPPO):
             value_probs_critic1_for_buffer = None
             value_probs_critic2_for_buffer = None
 
-            if self._use_twin_critics:
+            if getattr(self.policy, '_use_twin_critics', False):
                 if self._use_quantile_value:
                     # Quantile critic: store separate quantiles from both critics
                     quantiles_c1 = self.policy.last_value_quantiles_critic1
@@ -10361,7 +10463,7 @@ class DistributionalPPO(RecurrentPPO):
                                 use_twin
                                 and rollout_data.old_value_quantiles_critic1 is not None
                                 and rollout_data.old_value_quantiles_critic2 is not None
-                                and self.distributional_vf_clip_mode == "per_quantile"  # Only per_quantile mode supported
+                                and self.distributional_vf_clip_mode is not None  # All modes supported
                             )
 
                             if use_twin_vf_clipping:
@@ -10376,7 +10478,7 @@ class DistributionalPPO(RecurrentPPO):
                                     dtype=latent_vf_selected.dtype
                                 )
 
-                                # Call the correct Twin Critics VF clipping method
+                                # Call the correct Twin Critics VF clipping method with mode
                                 clipped_loss_avg, loss_c1_clipped, loss_c2_clipped, loss_unclipped_avg = (
                                     self._twin_critics_vf_clipping_loss(
                                         latent_vf=latent_vf_selected,
@@ -10385,6 +10487,7 @@ class DistributionalPPO(RecurrentPPO):
                                         old_quantiles_critic2=old_quantiles_c2,
                                         clip_delta=clip_delta,
                                         reduction="none",
+                                        mode=self.distributional_vf_clip_mode,  # Pass mode parameter
                                     )
                                 )
 
@@ -10433,7 +10536,8 @@ class DistributionalPPO(RecurrentPPO):
                                         "Falling back to shared old values (min(Q1, Q2)). This is INCORRECT and "
                                         "violates Twin Critics independence! "
                                         "Ensure value_quantiles_critic1/critic2 are stored in rollout buffer, "
-                                        "and use distributional_vf_clip_mode='per_quantile' for correct behavior.",
+                                        "and use distributional_vf_clip_mode in ['per_quantile', 'mean_only', 'mean_and_variance'] "
+                                        "for correct behavior.",
                                         RuntimeWarning,
                                         stacklevel=2
                                     )
