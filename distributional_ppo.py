@@ -9347,7 +9347,11 @@ class DistributionalPPO(RecurrentPPO):
                             # FIX: Use correct KL divergence formula for KL(old||new)
                             # Simple first-order approximation: KL(old||new) ≈ old_log_prob - new_log_prob
                             # This is the standard approximation used in original PPO
-                            approx_kl_raw_tensor = old_log_prob_raw - log_prob_raw_new
+                            # MASKED KL FIX: Apply valid_indices mask to raw-action KL for consistency
+                            if valid_indices is not None:
+                                approx_kl_raw_tensor = old_log_prob_raw[valid_indices] - log_prob_raw_new[valid_indices]
+                            else:
+                                approx_kl_raw_tensor = old_log_prob_raw - log_prob_raw_new
                             if torch.isfinite(approx_kl_raw_tensor).all() and approx_kl_raw_tensor.numel() > 0:
                                 kl_raw_sum += float(approx_kl_raw_tensor.sum().item())
                                 kl_raw_count += int(approx_kl_raw_tensor.numel())
@@ -10532,7 +10536,10 @@ class DistributionalPPO(RecurrentPPO):
                         bucket_value_logits_fp32 = value_logits_fp32.detach()
 
                     # Use correct KL(old||new) approximation: old - new
-                    approx_kl_component = (rollout_data.old_log_prob - log_prob).mean().item()
+                    # CRITICAL FIX: Use masked log_probs for KL computation to align with actual policy updates
+                    # The policy loss uses log_prob_selected (lines 9147-9152), so KL must use the same masked tensors
+                    # Otherwise, KL divergence includes no-trade samples, causing incorrect LR scheduling and early stopping
+                    approx_kl_component = (old_log_prob_selected - log_prob_selected).mean().item()
                     approx_kl_weighted_sum += approx_kl_component * float(sample_weight)
 
                 if bucket_sample_count != bucket_target_size:
