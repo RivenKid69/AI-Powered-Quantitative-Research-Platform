@@ -7702,78 +7702,64 @@ class DistributionalPPO(RecurrentPPO):
                     self.logger.record("warn/advantages_invalid_stats", 1.0)
                     # Skip normalization if statistics are invalid
                 else:
-                    # BUGFIX #2: Skip normalization when advantages are nearly uniform
-                    # When std is very small (< 1e-6), advantages are essentially uniform.
-                    # Normalization in this case amplifies numerical noise, which can cause:
-                    # - Large policy updates based on irrelevant noise
-                    # - Gradient instability in deterministic environments
-                    #
-                    # Best practice (Spinning Up, CleanRL): Skip normalization when std < threshold
-                    # Reference: https://spinningup.openai.com/en/latest/algorithms/ppo.html
-                    #
-                    # Why 1e-6? In deterministic environments or near-optimal policies:
-                    # - All advantages may be identical (std=0) or differ only by numerical error
-                    # - Normalizing with a floor (e.g., 1e-4) would amplify noise by 10000x+
-                    # - Setting to zero prevents large updates based on noise
-                    STD_THRESHOLD = 1e-6
+                    # Conservative normalization approach:
+                    # Always normalize, but with increased floor (1e-4 instead of 1e-8)
+                    # This prevents extreme values while maintaining PPO's expectation of normalized advantages
 
-                    if adv_std < STD_THRESHOLD:
-                        # Advantages are nearly uniform (deterministic environment or noise)
-                        # Set to zero to prevent large policy updates based on numerical noise
-                        # This is mathematically correct: if all outcomes have same advantage,
-                        # there's no preference, so policy should not update.
-                        rollout_buffer.advantages = np.zeros_like(
-                            rollout_buffer.advantages, dtype=np.float32
-                        )
+                    # Conservative floor prevents extreme normalized values
+                    # When std < 1e-4, normalization with 1e-8 floor would amplify noise by 10000x+
+                    # With 1e-4 floor, maximum amplification is limited to 10x
+                    ADV_STD_FLOOR = 1e-4
 
-                        self.logger.record("warn/advantages_uniform_skipped_normalization", 1.0)
+                    # Always normalize (PPO expects normalized advantages with mean=0, std≈1)
+                    # Use floor to prevent division by very small numbers
+                    adv_std_clamped = max(adv_std, ADV_STD_FLOOR)
+
+                    # Log if we're using the floor (potential numerical instability zone)
+                    if adv_std < ADV_STD_FLOOR:
+                        self.logger.record("warn/advantages_std_below_floor", 1.0)
+                        self.logger.record("warn/advantages_std_original", adv_std)
+                        # When advantages are nearly uniform (std < floor), normalization
+                        # will compress them to a small range, which is the correct behavior
+                        # for PPO (prevents large policy updates on noise)
+
+                    # Normalize in-place
+                    normalized_advantages = (
+                        (rollout_buffer.advantages - adv_mean) / adv_std_clamped
+                    ).astype(np.float32)
+
+                    # Final safety check: ensure normalized advantages are finite
+                    if np.all(np.isfinite(normalized_advantages)):
+                        rollout_buffer.advantages = normalized_advantages
+
+                        # Log global normalization statistics
                         self.logger.record("train/advantages_mean_raw", adv_mean)
                         self.logger.record("train/advantages_std_raw", adv_std)
-                        self.logger.record("info/advantages_set_to_zero", 1.0)
+                        self.logger.record("train/advantages_std_clamped", adv_std_clamped)
 
-                        # Log details for debugging
-                        self.logger.record("train/advantages_norm_max_abs", 0.0)
-                        self.logger.record("train/advantages_norm_mean", 0.0)
-                        self.logger.record("train/advantages_norm_std", 0.0)
+                        # Additional monitoring: track magnitude of normalized advantages
+                        norm_max = float(np.max(np.abs(normalized_advantages)))
+                        norm_mean = float(np.mean(normalized_advantages))
+                        norm_std = float(np.std(normalized_advantages, ddof=1))
+
+                        self.logger.record("train/advantages_norm_max_abs", norm_max)
+                        self.logger.record("train/advantages_norm_mean", norm_mean)
+                        self.logger.record("train/advantages_norm_std", norm_std)
+
+                        # Warn if normalized advantages are extreme (potential gradient explosion)
+                        if norm_max > 100.0:
+                            self.logger.record("warn/advantages_norm_extreme", norm_max)
+
+                        # Verify normalization worked as expected (mean≈0, std≈1)
+                        if abs(norm_mean) > 0.1:
+                            self.logger.record("warn/normalization_mean_nonzero", abs(norm_mean))
                     else:
-                        # Normal normalization (NO floor needed - std is sufficiently large)
-                        # Standard PPO normalization: (adv - mean) / std
-                        # This ensures advantages have mean≈0 and std≈1 for stable training
-                        normalized_advantages = (
-                            (rollout_buffer.advantages - adv_mean) / adv_std
-                        ).astype(np.float32)
-
-                        # Final safety check: ensure normalized advantages are finite
-                        if np.all(np.isfinite(normalized_advantages)):
-                            rollout_buffer.advantages = normalized_advantages
-
-                            # Log global normalization statistics
-                            self.logger.record("train/advantages_mean_raw", adv_mean)
-                            self.logger.record("train/advantages_std_raw", adv_std)
-
-                            # Additional monitoring: track magnitude of normalized advantages
-                            norm_max = float(np.max(np.abs(normalized_advantages)))
-                            norm_mean = float(np.mean(normalized_advantages))
-                            norm_std = float(np.std(normalized_advantages, ddof=1))
-
-                            self.logger.record("train/advantages_norm_max_abs", norm_max)
-                            self.logger.record("train/advantages_norm_mean", norm_mean)
-                            self.logger.record("train/advantages_norm_std", norm_std)
-
-                            # Warn if normalized advantages are extreme (potential gradient explosion)
-                            if norm_max > 100.0:
-                                self.logger.record("warn/advantages_norm_extreme", norm_max)
-
-                            # Verify normalization worked as expected (mean≈0, std≈1)
-                            if abs(norm_mean) > 0.1:
-                                self.logger.record("warn/normalization_mean_nonzero", abs(norm_mean))
-                        else:
-                            # Normalization produced invalid values - skip it and log warning
-                            self.logger.record("warn/normalization_produced_invalid_values", 1.0)
-                            # Count how many are invalid
-                            invalid_count = float(np.sum(~np.isfinite(normalized_advantages)))
-                            total_count = float(normalized_advantages.size)
-                            self.logger.record("warn/normalization_invalid_fraction", invalid_count / total_count)
+                        # Normalization produced invalid values - skip it and log warning
+                        self.logger.record("warn/normalization_produced_invalid_values", 1.0)
+                        # Count how many are invalid
+                        invalid_count = float(np.sum(~np.isfinite(normalized_advantages)))
+                        total_count = float(normalized_advantages.size)
+                        self.logger.record("warn/normalization_invalid_fraction", invalid_count / total_count)
             else:
                 # Empty buffer - log warning
                 self.logger.record("warn/empty_advantages_buffer", 1.0)
@@ -9239,47 +9225,6 @@ class DistributionalPPO(RecurrentPPO):
                                     "warn/log_ratio_extreme_batch",
                                     float(log_ratio_abs_max)
                                 )
-                        else:
-                            # BUGFIX #6: Log ratio contains NaN or Inf - CRITICAL ERROR
-                            # This indicates severe numerical instability in policy or value network.
-                            # NaN/Inf in log_ratio will propagate to:
-                            # - ratio = exp(log_ratio) → NaN/Inf
-                            # - policy_loss → NaN/Inf
-                            # - gradients → NaN/Inf
-                            # - parameter updates → NaN/Inf → TRAINING COLLAPSE
-                            #
-                            # Possible causes:
-                            # - Policy output probabilities contain zeros (log(0) = -inf)
-                            # - Very large policy changes (overflow in log probability difference)
-                            # - Numerical issues in action distribution (e.g., diagonal Gaussian with zero std)
-                            #
-                            # Reference: PyTorch best practices, Stable-Baselines3 NaN checks
-                            self.logger.record("error/log_ratio_nan_or_inf_detected", 1.0)
-
-                            # Count NaN vs Inf for diagnostic purposes
-                            num_nan = int(torch.isnan(log_ratio_unclamped).sum().item())
-                            num_inf = int(torch.isinf(log_ratio_unclamped).sum().item())
-                            num_total = int(log_ratio_unclamped.numel())
-
-                            self.logger.record("error/log_ratio_nan_count", num_nan)
-                            self.logger.record("error/log_ratio_inf_count", num_inf)
-                            self.logger.record("error/log_ratio_total_samples", num_total)
-                            self.logger.record(
-                                "error/log_ratio_invalid_fraction",
-                                float(num_nan + num_inf) / float(num_total)
-                            )
-
-                            # Log which type dominates
-                            if num_nan > num_inf:
-                                self.logger.record("error/log_ratio_issue_type", 0.0)  # NaN
-                            else:
-                                self.logger.record("error/log_ratio_issue_type", 1.0)  # Inf
-
-                            # CRITICAL: Skip this batch to prevent parameter corruption
-                            # Continuing with NaN would corrupt all model parameters
-                            # Better to skip one batch than destroy the entire training run
-                            self.logger.record("warn/skipping_batch_due_to_nan_log_ratio", 1.0)
-                            continue  # Skip to next batch
 
                     # Conservative numerical clamping (±20 instead of ±85)
                     # This prevents exp() overflow while still detecting instability
