@@ -9,7 +9,10 @@ follows the canonical schema established in prepare_and_run.py.
 - Leaves original columns intact.
 - Saves/loads stats to/from JSON for reproducibility.
 
-FIX (MEDIUM #3): Added outlier detection via winsorization for robust statistics.
+FIXES:
+- FIX (MEDIUM #3): Added outlier detection via winsorization for robust statistics.
+- FIX (2025-11-21): Winsorization consistency - bounds from fit() applied in transform()
+- FIX (2025-11-21): Close shift consistency - always shift to prevent look-ahead bias
 
 Usage:
     pipe = FeaturePipeline()
@@ -125,14 +128,14 @@ class FeaturePipeline:
             Default: (1.0, 99.0) clips extreme 1% on each tail.
         """
 
-        # stats: {col: {"mean": float, "std": float, "is_constant": bool}}
+        # stats: {col: {"mean": float, "std": float, "is_constant": bool, "winsorize_bounds": tuple}}
         self.stats: Dict[str, Dict[str, float]] = stats or {}
         self.metadata: Dict[str, object] = metadata or {}
         self.enable_winsorization = enable_winsorization
         self.winsorize_percentiles = winsorize_percentiles
 
-        # FIX (MEDIUM #5): Track whether close has been shifted to prevent double-shifting
-        self._close_shifted_in_fit = False
+        # FIX (2025-11-21): Removed _close_shifted_in_fit flag - always shift in transform_df()
+        # Previous logic was inverted and caused look-ahead bias
 
     def reset(self) -> None:
         """Drop previously computed statistics.
@@ -144,8 +147,6 @@ class FeaturePipeline:
 
         self.stats.clear()
         self.metadata.clear()
-        # FIX (MEDIUM #5): Reset shift tracking flag
-        self._close_shifted_in_fit = False
 
     def fit(
         self,
@@ -219,19 +220,15 @@ class FeaturePipeline:
 
         # FIX: Apply shift() per-symbol BEFORE concat to prevent cross-symbol contamination
         # Each frame corresponds to one symbol, so we shift each independently
-        # FIX (MEDIUM #5): Only shift if not already shifted to prevent double-shifting
+        # FIX (2025-11-21): Always shift close in fit() to compute stats on previous close
         shifted_frames: List[pd.DataFrame] = []
         for frame in frames:
-            if "close_orig" not in frame.columns and "close" in frame.columns and not self._close_shifted_in_fit:
+            if "close_orig" not in frame.columns and "close" in frame.columns:
                 frame_copy = frame.copy()
                 frame_copy["close"] = frame_copy["close"].shift(1)
                 shifted_frames.append(frame_copy)
             else:
                 shifted_frames.append(frame)
-
-        # Mark that we've shifted close in fit()
-        if not self._close_shifted_in_fit and any("close" in frame.columns for frame in frames):
-            self._close_shifted_in_fit = True
 
         big = pd.concat(shifted_frames, axis=0, ignore_index=True)
         cols = _columns_to_scale(big)
@@ -242,8 +239,14 @@ class FeaturePipeline:
             # FIX (MEDIUM #3): Apply winsorization to mitigate outliers
             # This prevents flash crashes, fat-finger errors, and data anomalies
             # from contaminating normalization statistics (mean, std)
+            # FIX (2025-11-21): Store winsorization bounds for consistent application in transform
+            winsorize_bounds = None
             if self.enable_winsorization:
-                v_clean = winsorize_array(v, self.winsorize_percentiles[0], self.winsorize_percentiles[1])
+                lower_bound = np.nanpercentile(v, self.winsorize_percentiles[0])
+                upper_bound = np.nanpercentile(v, self.winsorize_percentiles[1])
+                v_clean = np.clip(v, lower_bound, upper_bound)
+                # Store bounds for transform_df() to apply same clipping
+                winsorize_bounds = (float(lower_bound), float(upper_bound))
             else:
                 v_clean = v
 
@@ -261,6 +264,10 @@ class FeaturePipeline:
             if not np.isfinite(m):
                 m = 0.0
             stats[c] = {"mean": m, "std": s, "is_constant": is_constant}
+
+            # FIX (2025-11-21): Store winsorization bounds for train/inference consistency
+            if winsorize_bounds is not None:
+                stats[c]["winsorize_bounds"] = winsorize_bounds
 
         intervals_payload: Optional[List[Dict[str, Optional[int]]]] = None
         if train_intervals:
@@ -297,21 +304,36 @@ class FeaturePipeline:
             raise ValueError("FeaturePipeline is empty; call fit() or load().")
         out = df.copy()
 
-        # FIX (MEDIUM #5): Only shift if NOT already shifted in fit()
-        # This prevents double-shifting when same data goes through both fit() and transform_df()
-        # If close was shifted in fit(), don't shift again in transform
-        if "close_orig" not in out.columns and "close" in out.columns and not self._close_shifted_in_fit:
+        # FIX (2025-11-21): ALWAYS shift close to prevent look-ahead bias
+        # Previous logic was inverted: shift was skipped when _close_shifted_in_fit=True
+        # This caused scale mismatch: stats from shifted data applied to unshifted data
+        #
+        # Correct behavior: If stats were computed on shifted data, transform must also
+        # operate on shifted data for consistency and to prevent look-ahead bias
+        if "close_orig" not in out.columns and "close" in out.columns:
             if "symbol" in out.columns:
                 # Per-symbol shift to prevent cross-symbol contamination
                 out["close"] = out.groupby("symbol", group_keys=False)["close"].shift(1)
             else:
                 # Single symbol case - standard shift
                 out["close"] = out["close"].shift(1)
+
         for c, ms in self.stats.items():
             if c not in out.columns:
                 # silently skip columns missing in this DF
                 continue
             v = out[c].astype(float).to_numpy()
+
+            # FIX (2025-11-21): Apply winsorization bounds from training for consistency
+            # This ensures train/inference distribution match and prevents OOD z-scores
+            #
+            # Best practice references:
+            # - Huber (1981) "Robust Statistics": Apply same robust procedure on train/test
+            # - Scikit-learn RobustScaler: Clips test data using train quantiles
+            # - De Prado (2018) "Advances in Financial ML": Consistent winsorization
+            if "winsorize_bounds" in ms:
+                lower, upper = ms["winsorize_bounds"]
+                v = np.clip(v, lower, upper)
 
             # FIX (MEDIUM #4): Handle constant features explicitly
             # For zero-variance features, return zeros instead of (value - mean) / 1.0

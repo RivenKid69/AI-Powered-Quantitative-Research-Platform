@@ -292,12 +292,12 @@ class TestMedium4_ZeroStdFallback:
 # ==============================================================================
 
 class TestMedium5_LookaheadBias:
-    """Test that close shifting happens only once, not twice."""
+    """Test that close shifting prevents look-ahead bias (UPDATED 2025-11-21)."""
 
     def test_no_double_shifting_in_fit_transform(self):
-        """Test that close is shifted only once when using fit() then transform_df()."""
+        """Test that transform_df() is idempotent (multiple calls give same result)."""
         from features_pipeline import FeaturePipeline
-
+        
         # Create simple data
         df = pd.DataFrame({
             'timestamp': range(10),
@@ -305,94 +305,53 @@ class TestMedium5_LookaheadBias:
             'close': [100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0, 107.0, 108.0, 109.0],
             'volume': [1.0] * 10,
         })
-
-        # Original close values
-        original_close = df['close'].copy()
-
+        
         # Fit pipeline
         pipe = FeaturePipeline(enable_winsorization=False)
         pipe.fit({'BTC': df})
-
-        # Check if shift was performed in fit (flag should be set)
-        shift_in_fit = pipe._close_shifted_in_fit
-
-        # Transform same data
-        result = pipe.transform_df(df)
-
-        # If shift was done in fit, transform_df should NOT shift again
-        # Verify by checking the flag prevents re-shifting
-
-        # Test the core fix: flag prevents double-shifting
-        # After fit() that shifts: flag = True
-        # After transform_df(): flag should still be True (no second shift)
-
-        assert shift_in_fit == True, "close should be marked as shifted after fit()"
-
-        # Verify that calling transform_df multiple times doesn't cause additional shifts
-        result1 = pipe.transform_df(df)
-        result2 = pipe.transform_df(df)
-
-        # Both transforms should produce identical results (no additional shifting)
-        if 'close' in result1.columns and 'close' in result2.columns:
-            # Compare close columns - should be identical
-            close1 = result1['close'].values
-            close2 = result2['close'].values
-
-            assert np.array_equal(close1, close2, equal_nan=True), \
-                "Multiple transform_df() calls should produce identical results (no re-shifting)"
-
-    def test_shift_tracking_flag_prevents_double_shift(self):
-        """Test that _close_shifted_in_fit flag prevents double shifting."""
+        
+        # Verify that calling transform_df multiple times doesn't cause additional shifts (idempotency)
+        result1 = pipe.transform_df(df.copy())
+        result2 = pipe.transform_df(df.copy())
+        
+        # Both transforms should produce identical results
+        assert np.array_equal(result1['close'].values, result2['close'].values, equal_nan=True),             "Multiple transform_df() calls should produce identical results (idempotent)"
+    
+    def test_shift_prevents_lookahead_bias(self):
+        """Test that close is shifted in transform_df() to prevent look-ahead bias."""
         from features_pipeline import FeaturePipeline
-
+        
         df = pd.DataFrame({
             'timestamp': range(5),
             'symbol': ['BTC'] * 5,
             'close': [100.0, 101.0, 102.0, 103.0, 104.0],
             'volume': [1.0] * 5,
         })
-
+        
         pipe = FeaturePipeline(enable_winsorization=False)
-
-        # Initially, flag should be False
-        assert pipe._close_shifted_in_fit == False, "Flag should start as False"
-
-        # After fit(), flag should be True
         pipe.fit({'BTC': df})
-        assert pipe._close_shifted_in_fit == True, "Flag should be True after fit()"
-
-        # Multiple transform_df() calls should not shift again
-        result1 = pipe.transform_df(df)
-        result2 = pipe.transform_df(df)
-
-        # Results should be identical (no additional shifting)
-        if 'close' in result1.columns and 'close' in result2.columns:
-            pd.testing.assert_series_equal(result1['close'], result2['close'],
-                                          check_names=False)
-
-    def test_reset_clears_shift_flag(self):
-        """Test that reset() clears the shift tracking flag."""
+        result = pipe.transform_df(df.copy())
+        
+        # First row should have NaN (shifted)
+        assert pd.isna(result['close'].iloc[0]),             "First row should have NaN after shift (no look-ahead bias)"
+    
+    def test_reset_clears_stats(self):
+        """Test that reset() clears stats."""
         from features_pipeline import FeaturePipeline
-
+        
         df = pd.DataFrame({
             'timestamp': range(5),
             'symbol': ['BTC'] * 5,
             'close': [100.0, 101.0, 102.0, 103.0, 104.0],
             'volume': [1.0] * 5,
         })
-
+        
         pipe = FeaturePipeline(enable_winsorization=False)
         pipe.fit({'BTC': df})
-
-        # Flag should be True after fit
-        assert pipe._close_shifted_in_fit == True
-
-        # Reset
+        assert 'close' in pipe.stats
+        
         pipe.reset()
-
-        # Flag should be False again
-        assert pipe._close_shifted_in_fit == False, "reset() should clear shift flag"
-
+        assert len(pipe.stats) == 0, "Stats should be cleared after reset"
 
 # ==============================================================================
 # MEDIUM #9: Hard-coded Reward Clip (reward.pyx)
