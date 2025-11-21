@@ -2372,7 +2372,19 @@ class DistributionalPPO(RecurrentPPO):
             lstm_states_device = _prepare_states(entry.lstm_states)
             episode_starts_device = _prepare_episode_starts(entry.episode_starts)
 
-            clip_delta = float(clip_range_vf_value) if clip_range_vf_value is not None else None
+            # VF CLIPPING SCALING FIX (2025-11-22)
+            # When normalize_returns is enabled, clip_range_vf is designed for normalized space
+            # (mean=0, std=1), but clipping happens in RAW space. We must scale by ret_std.
+            # Without scaling: 96%+ of updates blocked when ret_std is large (10-100).
+            # Fix: Scale clip_delta by ret_std to convert from normalized to raw space.
+            if clip_range_vf_value is not None:
+                if self.normalize_returns:
+                    ret_std = float(self._ret_std_snapshot)
+                    clip_delta = float(clip_range_vf_value) * ret_std
+                else:
+                    clip_delta = float(clip_range_vf_value)
+            else:
+                clip_delta = None
             if self._use_quantile_value:
                 critic_states = self._extract_critic_states(lstm_states_device)
                 if critic_states is None:
@@ -9159,7 +9171,14 @@ class DistributionalPPO(RecurrentPPO):
                         value_pred_raw_post_vf = value_pred_raw_pre_clip
                         value_pred_norm_post_vf = value_pred
                         if clip_range_vf_value is not None and clip_old_values_available:
-                            clip_delta = float(clip_range_vf_value)
+                            # VF CLIPPING SCALING FIX (2025-11-22)
+                            # Scale clip_delta by ret_std when normalize_returns is enabled
+                            # to convert from normalized space to raw space.
+                            if self.normalize_returns:
+                                ret_std = float(self._ret_std_snapshot)
+                                clip_delta = float(clip_range_vf_value) * ret_std
+                            else:
+                                clip_delta = float(clip_range_vf_value)
                             old_values_raw_aligned = old_values_raw_tensor
                             while old_values_raw_aligned.dim() < value_pred_raw_pre_clip.dim():
                                 old_values_raw_aligned = old_values_raw_aligned.unsqueeze(-1)
@@ -9276,7 +9295,14 @@ class DistributionalPPO(RecurrentPPO):
                         value_pred_raw_post_vf = value_pred_raw_pre_clip
                         value_pred_norm_post_vf = value_pred
                         if clip_range_vf_value is not None and clip_old_values_available:
-                            clip_delta = float(clip_range_vf_value)
+                            # VF CLIPPING SCALING FIX (2025-11-22)
+                            # Scale clip_delta by ret_std when normalize_returns is enabled
+                            # to convert from normalized space to raw space.
+                            if self.normalize_returns:
+                                ret_std = float(self._ret_std_snapshot)
+                                clip_delta = float(clip_range_vf_value) * ret_std
+                            else:
+                                clip_delta = float(clip_range_vf_value)
                             old_values_raw_aligned = old_values_raw_tensor
                             while old_values_raw_aligned.dim() < value_pred_raw_pre_clip.dim():
                                 old_values_raw_aligned = old_values_raw_aligned.unsqueeze(-1)
@@ -10460,7 +10486,15 @@ class DistributionalPPO(RecurrentPPO):
                                     "clip_range_vf requires old value predictions "
                                     "(distributional_ppo.py::_train_step)"
                                 )
-                            clip_delta = float(clip_range_vf_value)
+
+                            # VF CLIPPING SCALING FIX (2025-11-22)
+                            # Scale clip_delta by ret_std when normalize_returns is enabled
+                            # to convert from normalized space to raw space.
+                            if self.normalize_returns:
+                                ret_std = float(self._ret_std_snapshot)
+                                clip_delta = float(clip_range_vf_value) * ret_std
+                            else:
+                                clip_delta = float(clip_range_vf_value)
 
                             # TWIN CRITICS VF CLIPPING FIX (2025-11-22)
                             # ✅ VERIFIED CORRECT (2025-11-22): 100% test coverage, production ready
@@ -10869,7 +10903,14 @@ class DistributionalPPO(RecurrentPPO):
                                     "(distributional_ppo.py::_train_step::categorical)"
                                 )
 
-                            clip_delta = float(clip_range_vf_value)
+                            # VF CLIPPING SCALING FIX (2025-11-22)
+                            # Scale clip_delta by ret_std when normalize_returns is enabled
+                            # to convert from normalized space to raw space.
+                            if self.normalize_returns:
+                                ret_std = float(self._ret_std_snapshot)
+                                clip_delta = float(clip_range_vf_value) * ret_std
+                            else:
+                                clip_delta = float(clip_range_vf_value)
 
                             # TWIN CRITICS VF CLIPPING FIX (2025-11-22) - CATEGORICAL CRITIC
                             # Use independent clipping for each critic when Twin Critics enabled
@@ -11167,7 +11208,14 @@ class DistributionalPPO(RecurrentPPO):
                                         "clip_range_vf requires old value predictions "
                                         "(distributional_ppo.py::_train_step)"
                                     )
-                                clip_delta = float(clip_range_vf_value)
+                                # VF CLIPPING SCALING FIX (2025-11-22)
+                                # Scale clip_delta by ret_std when normalize_returns is enabled
+                                # to convert from normalized space to raw space.
+                                if self.normalize_returns:
+                                    ret_std = float(self._ret_std_snapshot)
+                                    clip_delta = float(clip_range_vf_value) * ret_std
+                                else:
+                                    clip_delta = float(clip_range_vf_value)
                                 old_values_raw_aligned = old_values_raw_tensor
                                 while old_values_raw_aligned.dim() < mean_values_unscaled.dim():
                                     old_values_raw_aligned = old_values_raw_aligned.unsqueeze(-1)
