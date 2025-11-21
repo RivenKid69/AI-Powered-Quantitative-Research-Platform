@@ -169,6 +169,8 @@ class StateAdversarialPPO:
         old_log_probs: Tensor,
         old_values: Optional[Tensor] = None,
         clip_range: float = 0.2,
+        ent_coef: float = 0.01,
+        vf_coef: float = 0.5,
     ) -> Tuple[Tensor, Dict[str, float]]:
         """Compute adversarial loss with robust training.
 
@@ -177,6 +179,7 @@ class StateAdversarialPPO:
         2. Generates adversarial perturbations for adversarial samples
         3. Computes loss on mixed batch
         4. Adds robust KL regularization
+        5. Includes entropy regularization for exploration
 
         Args:
             states: State observations [batch_size, ...]
@@ -186,6 +189,8 @@ class StateAdversarialPPO:
             old_log_probs: Log probs from old policy [batch_size]
             old_values: Values from old policy [batch_size] (optional)
             clip_range: PPO clip range
+            ent_coef: Entropy coefficient for exploration
+            vf_coef: Value function coefficient
 
         Returns:
             Tuple of (total_loss, info_dict)
@@ -196,7 +201,7 @@ class StateAdversarialPPO:
         if not self.is_adversarial_enabled:
             # Fall back to standard training
             return self._compute_standard_loss(
-                states, actions, advantages, returns, old_log_probs, old_values, clip_range
+                states, actions, advantages, returns, old_log_probs, old_values, clip_range, ent_coef, vf_coef
             )
 
         batch_size = states.size(0)
@@ -254,6 +259,12 @@ class StateAdversarialPPO:
         clipped_ratio = torch.clamp(ratio, 1.0 - clip_range, 1.0 + clip_range)
         policy_loss = -torch.min(ratio * advantages_combined, clipped_ratio * advantages_combined).mean()
 
+        # Compute entropy for exploration
+        entropy = dist.entropy()
+        if entropy.ndim > 1:
+            entropy = entropy.sum(dim=-1)
+        entropy_loss = -torch.mean(entropy)
+
         # Compute value loss (optionally with adversarial perturbations)
         if self.config.attack_value and num_adversarial > 0:
             # Generate perturbations for value function
@@ -288,13 +299,17 @@ class StateAdversarialPPO:
             robust_kl_penalty = self.config.robust_kl_coef * kl_div
             self._total_robust_kl_penalty += robust_kl_penalty.item()
 
-        # Total loss
-        total_loss = policy_loss + value_loss + robust_kl_penalty
+        # Total loss with entropy regularization (CRITICAL FIX)
+        # Standard PPO loss includes entropy to encourage exploration and prevent policy collapse
+        # References: Schulman et al. (2017) "Proximal Policy Optimization Algorithms"
+        total_loss = policy_loss + ent_coef * entropy_loss + vf_coef * value_loss + robust_kl_penalty
 
         # Info dict
         info.update({
             "sa_ppo/policy_loss": policy_loss.item(),
             "sa_ppo/value_loss": value_loss.item(),
+            "sa_ppo/entropy_loss": entropy_loss.item(),
+            "sa_ppo/entropy": -entropy_loss.item(),  # Actual entropy value (positive)
             "sa_ppo/robust_kl_penalty": robust_kl_penalty if isinstance(robust_kl_penalty, float) else robust_kl_penalty.item(),
             "sa_ppo/num_adversarial": num_adversarial,
             "sa_ppo/num_clean": num_clean,
@@ -311,8 +326,25 @@ class StateAdversarialPPO:
         old_log_probs: Tensor,
         old_values: Optional[Tensor],
         clip_range: float,
+        ent_coef: float = 0.01,
+        vf_coef: float = 0.5,
     ) -> Tuple[Tensor, Dict[str, float]]:
-        """Compute standard PPO loss without adversarial training."""
+        """Compute standard PPO loss without adversarial training.
+
+        Args:
+            states: State observations [batch_size, ...]
+            actions: Actions taken [batch_size, ...]
+            advantages: Advantage estimates [batch_size]
+            returns: Target returns [batch_size]
+            old_log_probs: Log probs from old policy [batch_size]
+            old_values: Values from old policy [batch_size] (optional)
+            clip_range: PPO clip range
+            ent_coef: Entropy coefficient for exploration
+            vf_coef: Value function coefficient
+
+        Returns:
+            Tuple of (total_loss, info_dict)
+        """
         # Standard PPO policy loss
         dist = self.model.policy.get_distribution(states)
         log_probs = dist.log_prob(actions)
@@ -320,15 +352,26 @@ class StateAdversarialPPO:
         clipped_ratio = torch.clamp(ratio, 1.0 - clip_range, 1.0 + clip_range)
         policy_loss = -torch.min(ratio * advantages, clipped_ratio * advantages).mean()
 
+        # Compute entropy for exploration (CRITICAL FIX)
+        entropy = dist.entropy()
+        if entropy.ndim > 1:
+            entropy = entropy.sum(dim=-1)
+        entropy_loss = -torch.mean(entropy)
+
         # Standard value loss
         values = self.model.policy.predict_values(states)
         value_loss = nn.functional.mse_loss(values, returns)
 
-        total_loss = policy_loss + value_loss
+        # Total loss with entropy regularization (CRITICAL FIX)
+        # Standard PPO loss includes entropy to encourage exploration and prevent policy collapse
+        # References: Schulman et al. (2017) "Proximal Policy Optimization Algorithms"
+        total_loss = policy_loss + ent_coef * entropy_loss + vf_coef * value_loss
 
         info = {
             "sa_ppo/policy_loss": policy_loss.item(),
             "sa_ppo/value_loss": value_loss.item(),
+            "sa_ppo/entropy_loss": entropy_loss.item(),
+            "sa_ppo/entropy": -entropy_loss.item(),  # Actual entropy value (positive)
             "sa_ppo/robust_kl_penalty": 0.0,
         }
 

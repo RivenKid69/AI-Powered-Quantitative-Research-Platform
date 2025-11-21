@@ -156,16 +156,89 @@ class TestStateAdversarialPPO:
         # Mock model outputs
         dist_mock = MagicMock()
         dist_mock.log_prob.return_value = torch.randn(4)
+        dist_mock.entropy.return_value = torch.randn(4)  # Add entropy mock
         mock_model.policy.get_distribution.return_value = dist_mock
         mock_model.policy.predict_values.return_value = torch.randn(4)
 
         loss, info = sa_ppo.compute_adversarial_loss(
-            states, actions, advantages, returns, old_log_probs
+            states, actions, advantages, returns, old_log_probs, ent_coef=0.01, vf_coef=0.5
         )
 
         assert isinstance(loss, torch.Tensor)
         assert "sa_ppo/policy_loss" in info
         assert "sa_ppo/value_loss" in info
+        assert "sa_ppo/entropy_loss" in info
+        assert "sa_ppo/entropy" in info
+
+    def test_entropy_loss_included_in_total_loss(self, sa_ppo, mock_model):
+        """Test that entropy loss is included in total loss (CRITICAL FIX)."""
+        sa_ppo._adversarial_enabled = False
+
+        states = torch.randn(4, 10)
+        actions = torch.randn(4, 2)
+        advantages = torch.randn(4)
+        returns = torch.randn(4)
+        old_log_probs = torch.randn(4)
+
+        # Mock model outputs with controlled values
+        dist_mock = MagicMock()
+        dist_mock.log_prob.return_value = torch.ones(4) * 0.1
+        dist_mock.entropy.return_value = torch.ones(4) * 2.0  # Entropy = 2.0
+        mock_model.policy.get_distribution.return_value = dist_mock
+        mock_model.policy.predict_values.return_value = torch.ones(4) * 0.5
+
+        # Test with zero entropy coefficient (entropy should not affect loss)
+        loss_no_ent, info_no_ent = sa_ppo.compute_adversarial_loss(
+            states, actions, advantages, returns, old_log_probs, ent_coef=0.0, vf_coef=0.5
+        )
+
+        # Test with non-zero entropy coefficient (entropy should affect loss)
+        loss_with_ent, info_with_ent = sa_ppo.compute_adversarial_loss(
+            states, actions, advantages, returns, old_log_probs, ent_coef=0.1, vf_coef=0.5
+        )
+
+        # Entropy loss should be included in info
+        assert "sa_ppo/entropy_loss" in info_with_ent
+        assert "sa_ppo/entropy" in info_with_ent
+
+        # Entropy value should be positive (actual entropy)
+        assert info_with_ent["sa_ppo/entropy"] > 0
+
+        # Loss with entropy coefficient should be different from loss without entropy
+        # (unless entropy happens to be exactly zero, which is unlikely with random data)
+        assert not torch.allclose(loss_no_ent, loss_with_ent, atol=1e-6)
+
+    def test_entropy_loss_with_adversarial_training(self, sa_ppo, mock_model):
+        """Test entropy loss computation during adversarial training."""
+        sa_ppo._adversarial_enabled = True
+        sa_ppo.on_training_start()
+        sa_ppo._update_count = 10  # After warmup
+
+        states = torch.randn(8, 10)
+        actions = torch.randn(8, 2)
+        advantages = torch.randn(8)
+        returns = torch.randn(8)
+        old_log_probs = torch.randn(8)
+
+        # Mock model outputs
+        dist_mock = MagicMock()
+        dist_mock.log_prob.return_value = torch.randn(8)
+        dist_mock.entropy.return_value = torch.randn(8) + 1.0  # Positive entropy
+        mock_model.policy.get_distribution.return_value = dist_mock
+        mock_model.policy.predict_values.return_value = torch.randn(8)
+
+        # Mock perturbation generation (return same states)
+        sa_ppo.perturbation_gen.generate_perturbation = lambda x, fn: torch.zeros_like(x)
+
+        loss, info = sa_ppo.compute_adversarial_loss(
+            states, actions, advantages, returns, old_log_probs, ent_coef=0.01, vf_coef=0.5
+        )
+
+        assert isinstance(loss, torch.Tensor)
+        assert "sa_ppo/entropy_loss" in info
+        assert "sa_ppo/entropy" in info
+        # Entropy should be positive
+        assert info["sa_ppo/entropy"] > 0
 
     def test_get_current_epsilon_constant(self, sa_ppo):
         """Test epsilon with constant schedule."""
