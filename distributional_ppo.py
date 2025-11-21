@@ -3579,6 +3579,31 @@ class DistributionalPPO(RecurrentPPO):
             cvar_empirical = rewards_winsor.new_tensor(0.0)
         else:
             tail_count = max(int(math.ceil(alpha * rewards_winsor.numel())), 1)
+
+            # CRITICAL FIX (BUG #10): Validate sufficient tail samples for stable CVaR estimation
+            # CVaR estimation requires sufficient samples in the tail for low variance
+            # When tail_count < 10, CVaR reduces to mean of very few samples (high variance)
+            # When tail_count = 1, CVaR = minimum value (extremely unstable)
+            #
+            # Research: Rockafellar & Uryasev (2000) - CVaR optimization requires adequate sampling
+            # Recommendation: alpha >= 0.02 for batch_size >= 500, or alpha >= 0.05 for smaller batches
+            MIN_TAIL_SAMPLES = 10
+            if tail_count < MIN_TAIL_SAMPLES and not getattr(self, "_cvar_tail_warning_logged", False):
+                logger_obj = getattr(self, "logger", None)
+                if logger_obj is not None:
+                    # Log warning once to avoid spam
+                    if hasattr(logger_obj, "warning"):
+                        logger_obj.warning(
+                            f"CVaR estimation may be unstable: tail_count={tail_count} < {MIN_TAIL_SAMPLES}. "
+                            f"Current: alpha={alpha:.4f}, num_samples={rewards_winsor.numel()}. "
+                            f"Recommendation: Increase batch size or cvar_alpha (≥0.05) for reliable estimates. "
+                            f"Reference: Tamar et al. (2015), 'Sequential Decision Making with CVaR'"
+                        )
+                    if hasattr(logger_obj, "record"):
+                        logger_obj.record("warn/cvar_tail_samples_low", float(tail_count))
+                        logger_obj.record("warn/cvar_tail_samples_min_threshold", float(MIN_TAIL_SAMPLES))
+                self._cvar_tail_warning_logged = True
+
             tail, _ = torch.topk(rewards_winsor, tail_count, largest=False)
             cvar_empirical = tail.mean() if tail.numel() > 0 else rewards_winsor.new_tensor(0.0)
 
@@ -7288,9 +7313,16 @@ class DistributionalPPO(RecurrentPPO):
             return None
 
         def _evaluate_time_limit_value(env_index: int, terminal_obs: Any) -> Optional[float]:
-            value_states = _select_value_states(env_index)
-            if not value_states:
-                return None
+            # CRITICAL FIX (BUG #8): Use fresh LSTM states for terminal observation
+            # Previously, we used self._last_lstm_states which correspond to self._last_obs,
+            # NOT to terminal_obs. This created a mismatch: evaluating terminal_obs with
+            # LSTM states from a different observation.
+            #
+            # Solution: Run a forward pass on terminal_obs to get correct LSTM states
+            # for this specific observation. This ensures temporal consistency.
+            #
+            # Reference: Mnih et al. (2016), "Asynchronous Methods for Deep RL"
+            # Bootstrap values must use states corresponding to the bootstrapped observation.
 
             try:
                 obs_tensor = self.policy.obs_to_tensor(terminal_obs)[0]
@@ -7307,9 +7339,24 @@ class DistributionalPPO(RecurrentPPO):
                 (batch_shape,), dtype=torch.float32, device=self.device
             )
 
+            # Get initial LSTM states for this specific environment
+            value_states = _select_value_states(env_index)
+            if not value_states:
+                return None
+
             with torch.no_grad():
+                # CRITICAL: Run forward pass on terminal_obs to get fresh LSTM states
+                # This updates LSTM hidden state to correspond to terminal_obs
+                _, fresh_lstm_states = self.policy.forward(
+                    obs_tensor,
+                    value_states,  # Start from current env's states
+                    episode_starts_tensor,
+                )
+
+                # Now use fresh states to predict value for terminal_obs
+                # This ensures LSTM states match the observation being evaluated
                 value_pred = self.policy.predict_values(
-                    obs_tensor, value_states, episode_starts_tensor
+                    obs_tensor, fresh_lstm_states, episode_starts_tensor
                 )
 
             if value_pred is None:
@@ -8090,8 +8137,26 @@ class DistributionalPPO(RecurrentPPO):
             finite_costs_mask = np.isfinite(reward_costs_np)
             if np.any(finite_costs_mask):
                 finite_costs = reward_costs_np[finite_costs_mask]
-                reward_costs_fraction_value = float(np.median(finite_costs))
-                reward_costs_fraction_mean_value = float(np.mean(finite_costs))
+                # CRITICAL FIX (BUG #11): Validate non-empty array before computing statistics
+                # Edge case: If ALL costs are infinite/NaN, finite_costs_mask filters everything
+                # Calling median/mean on empty array → ValueError: zero-size array
+                # This prevents rare but critical runtime crash in extreme market conditions
+                if finite_costs.size > 0:
+                    reward_costs_fraction_value = float(np.median(finite_costs))
+                    reward_costs_fraction_mean_value = float(np.mean(finite_costs))
+                else:
+                    # All costs were non-finite after filtering → log warning
+                    logger_obj = getattr(self, "logger", None)
+                    if logger_obj is not None and hasattr(logger_obj, "warning"):
+                        logger_obj.warning(
+                            "All reward costs are non-finite after filtering. "
+                            "This may indicate extreme market conditions or data issues."
+                        )
+            else:
+                # No finite costs at all → log warning
+                logger_obj = getattr(self, "logger", None)
+                if logger_obj is not None and hasattr(logger_obj, "warning"):
+                    logger_obj.warning("No finite reward costs available in rollout buffer.")
 
         clip_bound_min_value = self._last_rollout_clip_bounds_min
         clip_bound_median_value = self._last_rollout_clip_bounds_median
