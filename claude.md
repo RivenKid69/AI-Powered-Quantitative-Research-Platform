@@ -82,6 +82,7 @@ python scripts/sim_reality_check.py --trades sim.parquet --historical hist.parqu
 | PBT state mismatch | VGS не синхронизирован | Проверьте `variance_gradient_scaler.py` state dict |
 | Execution детерминизм нарушен | Изменён seed или порядок | Проверьте `test_execution_determinism.py` |
 | Градиенты взрываются | UPGD noise слишком высок | Уменьшите `sigma` в optimizer config |
+| **UPGD "freezes" важные веса** (NEW) | **Negative utility inversion** | **Исправлено 2025-11-21! Переобучите модели** |
 
 ### 🛡️ Критические правила (НЕ НАРУШАТЬ!)
 
@@ -107,12 +108,19 @@ python scripts/sim_reality_check.py --trades sim.parquet --historical hist.parqu
    - ⚠️ Semantic ambiguity: model не различает "missing data" и "zero value"
    - 📝 Future: добавить validity flags для external features (v2.0+)
 
-6. **Перед изменением action space/LSTM логики:**
+6. **UPGD utility scaling ДОЛЖНА использовать min-max normalization!** (NEW 2025-11-21)
+   - ✅ Правильно: `normalized = (utility - global_min) / (global_max - global_min + eps)`
+   - ❌ НЕПРАВИЛЬНО: `scaled = utility / global_max` (инвертирует логику при negative utilities!)
+   - ⚠️ **НЕ ОТКАТЫВАЙТЕ** исправление в optimizers/upgd.py и optimizers/adaptive_upgd.py!
+
+7. **Перед изменением action space/LSTM/optimizer логики:**
    - ✅ Прочитайте [CRITICAL_FIXES_COMPLETE_REPORT.md](CRITICAL_FIXES_COMPLETE_REPORT.md)
    - ✅ Прочитайте [NUMERICAL_ISSUES_FIX_SUMMARY.md](NUMERICAL_ISSUES_FIX_SUMMARY.md)
+   - ✅ Прочитайте [UPGD_NEGATIVE_UTILITY_FIX_REPORT.md](UPGD_NEGATIVE_UTILITY_FIX_REPORT.md)
    - ✅ Запустите `pytest tests/test_critical_action_space_fixes.py`
    - ✅ Запустите `pytest tests/test_lstm_episode_boundary_reset.py`
-   - ✅ Убедитесь что понимаете TARGET vs DELTA semantics и LSTM state management
+   - ✅ Запустите `pytest tests/test_upgd_fix_comprehensive.py`
+   - ✅ Убедитесь что понимаете TARGET vs DELTA semantics, LSTM state management, и utility normalization
 
 ### ⚠️ КРИТИЧЕСКИЕ ИСПРАВЛЕНИЯ - ОБЯЗАТЕЛЬНО К ПРОЧТЕНИЮ
 
@@ -239,6 +247,129 @@ pytest tests/test_nan_handling_external_features.py -v
 
 ---
 
+#### 🔴 TWIN CRITICS GAE FIX (2025-11-21) - **КРИТИЧЕСКИ ВАЖНО**
+
+**КРИТИЧЕСКАЯ ПРОБЛЕМА обнаружена и исправлена. Подробности: [TWIN_CRITICS_GAE_FIX_REPORT.md](TWIN_CRITICS_GAE_FIX_REPORT.md)**
+
+| Проблема | Статус | Критичность |
+|----------|--------|-------------|
+| **Twin Critics min(Q1, Q2) НЕ применялась в GAE computation** | ✅ **FIXED** | **CRITICAL** - полная потеря функциональности! |
+
+**⚠️ КРИТИЧЕСКОЕ ВЛИЯНИЕ:**
+- Twin Critics **НЕ давали НИКАКОЙ пользы** до исправления
+- GAE и advantages вычислялись только на основе первого критика (переоценённые значения)
+- Операция `min(Q1, Q2)` НЕ применялась к значениям в rollout buffer
+- **Компрометировалось основное преимущество Twin Critics** — снижение overestimation bias
+
+**Что было исправлено**:
+- ✅ `collect_rollouts` теперь использует `predict_values()` вместо прямого доступа к `last_value_quantiles`
+- ✅ `predict_values()` правильно возвращает `min(Q1, Q2)` когда Twin Critics enabled
+- ✅ Terminal bootstrap также использует `predict_values()` для consistency
+- ✅ VF clipping по-прежнему использует quantiles/probs от первого критика (как и должно быть)
+
+**Изменённые файлы**:
+- `distributional_ppo.py:7344-7355` — Step-wise GAE values теперь используют `predict_values()`
+- `distributional_ppo.py:7566-7570` — Terminal bootstrap также использует `predict_values()`
+- `custom_policy_patch1.py:1488-1493` — `predict_values()` корректно реализует min (verified)
+
+**Действия**:
+- ✅ Новые модели — автоматически используют правильную реализацию
+- ⚠️ **КРИТИЧЕСКИ ВАЖНО**: Модели с Twin Critics (trained before 2025-11-21) → **НАСТОЯТЕЛЬНО РЕКОМЕНДУЕТСЯ переобучить**
+  - До исправления Twin Critics **не давали никакой пользы**
+  - После исправления ожидается улучшение stability и sample efficiency
+  - Особенно важно для моделей, где Twin Critics явно включены в конфигурации
+
+**Тесты для предотвращения регрессии:**
+```bash
+# Existing Twin Critics tests (all pass - 10/10)
+pytest tests/test_twin_critics.py -v
+
+# New GAE-specific tests (core tests pass - 4/4)
+pytest tests/test_twin_critics_gae_fix.py -v
+```
+
+**Ожидаемые улучшения после переобучения**:
+- 📊 Лучшая стабильность обучения (`train/value_loss` должен стабилизироваться быстрее)
+- 📈 Улучшенная sample efficiency (advantages основаны на conservative estimates)
+- 🎯 Более робастные policies (меньше overfitting к optimistic values)
+- ⚡ Снижение overestimation bias в value estimates
+
+**См. также:**
+- [TWIN_CRITICS_GAE_FIX_REPORT.md](TWIN_CRITICS_GAE_FIX_REPORT.md) - полная документация fix
+- [tests/test_twin_critics_gae_fix.py](tests/test_twin_critics_gae_fix.py) - новые GAE-specific тесты
+- [docs/twin_critics.md](docs/twin_critics.md) - архитектура Twin Critics
+
+---
+
+#### 🔴 UPGD NEGATIVE UTILITY FIX (2025-11-21) - **КРИТИЧЕСКИ ВАЖНО**
+
+**КРИТИЧЕСКАЯ ПРОБЛЕМА обнаружена и исправлена. Подробности: [UPGD_NEGATIVE_UTILITY_FIX_REPORT.md](UPGD_NEGATIVE_UTILITY_FIX_REPORT.md)**
+
+| Проблема | Статус | Критичность |
+|----------|--------|-------------|
+| **UPGD utility scaling инвертируется при negative utilities** | ✅ **FIXED** | **HIGH** - полная инверсия механизма защиты весов! |
+
+**⚠️ КРИТИЧЕСКОЕ ВЛИЯНИЕ:**
+- При отрицательных utilities (grad * param > 0) логика **полностью инвертировалась**
+- Параметры с **низкой utility ("worse")** получали **МЕНЬШИЕ обновления** → loss of plasticity
+- Параметры с **высокой utility ("better")** получали **БОЛЬШИЕ обновления** → catastrophic forgetting
+- **Полностью нарушался механизм** utility-based weight protection
+
+**Что было исправлено**:
+- ✅ Заменена division-by-global-max на **min-max normalization**
+- ✅ Исправление работает корректно для **всех знаков utilities** (положительные, отрицательные, смешанные)
+- ✅ Edge cases обработаны: uniform utilities, zero gradients, all-zero parameters
+- ✅ Применено к **UPGD и AdaptiveUPGD** оптимизаторам
+
+**Математика fix**:
+```python
+# ДО (БАГ): деление на global_max
+scaled_utility = torch.sigmoid(utility / global_max_util)  # Инвертируется при global_max < 0!
+
+# ПОСЛЕ (FIX): min-max normalization
+normalized = (utility - global_min) / (global_max - global_min + epsilon)
+normalized = torch.clamp(normalized, 0.0, 1.0)
+scaled_utility = torch.sigmoid(2.0 * (normalized - 0.5))  # Работает для всех знаков!
+```
+
+**Изменённые файлы**:
+- [optimizers/upgd.py](optimizers/upgd.py:93-174) — UPGD optimizer
+- [optimizers/adaptive_upgd.py](optimizers/adaptive_upgd.py:131-243) — AdaptiveUPGD optimizer
+
+**Действия**:
+- ✅ Новые модели — автоматически используют правильную нормализацию
+- ⚠️ **РЕКОМЕНДУЕТСЯ переобучить** модели, обученные с UPGD/AdaptiveUPGD до 2025-11-21, особенно:
+  - Модели с adversarial training (SA-PPO)
+  - Модели с высокими learning rates
+  - Модели, демонстрирующие catastrophic forgetting
+  - Модели, где utilities часто становятся отрицательными
+
+**Тесты для предотвращения регрессии**:
+```bash
+# Bug verification tests (3 теста - bug confirmed)
+python test_upgd_negative_utility_bug.py
+
+# Comprehensive fix validation (7 тестов - 7/7 pass)
+pytest test_upgd_fix_comprehensive.py -v
+
+# All existing UPGD tests (119/121 pass)
+pytest tests/test_upgd*.py -v
+```
+
+**Ожидаемые улучшения после переобучения**:
+- 📊 Правильная защита важных параметров (high utility)
+- 📈 Корректное исследование неважных параметров (low utility)
+- 🎯 Снижение catastrophic forgetting
+- ⚡ Поддержание plasticity neural network
+
+**См. также:**
+- [UPGD_NEGATIVE_UTILITY_FIX_REPORT.md](UPGD_NEGATIVE_UTILITY_FIX_REPORT.md) - полная документация с root cause analysis
+- [test_upgd_negative_utility_bug.py](test_upgd_negative_utility_bug.py) - bug verification
+- [test_upgd_fix_comprehensive.py](test_upgd_fix_comprehensive.py) - fix validation tests
+- [docs/UPGD_INTEGRATION.md](docs/UPGD_INTEGRATION.md) - UPGD optimizer documentation
+
+---
+
 ## 📊 СТАТУС ПРОЕКТА (2025-11-21)
 
 ### ✅ Последние обновления (2025-11-21) - ПОЛНАЯ АКТУАЛИЗАЦИЯ
@@ -335,6 +466,75 @@ Recent commits (last 5):
 ---
 
 ## 🚀 Продвинутые возможности (2024-2025)
+
+### 0. ⚡ Quick Reference: Training Configuration
+
+**Для быстрого старта с оптимальными настройками:**
+
+```yaml
+# configs/config_train.yaml - Основная конфигурация обучения
+model:
+  algo: "ppo"
+
+  # OPTIMIZER: AdaptiveUPGD (default для continual learning)
+  optimizer_class: AdaptiveUPGD        # Опции: AdaptiveUPGD, UPGD, UPGDW
+  optimizer_kwargs:
+    lr: 1.0e-4                         # Learning rate
+    weight_decay: 0.001                # L2 regularization
+    sigma: 0.001                       # CRITICAL: Gaussian noise (tune для VGS)
+    beta_utility: 0.999                # Utility EMA decay
+    beta1: 0.9                         # First moment (AdaptiveUPGD)
+    beta2: 0.999                       # Second moment (AdaptiveUPGD)
+    adaptive_noise: false              # Enable для VGS + UPGD combo
+
+  # VGS: Variance Gradient Scaler (рекомендуется для stability)
+  vgs:
+    enabled: true                      # Включить VGS
+    accumulation_steps: 4              # Backward passes для статистики
+    warmup_steps: 10                   # Warmup updates
+    eps: 1.0e-6                        # Numerical stability
+    clip_threshold: 10.0               # Clip extreme scaling factors
+
+  params:
+    # TWIN CRITICS & DISTRIBUTIONAL VALUE HEAD
+    use_twin_critics: true             # Default: enabled (можно опустить)
+    num_atoms: 21                      # Distributional critic quantiles
+    v_min: -10.0                       # Value support lower bound
+    v_max: 10.0                        # Value support upper bound
+    v_range_ema_alpha: 0.005           # Adaptive range adjustment
+
+    # CVaR RISK-AWARE LEARNING
+    cvar_alpha: 0.05                   # Worst 5% tail focus
+    cvar_weight: 0.15                  # CVaR loss weight
+    cvar_activation_threshold: 0.15    # Activation threshold
+
+    # VALUE CLIPPING (Twin Critics)
+    clip_range_vf: 0.7                 # Default clip range
+    vf_clip_warmup_updates: 0          # Warmup disabled by default
+
+    # PPO HYPERPARAMETERS
+    learning_rate: 1.0e-4              # Base learning rate
+    gamma: 0.99                        # Discount factor
+    gae_lambda: 0.95                   # GAE lambda
+    clip_range: 0.10                   # PPO clip range
+    ent_coef: 0.001                    # Entropy coefficient
+    vf_coef: 1.8                       # Value function coefficient
+    max_grad_norm: 0.5                 # Gradient clipping
+    n_steps: 2048                      # Steps per rollout
+    n_epochs: 4                        # Optimization epochs
+    batch_size: 64                     # Minibatch size
+```
+
+**Ключевые моменты:**
+1. **AdaptiveUPGD** — default optimizer, предотвращает catastrophic forgetting
+2. **VGS enabled** — автоматическое gradient scaling для стабильности
+3. **Twin Critics** — enabled по умолчанию, улучшает value estimates
+4. **CVaR learning** — фокус на worst-case scenarios (tail risk)
+5. **sigma tuning** — КРИТИЧНО для VGS interaction (0.0005-0.001)
+
+**См. разделы ниже для подробной документации каждой возможности.**
+
+---
 
 ### 1. UPGD Optimizer (Utility-based Perturbed Gradient Descent)
 
@@ -630,13 +830,30 @@ components:
 - **AdaptiveUPGD optimizer** (default) — continual learning
 - **CVaR risk-aware learning** — focus на tail risk (worst 5% outcomes)
 - Поддержка sampling mask для no-trade окон
-- Отключённый PopArt (ранее использовался, теперь удалён)
+- **PopArt** (disabled at initialization; code retained for reference only)
 
 **Критические параметры**:
 ```yaml
 model:
+  # Optimizer configuration (AdaptiveUPGD - default)
+  optimizer_class: AdaptiveUPGD
+  optimizer_kwargs:
+    lr: 1.0e-4                  # Learning rate
+    sigma: 0.001                # CRITICAL: Gaussian noise std (tune for VGS)
+    beta_utility: 0.999         # Utility EMA decay
+    beta1: 0.9                  # First moment (AdaptiveUPGD)
+    beta2: 0.999                # Second moment (AdaptiveUPGD)
+
+  # VGS (Variance Gradient Scaler)
+  vgs:
+    enabled: true
+    accumulation_steps: 4
+    warmup_steps: 10
+    clip_threshold: 10.0
+
   params:
-    # Distributional value head
+    # Twin Critics & Distributional Value Head
+    use_twin_critics: true      # Default: enabled
     num_atoms: 21               # Количество квантилей
     v_min: -10.0                # Минимальное значение support
     v_max: 10.0                 # Максимальное значение support

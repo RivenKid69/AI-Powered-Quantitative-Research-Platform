@@ -128,7 +128,10 @@ class AdaptiveUPGD(torch.optim.Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
-        # First pass: compute utilities, moments, and find global maximum
+        # First pass: compute utilities, moments, and find global min/max for normalization
+        # BUGFIX: Use min-max normalization instead of division by global_max
+        # This fixes inverted scaling when all utilities are negative
+        global_min_util = torch.tensor(torch.inf, device="cpu")
         global_max_util = torch.tensor(-torch.inf, device="cpu")
 
         for group in self.param_groups:
@@ -162,8 +165,12 @@ class AdaptiveUPGD(torch.optim.Optimizer):
                 first_moment.mul_(group["beta1"]).add_(p.grad.data, alpha=1 - group["beta1"])
                 sec_moment.mul_(group["beta2"]).add_(p.grad.data ** 2, alpha=1 - group["beta2"])
 
-                # Track global maximum utility
+                # Track global min/max utility for normalization
+                current_util_min = avg_utility.min()
                 current_util_max = avg_utility.max()
+
+                if current_util_min < global_min_util:
+                    global_min_util = current_util_min.cpu()
                 if current_util_max > global_max_util:
                     global_max_util = current_util_max.cpu()
 
@@ -213,11 +220,27 @@ class AdaptiveUPGD(torch.optim.Optimizer):
                     # Fixed noise (original behavior)
                     noise = torch.randn_like(p.grad) * group["sigma"]
 
-                # Scale utility with global normalization
+                # Min-max normalization: maps utility to [0, 1] regardless of sign
+                # High utility (after normalization) → close to 1 → small update (protection)
+                # Low utility (after normalization) → close to 0 → large update (exploration)
+                global_min_on_device = global_min_util.to(device)
                 global_max_on_device = global_max_util.to(device)
-                scaled_utility = torch.sigmoid(
-                    (state["avg_utility"] / bias_correction_utility) / global_max_on_device
-                )
+
+                # Handle edge case where all utilities are equal
+                epsilon = 1e-8
+                util_range = global_max_on_device - global_min_on_device + epsilon
+
+                # Normalize to [0, 1]
+                normalized_utility = (
+                    (state["avg_utility"] / bias_correction_utility) - global_min_on_device
+                ) / util_range
+
+                # Clamp to [0, 1] to handle numerical issues
+                normalized_utility = torch.clamp(normalized_utility, 0.0, 1.0)
+
+                # Apply sigmoid for smoother scaling (optional but keeps backward compatibility)
+                # Maps [0, 1] → [0.27, 0.73] with sigmoid, providing gentler scaling
+                scaled_utility = torch.sigmoid(2.0 * (normalized_utility - 0.5))
 
                 # Adaptive update with utility-based protection:
                 # update = (m / (sqrt(v) + eps) + noise) * (1 - scaled_utility)
