@@ -7161,9 +7161,14 @@ class DistributionalPPO(RecurrentPPO):
                 self.logger.record("diag/kl_gauss_p50", float(kl_gauss_stats[0]))
                 self.logger.record("diag/kl_gauss_p90", float(kl_gauss_stats[1]))
 
-                mean_term = ((mu_old - mean_tensor) ** 2) / (2 * std_safe**2)
-                var_ratio = (sigma_old**2) / (std_safe**2)
-                var_term = (sigma_old**2) / (2 * std_safe**2) - 0.5 - 0.5 * torch.log(var_ratio)
+                # CRITICAL FIX #3 (2025-11-21): Use clamped std_safe_squared consistently
+                # BUG: Previous code computed std_safe_squared with clamp, then used unclamped std_safe**2
+                # This caused gradient explosions when std_safe is very small (e.g., 1e-10)
+                # Example: std_safe=1e-10 → std_safe**2=1e-20 → division amplifies gradients by 10^20
+                # Reference: MATH_AUDIT_REPORT.md, Issue #3
+                mean_term = ((mu_old - mean_tensor) ** 2) / (2 * std_safe_squared)
+                var_ratio = (sigma_old**2) / std_safe_squared  # FIXED: use clamped version
+                var_term = (sigma_old**2) / (2 * std_safe_squared) - 0.5 - 0.5 * torch.log(var_ratio)
                 self.logger.record(
                     "diag/kl_mean_term_p90",
                     float(_quantiles(mean_term, (0.9,)).detach().cpu().numpy()[0]),
@@ -7692,8 +7697,15 @@ class DistributionalPPO(RecurrentPPO):
         if self.normalize_advantage and rollout_buffer.advantages is not None:
             advantages_flat = rollout_buffer.advantages.reshape(-1).astype(np.float64)
 
-            # Safety check: ensure we have advantages to normalize
-            if advantages_flat.size > 0:
+            # CRITICAL FIX #1 (2025-11-21): Check size before computing std with ddof=1
+            # When size <= 1, ddof=1 causes division by zero: variance = sum((x-mean)^2) / (n-ddof)
+            # With n=1, ddof=1: denominator = 0 → NaN
+            # Reference: MATH_AUDIT_REPORT.md, Issue #1
+            if advantages_flat.size <= 1:
+                # Cannot normalize with <= 1 samples (std undefined with ddof=1)
+                self.logger.record("warn/advantages_too_few_samples", float(advantages_flat.size))
+                # Skip normalization, use raw advantages
+            elif advantages_flat.size > 1:
                 adv_mean = float(np.mean(advantages_flat))
                 adv_std = float(np.std(advantages_flat, ddof=1))
 
@@ -8146,9 +8158,16 @@ class DistributionalPPO(RecurrentPPO):
             # This asymmetry created inconsistent scaling behavior
             # Now: Both use the same denominator formula for consistency
             # Reference: Andrychowicz et al. (2021), "What Matters In On-Policy RL"
+            #
+            # CRITICAL FIX #2 (2025-11-21): Add absolute minimum to prevent division by zero
+            # Even though ret_clip > 0 is validated at init, if both ret_std_value and
+            # _value_scale_std_floor are near zero, denom can still approach zero
+            # Example: ret_clip=10, ret_std=1e-10, std_floor=1e-10 → denom=1e-9 → scale=1e9 (unstable)
+            # Reference: MATH_AUDIT_REPORT.md, Issue #2
             denom = max(
                 self.ret_clip * ret_std_value,
                 self.ret_clip * self._value_scale_std_floor,
+                1e-6,  # Absolute floor: prevents division by zero and extreme scaling
             )
             target_scale = float(1.0 / denom)
             # Prevent excessive scaling that can destabilize training
@@ -8162,9 +8181,13 @@ class DistributionalPPO(RecurrentPPO):
             if returns_raw_tensor.numel() > 0:
                 # CRITICAL FIX: Use consistent denominator with target_scale computation above
                 # Both must apply ret_clip multiplier to std_floor for consistency
+                #
+                # CRITICAL FIX #2 (2025-11-21): Add absolute minimum (same as above)
+                # Reference: MATH_AUDIT_REPORT.md, Issue #2
                 denom_norm = max(
                     self.ret_clip * ret_std_value,
                     self.ret_clip * self._value_scale_std_floor,
+                    1e-6,  # Absolute floor: prevents division by zero
                 )
                 returns_norm_unclipped = (returns_raw_tensor - ret_mu_value) / denom_norm
 
@@ -10082,11 +10105,26 @@ class DistributionalPPO(RecurrentPPO):
                         value_eval_primary_cache.append(cache_entry)
                     else:
                         # Softmax ensures valid probability distribution
-                        # Clamp + renormalize to maintain probability constraint (sum = 1.0)
+                        # CRITICAL FIX #4 (2025-11-21): Clamp AFTER renormalization to prevent log(0)
+                        # ISSUE: Clamping before renormalization doesn't guarantee all probs >= epsilon
+                        #   1. softmax → [0.9999, 1e-9, 1e-9]  (some near-zero probs)
+                        #   2. clamp(min=1e-8) → [0.9999, 1e-8, 1e-8]
+                        #   3. renorm → [0.9999/sum, 1e-8/sum, 1e-8/sum]
+                        #   4. If sum > 1.0 (float32 error), some probs can drop below 1e-8 again!
+                        #   5. log(probs < 1e-8) → -inf → NaN gradients
+                        #
+                        # SOLUTION: Clamp AFTER renormalization, then renormalize again
+                        # Reference: MATH_AUDIT_REPORT.md, Issue #4
+                        #
+                        # Alternatively, use F.log_softmax for numerical stability (avoids small probs):
+                        # log_predictions = F.log_softmax(value_logits_fp32, dim=1)
+                        #
+                        # We keep current approach for consistency with existing code, but fix order:
                         pred_probs_fp32 = torch.softmax(value_logits_fp32, dim=1)
-                        pred_probs_fp32 = torch.clamp(pred_probs_fp32, min=1e-8)
-                        pred_probs_fp32 = pred_probs_fp32 / pred_probs_fp32.sum(dim=1, keepdim=True)
-                        log_predictions = torch.log(pred_probs_fp32)
+                        pred_probs_fp32 = pred_probs_fp32 / pred_probs_fp32.sum(dim=1, keepdim=True)  # Renorm first
+                        pred_probs_fp32 = torch.clamp(pred_probs_fp32, min=1e-8)  # Then clamp
+                        pred_probs_fp32 = pred_probs_fp32 / pred_probs_fp32.sum(dim=1, keepdim=True)  # Final renorm
+                        log_predictions = torch.log(pred_probs_fp32)  # Now safe: all probs >= 1e-8
                         if valid_indices is not None:
                             log_predictions_selected = log_predictions[valid_indices]
                             target_distribution_selected = target_distribution[valid_indices]
@@ -10306,13 +10344,17 @@ class DistributionalPPO(RecurrentPPO):
                                 target_atoms=atoms_original,
                             )
 
-                            # Ensure valid probability distribution
-                            pred_probs_clipped = torch.clamp(pred_probs_clipped, min=1e-8)
+                            # CRITICAL FIX #4 (2025-11-21): Clamp AFTER renormalization (same fix as above)
+                            # Reference: MATH_AUDIT_REPORT.md, Issue #4
                             pred_probs_clipped = pred_probs_clipped / pred_probs_clipped.sum(
                                 dim=1, keepdim=True
-                            )
+                            )  # Renorm first
+                            pred_probs_clipped = torch.clamp(pred_probs_clipped, min=1e-8)  # Then clamp
+                            pred_probs_clipped = pred_probs_clipped / pred_probs_clipped.sum(
+                                dim=1, keepdim=True
+                            )  # Final renorm
 
-                            # Compute log probabilities for clipped distribution
+                            # Compute log probabilities for clipped distribution (now safe)
                             log_predictions_clipped = torch.log(pred_probs_clipped)
 
                             # Select valid indices if needed
