@@ -360,3 +360,134 @@ class StateAdversarialPPO:
         """Update epsilon value based on schedule."""
         current_epsilon = self._get_current_epsilon()
         self.config.perturbation.epsilon = current_epsilon
+
+    def apply_adversarial_augmentation(
+        self,
+        states: Tensor,
+        actions: Tensor,
+        advantages: Tensor,
+        old_log_probs: Tensor,
+        clip_range: float,
+    ) -> Tuple[Tensor, Tensor, Dict[str, float]]:
+        """Apply adversarial augmentation to a batch of states.
+
+        This method generates adversarial perturbations and returns augmented states
+        for use in downstream loss computation. It does NOT compute loss itself.
+
+        Args:
+            states: State observations [batch_size, ...]
+            actions: Actions taken [batch_size, ...]
+            advantages: Advantage estimates [batch_size]
+            old_log_probs: Log probs from old policy [batch_size]
+            clip_range: PPO clip range
+
+        Returns:
+            Tuple of (augmented_states, sample_mask, info_dict)
+            - augmented_states: Combined clean + adversarial states [batch_size, ...]
+            - sample_mask: Mask indicating which samples are adversarial [batch_size] (0=clean, 1=adv)
+            - info_dict: Statistics dictionary
+        """
+        info = {}
+
+        # Check if adversarial training is enabled
+        if not self.is_adversarial_enabled:
+            # Return original states with all-zero mask (all clean)
+            sample_mask = torch.zeros(states.size(0), device=states.device, dtype=torch.float32)
+            info.update({
+                "sa_ppo/num_adversarial": 0,
+                "sa_ppo/num_clean": states.size(0),
+            })
+            return states, sample_mask, info
+
+        batch_size = states.size(0)
+        num_adversarial = int(batch_size * self.config.adversarial_ratio)
+        num_clean = batch_size - num_adversarial
+
+        # Update sample counts
+        self._total_adversarial_samples += num_adversarial
+        self._total_clean_samples += num_clean
+
+        # Split into clean and adversarial samples
+        states_clean = states[:num_clean]
+        states_adv_base = states[num_clean:]
+
+        actions_adv = actions[num_clean:]
+        advantages_adv = advantages[num_clean:]
+        old_log_probs_adv = old_log_probs[num_clean:]
+
+        # Generate adversarial perturbations for policy
+        states_adv_perturbed = states_adv_base
+        if self.config.attack_policy and num_adversarial > 0:
+            # Create policy loss function for attack
+            def policy_loss_fn(s_perturbed: Tensor) -> Tensor:
+                dist = self.model.policy.get_distribution(s_perturbed)
+                log_probs = dist.log_prob(actions_adv)
+                ratio = torch.exp(log_probs - old_log_probs_adv)
+                clipped_ratio = torch.clamp(ratio, 1.0 - clip_range, 1.0 + clip_range)
+                # Negative because we want to maximize loss (worst-case)
+                return -torch.min(ratio * advantages_adv, clipped_ratio * advantages_adv).mean()
+
+            # Generate perturbations
+            delta = self.perturbation_gen.generate_perturbation(states_adv_base, policy_loss_fn)
+            states_adv_perturbed = states_adv_base + delta
+
+        # Combine clean and adversarial states
+        states_combined = torch.cat([states_clean, states_adv_perturbed], dim=0)
+
+        # Create sample mask (0 = clean, 1 = adversarial)
+        sample_mask = torch.cat([
+            torch.zeros(num_clean, device=states.device, dtype=torch.float32),
+            torch.ones(num_adversarial, device=states.device, dtype=torch.float32),
+        ], dim=0)
+
+        # Info dict
+        info.update({
+            "sa_ppo/num_adversarial": num_adversarial,
+            "sa_ppo/num_clean": num_clean,
+        })
+
+        return states_combined, sample_mask, info
+
+    def compute_robust_kl_penalty(
+        self,
+        states_clean: Tensor,
+        states_adv: Tensor,
+        actions: Tensor,
+    ) -> Tuple[float, Dict[str, float]]:
+        """Compute robust KL regularization between clean and adversarial policies.
+
+        Args:
+            states_clean: Clean state observations [batch_size, ...]
+            states_adv: Adversarial (perturbed) state observations [batch_size, ...]
+            actions: Actions to evaluate [batch_size, ...]
+
+        Returns:
+            Tuple of (robust_kl_penalty, info_dict)
+        """
+        info = {}
+
+        if not self.is_adversarial_enabled or self.config.robust_kl_coef <= 0:
+            return 0.0, info
+
+        batch_size = states_clean.size(0)
+        if batch_size == 0:
+            return 0.0, info
+
+        # KL divergence between clean and adversarial policies
+        with torch.no_grad():
+            dist_clean = self.model.policy.get_distribution(states_clean)
+            log_probs_clean = dist_clean.log_prob(actions)
+
+        dist_adv = self.model.policy.get_distribution(states_adv)
+        log_probs_adv = dist_adv.log_prob(actions)
+
+        # KL(clean || adversarial) - penalize large policy changes
+        kl_div = (torch.exp(log_probs_clean) * (log_probs_clean - log_probs_adv)).mean()
+        robust_kl_penalty = float((self.config.robust_kl_coef * kl_div).item())
+        self._total_robust_kl_penalty += robust_kl_penalty
+
+        info.update({
+            "sa_ppo/robust_kl_penalty": robust_kl_penalty,
+        })
+
+        return robust_kl_penalty, info

@@ -6304,6 +6304,11 @@ class DistributionalPPO(RecurrentPPO):
             if callable(policy_block_fn):
                 policy_block_fn(self._critic_grad_block_scale)
 
+        # SA-PPO (State-Adversarial PPO) wrapper initialization
+        # This wrapper enables adversarial training for robustness
+        # Set via set_sa_ppo_wrapper() method after model creation
+        self._sa_ppo_wrapper: Optional[Any] = None
+
         # FIX Bug #8: Setup components that depend on self.policy after super().__init__()
         if _setup:
             self._setup_dependent_components()
@@ -6335,6 +6340,31 @@ class DistributionalPPO(RecurrentPPO):
             raise ValueError("'kl_absolute_stop_factor' must be a positive finite value when provided")
 
         self._kl_absolute_stop_factor = factor_value
+
+    def set_sa_ppo_wrapper(self, wrapper: Optional[Any]) -> None:
+        """Set SA-PPO (State-Adversarial PPO) wrapper for adversarial training.
+
+        Args:
+            wrapper: StateAdversarialPPO wrapper instance, or None to disable
+
+        Note:
+            When a wrapper is set and active (after warmup), the train() method
+            will use compute_adversarial_loss() for robust training with:
+            - Adversarial state perturbations (PGD attack)
+            - Robust KL regularization
+            - Mixed clean/adversarial batch training
+        """
+        self._sa_ppo_wrapper = wrapper
+        if wrapper is not None:
+            logger.info(f"SA-PPO wrapper attached to model (enabled={getattr(wrapper, 'config', None) and getattr(wrapper.config, 'enabled', False)})")
+
+    def get_sa_ppo_wrapper(self) -> Optional[Any]:
+        """Get current SA-PPO wrapper instance.
+
+        Returns:
+            StateAdversarialPPO wrapper if set, None otherwise
+        """
+        return getattr(self, "_sa_ppo_wrapper", None)
 
     def _setup_dependent_components(self) -> None:
         """Setup components that depend on self.policy existing (Bug #8 fix).
@@ -8964,12 +8994,45 @@ class DistributionalPPO(RecurrentPPO):
                 # (standard PPO practice: normalize once for entire buffer, not per-group)
                 # This ensures consistent learning signal and proper gradient accumulation
 
+                # SA-PPO: Apply adversarial augmentation if wrapper is active
+                sa_ppo_wrapper = getattr(self, "_sa_ppo_wrapper", None)
+                sa_ppo_enabled = (
+                    sa_ppo_wrapper is not None
+                    and hasattr(sa_ppo_wrapper, "is_adversarial_enabled")
+                    and sa_ppo_wrapper.is_adversarial_enabled
+                )
+
                 for rollout_data, sample_count, mask_tensor, sample_weight in zip(
                     microbatch_items, sample_counts, microbatch_masks, sample_weight_sums
                 ):
                     group_keys_local: list[str] = []  # FIX
+
+                    # SA-PPO: Apply adversarial perturbations to observations
+                    observations_for_training = rollout_data.observations
+                    sa_ppo_info = {}
+                    sa_ppo_sample_mask = None
+
+                    if sa_ppo_enabled:
+                        # Get old_log_probs for adversarial attack
+                        old_log_probs_flat = rollout_data.old_log_prob.flatten()
+                        advantages_flat = rollout_data.advantages.flatten()
+
+                        # Apply adversarial augmentation
+                        observations_augmented, sa_ppo_sample_mask, sa_ppo_info = sa_ppo_wrapper.apply_adversarial_augmentation(
+                            states=rollout_data.observations,
+                            actions=rollout_data.actions,
+                            advantages=advantages_flat,
+                            old_log_probs=old_log_probs_flat,
+                            clip_range=clip_range,
+                        )
+                        observations_for_training = observations_augmented
+
+                        # Log SA-PPO statistics
+                        for key, value in sa_ppo_info.items():
+                            self.logger.record(key, float(value))
+
                     _values, log_prob, entropy = self.policy.evaluate_actions(
-                        rollout_data.observations,
+                        observations_for_training,  # Use augmented observations if SA-PPO enabled
                         rollout_data.actions,
                         rollout_data.lstm_states,
                         rollout_data.episode_starts,
@@ -9197,6 +9260,31 @@ class DistributionalPPO(RecurrentPPO):
                         policy_loss = policy_loss + kl_penalty_component
                         kl_penalty_component_total += float(kl_penalty_component.item())
                         kl_penalty_component_count += 1
+
+                    # SA-PPO: Add robust KL regularization if enabled
+                    if sa_ppo_enabled and sa_ppo_sample_mask is not None:
+                        # Extract adversarial samples for robust KL computation
+                        adv_mask = sa_ppo_sample_mask > 0.5
+                        if torch.any(adv_mask):
+                            # Split observations into clean and adversarial
+                            obs_clean = rollout_data.observations[~adv_mask] if torch.any(~adv_mask) else None
+                            obs_adv = observations_for_training[adv_mask]
+                            actions_for_kl = rollout_data.actions[adv_mask]
+
+                            # Compute robust KL penalty
+                            if obs_clean is not None and obs_clean.size(0) > 0:
+                                robust_kl_value, robust_kl_info = sa_ppo_wrapper.compute_robust_kl_penalty(
+                                    states_clean=obs_clean,
+                                    states_adv=obs_adv,
+                                    actions=actions_for_kl,
+                                )
+                                # Add to policy loss as tensor
+                                robust_kl_tensor = policy_loss.new_tensor(robust_kl_value)
+                                policy_loss = policy_loss + robust_kl_tensor
+
+                                # Log robust KL statistics
+                                for key, value in robust_kl_info.items():
+                                    self.logger.record(key, float(value))
 
                     inner_dist = getattr(dist, "distribution", None)
                     if entropy_tensor is None:

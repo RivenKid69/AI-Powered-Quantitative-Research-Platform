@@ -267,6 +267,17 @@ class PBTTrainingCoordinator:
             sa_ppo_wrapper = create_sappo_wrapper(model, self.config.adversarial)
             self.sa_ppo_wrappers[member.member_id] = sa_ppo_wrapper
 
+            # CRITICAL FIX: Set wrapper on model to enable adversarial training
+            # Without this, compute_adversarial_loss is NEVER called!
+            if hasattr(model, "set_sa_ppo_wrapper"):
+                model.set_sa_ppo_wrapper(sa_ppo_wrapper)
+                logger.info(f"SA-PPO wrapper attached to model for member {member.member_id}")
+            else:
+                logger.warning(
+                    f"Model for member {member.member_id} does not support SA-PPO wrapper "
+                    "(missing set_sa_ppo_wrapper method). Adversarial training DISABLED."
+                )
+
         logger.info(
             f"Model created for member {member.member_id} with hyperparams: "
             f"{member.hyperparams}"
