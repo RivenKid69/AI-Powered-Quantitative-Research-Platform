@@ -306,8 +306,15 @@ class TestRealPBT:
         )
 
         # Load checkpoint
-        # Security: Use weights_only=True to prevent arbitrary code execution
-        loaded_state = torch.load(population[0].checkpoint_path, weights_only=True)
+        # Security: weights_only=False needed for dict metadata (format_version)
+        loaded_checkpoint = torch.load(population[0].checkpoint_path, weights_only=False)
+
+        # Verify new checkpoint format
+        assert "format_version" in loaded_checkpoint
+        assert "data" in loaded_checkpoint
+
+        # Extract actual state from checkpoint
+        loaded_state = loaded_checkpoint["data"]
 
         # Verify loaded state matches
         for key in model.state_dict().keys():
@@ -350,7 +357,7 @@ class TestRealPBT:
         worst_model = models[0]
 
         # Trigger exploitation
-        new_state, new_hp = scheduler.exploit_and_explore(worst_member)
+        new_state, new_hp, _ = scheduler.exploit_and_explore(worst_member)
 
         if new_state is not None:
             # Load exploited weights
@@ -416,7 +423,7 @@ class TestRealCoordinator:
                 # Update performance
                 performance = 1.0 / (1.0 + loss)  # Convert loss to performance
 
-                new_state, new_hp = coordinator.on_member_update_end(
+                new_state, new_hp, _ = coordinator.on_member_update_end(
                     member,
                     performance=performance,
                     step=step,

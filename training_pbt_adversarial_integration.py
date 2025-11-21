@@ -290,7 +290,8 @@ class PBTTrainingCoordinator:
         performance: float,
         step: int,
         model_state_dict: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+        model_parameters: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any], Optional[str]]:
         """Called at the end of each training update for a member.
 
         This method:
@@ -302,32 +303,48 @@ class PBTTrainingCoordinator:
             member: Population member
             performance: Performance metric value
             step: Current training step
-            model_state_dict: Model state dict to save (optional)
+            model_state_dict: DEPRECATED. Model state dict to save (for backward compatibility)
+            model_parameters: Full model parameters including VGS state and optimizer state (preferred).
+                             Should include optimizer_state if optimizer_exploit_strategy='copy'.
 
         Returns:
-            Tuple of (new_model_state_dict, new_hyperparams)
-            new_model_state_dict is None if no PBT step occurred
+            Tuple of (new_model_parameters, new_hyperparams, checkpoint_format)
+            - new_model_parameters: Full model parameters if exploitation occurred, None otherwise
+            - new_hyperparams: Updated hyperparameters
+            - checkpoint_format: "v2_full_parameters", "v1_policy_only", or None
+
+        Note:
+            After receiving new_model_parameters from exploit operation:
+            - If optimizer_exploit_strategy='reset': new_model_parameters will NOT contain 'optimizer_state'
+              → Caller should reset optimizer after loading model weights
+            - If optimizer_exploit_strategy='copy': new_model_parameters will contain 'optimizer_state'
+              → Caller should load optimizer state from new_model_parameters
         """
         # Update performance in PBT scheduler
         if self.pbt_scheduler is not None:
             self.pbt_scheduler.update_performance(
-                member, performance, step, model_state_dict
+                member,
+                performance,
+                step,
+                model_state_dict=model_state_dict,
+                model_parameters=model_parameters,
             )
 
         # Check if should exploit and explore
-        new_state_dict = None
+        new_parameters = None
         new_hyperparams = member.hyperparams
+        checkpoint_format = None
 
         if self.pbt_scheduler is not None and self.pbt_scheduler.should_exploit_and_explore(member):
-            new_state_dict, new_hyperparams, checkpoint_format = self.pbt_scheduler.exploit_and_explore(
-                member, model_state_dict
+            new_parameters, new_hyperparams, checkpoint_format = self.pbt_scheduler.exploit_and_explore(
+                member, model_state_dict=None  # Deprecated parameter, not used
             )
 
         # Notify SA-PPO wrapper
         if member.member_id in self.sa_ppo_wrappers:
             self.sa_ppo_wrappers[member.member_id].on_update_end()
 
-        return new_state_dict, new_hyperparams
+        return new_parameters, new_hyperparams, checkpoint_format
 
     def get_stats(self) -> Dict[str, Any]:
         """Get combined statistics from PBT and SA-PPO.

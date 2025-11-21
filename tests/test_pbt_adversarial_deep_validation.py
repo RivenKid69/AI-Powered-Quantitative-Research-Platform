@@ -258,7 +258,7 @@ class TestErrorHandling:
 
         # Should handle gracefully
         member = population[0]
-        new_state, new_hp = scheduler.exploit_and_explore(member)
+        new_state, new_hp, _ = scheduler.exploit_and_explore(member)
 
 
 class TestNumericalStability:
@@ -417,9 +417,16 @@ class TestStateConsistency:
         assert os.path.exists(member.checkpoint_path)
 
         # Load checkpoint
-        # Security: Use weights_only=True to prevent arbitrary code execution
-        loaded_state = torch.load(member.checkpoint_path, weights_only=True)
+        # Security: weights_only=False needed for dict metadata (format_version)
+        loaded_checkpoint = torch.load(member.checkpoint_path, weights_only=False)
 
+        # Verify new checkpoint format
+        assert "format_version" in loaded_checkpoint
+        assert "data" in loaded_checkpoint
+        assert loaded_checkpoint["format_version"] == "v1_policy_only"  # Using model_state_dict
+
+        # Extract actual state from checkpoint
+        loaded_state = loaded_checkpoint["data"]
         assert "param" in loaded_state
         assert torch.allclose(loaded_state["param"], model_state["param"])
 
@@ -640,7 +647,7 @@ class TestIntegrationRealism:
                 performance = 0.5 + step * 0.01 + i * 0.05 + np.random.random() * 0.1
 
                 # End update
-                new_state, new_hp = coordinator.on_member_update_end(
+                new_state, new_hp, _ = coordinator.on_member_update_end(
                     member,
                     performance=performance,
                     step=step,
