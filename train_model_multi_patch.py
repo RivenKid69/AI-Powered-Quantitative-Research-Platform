@@ -1735,9 +1735,38 @@ def sharpe_ratio(
     *,
     annualization_sqrt: float | None = None,
 ) -> float:
+    """Compute annualized Sharpe ratio with robust handling of small samples.
+
+    Best practices (Bailey & López de Prado, 2012; Sharpe, 1994):
+    - Minimum 30+ observations recommended for stability
+    - For N < 3: Return 0.0 (insufficient degrees of freedom for sample std)
+    - ddof=1: Use sample standard deviation (unbiased estimator)
+
+    Args:
+        returns: Array of returns (e.g., daily PnL / equity)
+        risk_free_rate: Risk-free rate (default: 0.0)
+        annualization_sqrt: Annualization factor (default: sqrt(252) for daily)
+
+    Returns:
+        Annualized Sharpe ratio, or 0.0 if insufficient data
+    """
+    # FIX (2025-11-21): Protect against small samples where ddof=1 produces NaN
+    # For N=1: np.std([x], ddof=1) = NaN (division by zero in variance calculation)
+    # For N=2: std is computed from 1 df (unreliable)
+    # Minimum N=3 ensures at least 2 df for sample variance
+    if len(returns) < 3:
+        return 0.0
+
     ann = _resolve_ann_sqrt(annualization_sqrt)
     std = np.std(returns, ddof=1)
-    return np.mean(returns - risk_free_rate) / (std + 1e-9) * ann
+
+    # FIX (2025-11-21): Check for NaN/Inf after std calculation
+    # np.isfinite() returns False for NaN, +Inf, -Inf
+    # This prevents NaN propagation to Optuna/tensorboard (causes trial failure)
+    if not np.isfinite(std) or std < 1e-9:
+        return 0.0
+
+    return np.mean(returns - risk_free_rate) / std * ann
 
 
 def sortino_ratio(
@@ -1746,32 +1775,55 @@ def sortino_ratio(
     *,
     annualization_sqrt: float | None = None,
 ) -> float:
+    """Compute annualized Sortino ratio with robust handling of small samples.
+
+    Sortino ratio focuses on downside risk (returns below risk-free rate).
+    Falls back to Sharpe ratio when insufficient downside observations.
+
+    Best practices (Sortino & Van Der Meer, 1991):
+    - Minimum 20+ downside observations for stable downside deviation
+    - For N < 3: Return 0.0 (insufficient degrees of freedom)
+    - ddof=1: Use sample standard deviation (unbiased estimator)
+
+    Args:
+        returns: Array of returns (e.g., daily PnL / equity)
+        risk_free_rate: Risk-free rate or minimum acceptable return (default: 0.0)
+        annualization_sqrt: Annualization factor (default: sqrt(252) for daily)
+
+    Returns:
+        Annualized Sortino ratio, or 0.0 if insufficient data
+    """
+    # FIX (2025-11-21): Protect against small samples where ddof=1 produces NaN
+    # Same logic as sharpe_ratio: N < 3 → return 0.0
+    if len(returns) < 3:
+        return 0.0
+
     ann = _resolve_ann_sqrt(annualization_sqrt)
     downside = returns[returns < risk_free_rate] - risk_free_rate
     downside_count = downside.size
+
     if downside_count == 0:
         # Если нет убытков, используем стандартное отклонение (как в Шарпе).
         # Это более адекватно оценивает риск, чем возврат константы.
         std = np.std(returns, ddof=1)
-        # Предотвращаем деление на ноль, если все доходности одинаковы.
-        if std < 1e-9:
+        # FIX (2025-11-21): Add np.isfinite check (defensive programming)
+        if not np.isfinite(std) or std < 1e-9:
             return 0.0
         return np.mean(returns - risk_free_rate) / std * ann
 
     if downside_count < 20:
+        # Недостаточно downside наблюдений → fallback на Sharpe
         std = np.std(returns, ddof=1)
-        if std < 1e-9:
+        # FIX (2025-11-21): Add np.isfinite check
+        if not np.isfinite(std) or std < 1e-9:
             return 0.0
         return np.mean(returns - risk_free_rate) / std * ann
 
+    # Достаточно downside наблюдений → используем downside deviation
     downside_std = np.sqrt(np.mean(downside**2))
 
     # Check for NaN or Inf that could result from numerical issues
-    if not np.isfinite(downside_std):
-        return 0.0
-
-    # Если выборка практически стационарна, возвращаем 0, чтобы не завышать метрику.
-    if downside_std < 1e-9:
+    if not np.isfinite(downside_std) or downside_std < 1e-9:
         return 0.0
 
     # downside_std is guaranteed to be finite and >= 1e-9 here

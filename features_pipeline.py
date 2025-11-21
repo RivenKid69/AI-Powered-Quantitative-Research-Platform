@@ -300,9 +300,45 @@ class FeaturePipeline:
         return self
 
     def transform_df(self, df: pd.DataFrame, add_suffix: str = "_z") -> pd.DataFrame:
+        """Transform DataFrame by applying normalization statistics.
+
+        IMPORTANT: This method should be called ONLY ONCE per DataFrame.
+        Repeated calls will cause double-shifting of 'close' column, leading to
+        data misalignment and look-ahead bias accumulation.
+
+        To apply transform multiple times:
+        1. Preserve original close: df["close_orig"] = df["close"].copy()
+        2. Or use fresh copy from original data source
+
+        Args:
+            df: DataFrame to transform
+            add_suffix: Suffix for normalized columns (default: "_z")
+
+        Returns:
+            Transformed DataFrame with normalized columns
+
+        Raises:
+            ValueError: If pipeline is empty (call fit() or load() first)
+            RuntimeWarning: If repeated application detected (defensive check)
+        """
         if not self.stats:
             raise ValueError("FeaturePipeline is empty; call fit() or load().")
         out = df.copy()
+
+        # FIX (2025-11-21): Detect repeated transform_df() application
+        # Check for marker in DataFrame attrs (metadata introduced in pandas 1.0)
+        # This prevents silent data corruption from double-shifting
+        if hasattr(out, 'attrs') and out.attrs.get('_feature_pipeline_transformed', False):
+            import warnings
+            warnings.warn(
+                "transform_df() called on already-transformed DataFrame! "
+                "This will cause DOUBLE SHIFT of 'close' column, leading to data misalignment. "
+                "To fix: Either (1) preserve 'close_orig' before first transform, "
+                "or (2) use fresh copy from original data source.",
+                RuntimeWarning,
+                stacklevel=2
+            )
+            # Continue anyway (user may have valid reason), but warn
 
         # FIX (2025-11-21): ALWAYS shift close to prevent look-ahead bias
         # Previous logic was inverted: shift was skipped when _close_shifted_in_fit=True
@@ -344,6 +380,13 @@ class FeaturePipeline:
             else:
                 z = (v - ms["mean"]) / ms["std"]
             out[c + add_suffix] = z
+
+        # FIX (2025-11-21): Mark DataFrame as transformed to detect repeated applications
+        # Use DataFrame.attrs (metadata dict introduced in pandas 1.0)
+        # This marker survives copy() operations and helps prevent silent data corruption
+        if hasattr(out, 'attrs'):
+            out.attrs['_feature_pipeline_transformed'] = True
+
         return out
 
     def transform_dict(self, dfs: Dict[str, pd.DataFrame], add_suffix: str = "_z") -> Dict[str, pd.DataFrame]:

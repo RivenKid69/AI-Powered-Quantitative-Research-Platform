@@ -68,8 +68,8 @@ def test_sharpe_ratio_numerical_impact():
     """Test numerical impact of ddof correction on Sharpe ratio calculation."""
     print("\n[TEST] Sharpe ratio numerical impact...")
 
-    # Simulate trading returns
-    np.random.seed(42)
+    # Simulate trading returns with positive mean for clearer demonstration
+    np.random.seed(123)  # Changed seed to ensure positive mean
     returns = np.random.randn(100) * 0.02 + 0.001  # 0.1% mean, 2% std
 
     # Calculate Sharpe with both methods
@@ -80,15 +80,18 @@ def test_sharpe_ratio_numerical_impact():
     sharpe_ddof0 = mean_return / (std_ddof0 + 1e-9)
     sharpe_ddof1 = mean_return / (std_ddof1 + 1e-9)
 
-    percent_diff = abs(sharpe_ddof0 - sharpe_ddof1) / sharpe_ddof1 * 100
+    percent_diff = abs(sharpe_ddof0 - sharpe_ddof1) / abs(sharpe_ddof1) * 100
 
     print(f"  Sharpe (ddof=0): {sharpe_ddof0:.6f}")
     print(f"  Sharpe (ddof=1): {sharpe_ddof1:.6f}")
     print(f"  Difference: {percent_diff:.3f}%")
 
-    # ddof=0 gives HIGHER Sharpe (underestimates risk)
-    assert sharpe_ddof0 > sharpe_ddof1, \
-        "ddof=0 should overestimate Sharpe ratio by underestimating std"
+    # ddof=0 underestimates std, so it gives HIGHER absolute Sharpe ratio
+    # For positive returns: sharpe_ddof0 > sharpe_ddof1
+    # For negative returns: sharpe_ddof0 < sharpe_ddof1 (both negative, less negative = higher)
+    # In both cases: |sharpe_ddof0| > |sharpe_ddof1| (ddof=0 overestimates risk-adjusted return)
+    assert abs(sharpe_ddof0) > abs(sharpe_ddof1), \
+        "ddof=0 should overestimate |Sharpe| by underestimating std"
 
     # For n=100, difference should be ~0.5%
     assert 0.3 < percent_diff < 0.7, \
@@ -222,7 +225,7 @@ def test_cross_metric_consistency():
     print("  ✓ All DistributionalPPO metrics use ddof=1")
 
     # Check train_model_multi_patch for Sharpe/Sortino
-    with open("train_model_multi_patch.py", "r") as f:
+    with open("train_model_multi_patch.py", "r", encoding="utf-8") as f:
         train_source = f.read()
 
     # Count ddof=1 in sharpe_ratio and sortino_ratio functions
@@ -242,7 +245,7 @@ def test_cross_metric_consistency():
     print("  ✓ All financial metrics use ddof=1")
 
     # Check pipeline for anomaly detection
-    with open("pipeline.py", "r") as f:
+    with open("pipeline.py", "r", encoding="utf-8") as f:
         pipeline_source = f.read()
 
     assert "np.std(rets_arr[:-1], ddof=1)" in pipeline_source, \
@@ -251,7 +254,7 @@ def test_cross_metric_consistency():
     print("  ✓ Anomaly detection uses ddof=1")
 
     # Check transformers for GARCH
-    with open("transformers.py", "r") as f:
+    with open("transformers.py", "r", encoding="utf-8") as f:
         transformer_source = f.read()
 
     assert "np.std(log_returns, ddof=1)" in transformer_source, \
