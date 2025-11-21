@@ -109,6 +109,7 @@ class FeaturePipeline:
         metadata: Optional[Dict[str, object]] = None,
         enable_winsorization: bool = True,  # FIX (MEDIUM #3): Winsorization enabled by default
         winsorize_percentiles: Tuple[float, float] = (1.0, 99.0),
+        strict_idempotency: bool = True,  # FIX (2025-11-21): Fail on repeated transform_df()
     ):
         """Container for feature normalization statistics.
 
@@ -126,6 +127,11 @@ class FeaturePipeline:
         winsorize_percentiles:
             Tuple of (lower_percentile, upper_percentile) for winsorization.
             Default: (1.0, 99.0) clips extreme 1% on each tail.
+        strict_idempotency:
+            If True (default), raise ValueError on repeated transform_df() to prevent
+            double-shifting and data corruption. If False, make transform_df() idempotent
+            (return already-transformed DataFrame unchanged).
+            Default: True (strict mode for data integrity)
         """
 
         # stats: {col: {"mean": float, "std": float, "is_constant": bool, "winsorize_bounds": tuple}}
@@ -133,6 +139,7 @@ class FeaturePipeline:
         self.metadata: Dict[str, object] = metadata or {}
         self.enable_winsorization = enable_winsorization
         self.winsorize_percentiles = winsorize_percentiles
+        self.strict_idempotency = strict_idempotency
 
         # FIX (2025-11-21): Removed _close_shifted_in_fit flag - always shift in transform_df()
         # Previous logic was inverted and caused look-ahead bias
@@ -233,20 +240,35 @@ class FeaturePipeline:
         big = pd.concat(shifted_frames, axis=0, ignore_index=True)
         cols = _columns_to_scale(big)
         stats = {}
+        all_nan_columns = []  # FIX (2025-11-21): Track all-NaN columns for warning
+
         for c in cols:
             v = big[c].astype(float).to_numpy()
+
+            # FIX (2025-11-21): Detect all-NaN columns BEFORE winsorization
+            # If column is entirely NaN, np.nanpercentile returns NaN bounds
+            # which leads to silent NaN → 0.0 conversion (semantic ambiguity)
+            is_all_nan = v.size > 0 and np.isnan(v).all()
 
             # FIX (MEDIUM #3): Apply winsorization to mitigate outliers
             # This prevents flash crashes, fat-finger errors, and data anomalies
             # from contaminating normalization statistics (mean, std)
             # FIX (2025-11-21): Store winsorization bounds for consistent application in transform
             winsorize_bounds = None
-            if self.enable_winsorization:
+            if self.enable_winsorization and not is_all_nan:
+                # Only compute bounds if column has at least one non-NaN value
                 lower_bound = np.nanpercentile(v, self.winsorize_percentiles[0])
                 upper_bound = np.nanpercentile(v, self.winsorize_percentiles[1])
-                v_clean = np.clip(v, lower_bound, upper_bound)
-                # Store bounds for transform_df() to apply same clipping
-                winsorize_bounds = (float(lower_bound), float(upper_bound))
+
+                # FIX (2025-11-21): Validate bounds are finite
+                # If bounds are NaN (edge case: very few non-NaN values), skip winsorization
+                if np.isfinite(lower_bound) and np.isfinite(upper_bound):
+                    v_clean = np.clip(v, lower_bound, upper_bound)
+                    winsorize_bounds = (float(lower_bound), float(upper_bound))
+                else:
+                    # Bounds invalid → treat as all-NaN
+                    v_clean = v
+                    is_all_nan = True
             else:
                 v_clean = v
 
@@ -263,11 +285,31 @@ class FeaturePipeline:
                 s = 1.0  # avoid division by zero (will be handled specially in transform)
             if not np.isfinite(m):
                 m = 0.0
+
             stats[c] = {"mean": m, "std": s, "is_constant": is_constant}
 
-            # FIX (2025-11-21): Store winsorization bounds for train/inference consistency
-            if winsorize_bounds is not None:
+            # FIX (2025-11-21): Mark all-NaN columns explicitly
+            # This prevents silent NaN → 0.0 conversion and provides clear semantics
+            if is_all_nan:
+                stats[c]["is_all_nan"] = True
+                all_nan_columns.append(c)
+                # Do NOT store winsorize_bounds for all-NaN columns
+                # This signals to transform_df() to skip winsorization
+            elif winsorize_bounds is not None:
+                # FIX (2025-11-21): Store winsorization bounds for train/inference consistency
                 stats[c]["winsorize_bounds"] = winsorize_bounds
+
+        # FIX (2025-11-21): Warn about all-NaN columns
+        # These columns cannot provide useful information for training
+        # and should be investigated for data quality issues
+        if all_nan_columns:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                f"Found {len(all_nan_columns)} column(s) with ALL NaN values: {all_nan_columns}. "
+                f"These columns will be normalized to NaN (not zeros) to preserve semantic meaning. "
+                f"Consider: (1) Checking data quality, (2) Imputing missing values, or (3) Removing these features."
+            )
 
         intervals_payload: Optional[List[Dict[str, Optional[int]]]] = None
         if train_intervals:
@@ -319,26 +361,42 @@ class FeaturePipeline:
 
         Raises:
             ValueError: If pipeline is empty (call fit() or load() first)
-            RuntimeWarning: If repeated application detected (defensive check)
+            ValueError: If repeated application detected (strict_idempotency=True, default)
         """
         if not self.stats:
             raise ValueError("FeaturePipeline is empty; call fit() or load().")
-        out = df.copy()
 
         # FIX (2025-11-21): Detect repeated transform_df() application
         # Check for marker in DataFrame attrs (metadata introduced in pandas 1.0)
         # This prevents silent data corruption from double-shifting
-        if hasattr(out, 'attrs') and out.attrs.get('_feature_pipeline_transformed', False):
-            import warnings
-            warnings.warn(
-                "transform_df() called on already-transformed DataFrame! "
-                "This will cause DOUBLE SHIFT of 'close' column, leading to data misalignment. "
-                "To fix: Either (1) preserve 'close_orig' before first transform, "
-                "or (2) use fresh copy from original data source.",
-                RuntimeWarning,
-                stacklevel=2
-            )
-            # Continue anyway (user may have valid reason), but warn
+        if hasattr(df, 'attrs') and df.attrs.get('_feature_pipeline_transformed', False):
+            if self.strict_idempotency:
+                # STRICT MODE (default): Fail immediately to prevent data corruption
+                raise ValueError(
+                    "transform_df() called on already-transformed DataFrame! "
+                    "This would cause DOUBLE SHIFT of 'close' column, leading to:\n"
+                    "  1. Data misalignment (close lag = 2 instead of 1)\n"
+                    "  2. Accumulated look-ahead bias (features based on t+1 close)\n"
+                    "  3. Scale mismatch (z-scores applied twice with different stats)\n\n"
+                    "To fix:\n"
+                    "  - Option A: Preserve 'close_orig' before first transform\n"
+                    "  - Option B: Use fresh copy from original data source\n"
+                    "  - Option C: Set strict_idempotency=False for idempotent behavior\n\n"
+                    "This error prevents silent data corruption in training loop."
+                )
+            else:
+                # IDEMPOTENT MODE: Return already-transformed DataFrame unchanged
+                import warnings
+                warnings.warn(
+                    "transform_df() called on already-transformed DataFrame. "
+                    "Returning without changes (idempotent mode). "
+                    "Set strict_idempotency=True to fail immediately and catch errors.",
+                    RuntimeWarning,
+                    stacklevel=2
+                )
+                return df  # Return original (already transformed) without changes
+
+        out = df.copy()
 
         # FIX (2025-11-21): ALWAYS shift close to prevent look-ahead bias
         # Previous logic was inverted: shift was skipped when _close_shifted_in_fit=True
@@ -359,6 +417,17 @@ class FeaturePipeline:
                 # silently skip columns missing in this DF
                 continue
             v = out[c].astype(float).to_numpy()
+
+            # FIX (2025-11-21): Handle all-NaN columns explicitly
+            # If column was all-NaN during training, preserve NaN semantics
+            # (do NOT convert to zeros, as zeros have different meaning)
+            if ms.get("is_all_nan", False):
+                # Column was entirely NaN during training
+                # Keep as NaN to preserve semantic distinction from zero values
+                # Model should handle NaN appropriately (skip, impute, or use validity flags)
+                z = np.full_like(v, np.nan, dtype=float)
+                out[c + add_suffix] = z
+                continue  # Skip winsorization and standardization
 
             # FIX (2025-11-21): Apply winsorization bounds from training for consistency
             # This ensures train/inference distribution match and prevents OOD z-scores
@@ -399,7 +468,16 @@ class FeaturePipeline:
 
     def save(self, path: str) -> None:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        payload = {"stats": self.stats, "metadata": self.metadata}
+        # FIX (2025-11-21): Save configuration flags for reproducibility
+        payload = {
+            "stats": self.stats,
+            "metadata": self.metadata,
+            "config": {
+                "enable_winsorization": self.enable_winsorization,
+                "winsorize_percentiles": self.winsorize_percentiles,
+                "strict_idempotency": self.strict_idempotency,
+            }
+        }
         with open(path, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
 
@@ -410,8 +488,17 @@ class FeaturePipeline:
         if isinstance(payload, dict) and "stats" in payload:
             stats = payload.get("stats", {})
             metadata = payload.get("metadata", {})
+            # FIX (2025-11-21): Load configuration flags if available
+            config = payload.get("config", {})
+            return cls(
+                stats=stats,
+                metadata=metadata,
+                enable_winsorization=config.get("enable_winsorization", True),
+                winsorize_percentiles=tuple(config.get("winsorize_percentiles", [1.0, 99.0])),
+                strict_idempotency=config.get("strict_idempotency", True),
+            )
         else:
             # Backwards compatibility for legacy artifacts containing only stats.
             stats = payload
             metadata = {}
-        return cls(stats=stats, metadata=metadata)
+            return cls(stats=stats, metadata=metadata)
