@@ -2960,7 +2960,7 @@ class DistributionalPPO(RecurrentPPO):
         #
         # OLD formula (MATHEMATICALLY INCORRECT) - LEGACY:
         #   Uses u = predicted - target, which inverts the asymmetry
-        if getattr(self, "_use_fixed_quantile_loss_asymmetry", False):
+        if getattr(self, "_use_fixed_quantile_loss_asymmetry", True):
             delta = targets - predicted_quantiles  # FIXED: T - Q (correct asymmetry)
         else:
             delta = predicted_quantiles - targets  # OLD: Q - T (inverted asymmetry)
