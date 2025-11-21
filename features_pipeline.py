@@ -273,9 +273,13 @@ class FeaturePipeline:
                 v_clean = v
 
             m = float(np.nanmean(v_clean))
-            # FIX: Use sample std (ddof=1) for unbiased estimation of population variance
-            # This aligns with ML best practices (scikit-learn, PyTorch) and statistical theory (Bessel's correction)
-            s = float(np.nanstd(v_clean, ddof=1))
+            # IMPROVEMENT: Use population std (ddof=0) for ML consistency
+            # This aligns with ML frameworks: scikit-learn StandardScaler, PyTorch normalization
+            # use ddof=0 (population std) for feature scaling, not ddof=1 (sample std).
+            # For large datasets (n > 100), difference is negligible: sqrt(n/(n-1)) ≈ 1.005
+            # For consistency with standard ML pipelines, we use ddof=0.
+            # Reference: Pedregosa et al. (2011), "Scikit-learn: Machine Learning in Python"
+            s = float(np.nanstd(v_clean, ddof=0))
 
             # FIX (MEDIUM #4): Store zero variance indicator for proper handling
             # When s == 0 (constant feature), we mark it explicitly so transform can return zeros

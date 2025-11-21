@@ -220,6 +220,20 @@ def _compute_returns_with_time_limits(
     if rewards.ndim != 2 or values.ndim != 2:
         raise ValueError("Rollout buffer must store rewards and values as 2D arrays")
 
+    # CRITICAL FIX: Validate inputs for NaN/inf before GAE computation
+    # NaN/inf in rewards or values would silently corrupt all advantages and returns
+    # Reference: Schulman et al. (2016), "High-Dimensional Continuous Control Using GAE"
+    if not np.all(np.isfinite(rewards)):
+        raise ValueError(
+            f"GAE computation: rewards contain NaN or inf values. "
+            f"Non-finite count: {np.sum(~np.isfinite(rewards))}/{rewards.size}"
+        )
+    if not np.all(np.isfinite(values)):
+        raise ValueError(
+            f"GAE computation: values contain NaN or inf values. "
+            f"Non-finite count: {np.sum(~np.isfinite(values))}/{values.size}"
+        )
+
     buffer_size, n_envs = rewards.shape
     advantages = np.zeros((buffer_size, n_envs), dtype=np.float32)
 
@@ -227,10 +241,24 @@ def _compute_returns_with_time_limits(
     last_values_np = np.asarray(last_values_np, dtype=np.float32).reshape(n_envs)
     dones_float = np.asarray(dones, dtype=np.float32).reshape(n_envs)
 
+    # CRITICAL FIX: Validate last_values and time_limit_bootstrap for NaN/inf
+    if not np.all(np.isfinite(last_values_np)):
+        raise ValueError(
+            f"GAE computation: last_values contain NaN or inf values. "
+            f"Non-finite count: {np.sum(~np.isfinite(last_values_np))}/{last_values_np.size}"
+        )
+
     if time_limit_mask.shape != (buffer_size, n_envs):
         raise ValueError("TimeLimit mask must match rollout buffer dimensions")
     if time_limit_bootstrap.shape != (buffer_size, n_envs):
         raise ValueError("TimeLimit bootstrap values must match rollout buffer dimensions")
+
+    # CRITICAL FIX: Validate time_limit_bootstrap for NaN/inf
+    if not np.all(np.isfinite(time_limit_bootstrap)):
+        raise ValueError(
+            f"GAE computation: time_limit_bootstrap contains NaN or inf values. "
+            f"Non-finite count: {np.sum(~np.isfinite(time_limit_bootstrap))}/{time_limit_bootstrap.size}"
+        )
 
     last_gae_lam = np.zeros(n_envs, dtype=np.float32)
 
@@ -8113,6 +8141,11 @@ class DistributionalPPO(RecurrentPPO):
             self._pending_ret_std = float(pending_std_value)
 
             self._value_target_scale_robust = 1.0
+            # CRITICAL FIX: Align std floor application across target_scale and normalization
+            # Previously: target_scale used (ret_clip * std_floor), but normalization used (std_floor)
+            # This asymmetry created inconsistent scaling behavior
+            # Now: Both use the same denominator formula for consistency
+            # Reference: Andrychowicz et al. (2021), "What Matters In On-Policy RL"
             denom = max(
                 self.ret_clip * ret_std_value,
                 self.ret_clip * self._value_scale_std_floor,
@@ -8127,8 +8160,12 @@ class DistributionalPPO(RecurrentPPO):
 
             returns_norm_unclipped = torch.empty_like(returns_raw_tensor)
             if returns_raw_tensor.numel() > 0:
-                # Use max to avoid very small denominators that cause numerical instability
-                denom_norm = max(ret_std_value, self._value_scale_std_floor)
+                # CRITICAL FIX: Use consistent denominator with target_scale computation above
+                # Both must apply ret_clip multiplier to std_floor for consistency
+                denom_norm = max(
+                    self.ret_clip * ret_std_value,
+                    self.ret_clip * self._value_scale_std_floor,
+                )
                 returns_norm_unclipped = (returns_raw_tensor - ret_mu_value) / denom_norm
 
             target_v_min = -float(self.ret_clip)
@@ -8176,10 +8213,15 @@ class DistributionalPPO(RecurrentPPO):
             base_scale = float(self.value_target_scale)
             effective_scale = float(self._value_target_scale_effective)
             robust_scale_value = float(self._value_target_scale_robust)
-            if not math.isfinite(effective_scale) or effective_scale <= 0.0:
+            # CRITICAL FIX: Strengthen validation threshold from <= 0.0 to < 1e-3
+            # Values like 1e-9 would pass the old check but cause massive numerical instability
+            # when used as divisor in normalization: returns / 1e-9 = huge explosion
+            # Reference: Nocedal & Wright (2006), "Numerical Optimization", Section 3.5
+            if not math.isfinite(effective_scale) or effective_scale < 1e-3:
                 effective_scale = float(min(max(base_scale, 1e-3), 1e3))
                 self._value_target_scale_effective = effective_scale
-            if not math.isfinite(robust_scale_value) or robust_scale_value <= 0.0:
+            # CRITICAL FIX: Strengthen validation threshold for robust_scale_value
+            if not math.isfinite(robust_scale_value) or robust_scale_value < 1e-3:
                 robust_scale_value = 1.0
                 self._value_target_scale_robust = robust_scale_value
             if self._value_clip_limit_unscaled is not None:
@@ -10496,6 +10538,16 @@ class DistributionalPPO(RecurrentPPO):
                         # Use torch.tensor() with explicit device/dtype for clarity (both approaches work)
                         lambda_tensor = torch.tensor(lambda_scaled, device=loss.device, dtype=loss.dtype)
                         constraint_term = lambda_tensor * predicted_cvar_violation_unit
+
+                        # CRITICAL FIX: Add clipping to constraint_term to prevent explosion
+                        # If CVaR violation is very large, constraint_term can explode
+                        # Use the same cap as cvar_term for consistency
+                        # Reference: Boyd & Vandenberghe (2004), "Convex Optimization", Section 5.5
+                        if self.cvar_cap is not None:
+                            constraint_term = torch.clamp(
+                                constraint_term, min=-self.cvar_cap, max=self.cvar_cap
+                            )
+
                         loss = loss + constraint_term
                     else:
                         predicted_cvar_violation_unit = cvar_raw.new_tensor(0.0)
