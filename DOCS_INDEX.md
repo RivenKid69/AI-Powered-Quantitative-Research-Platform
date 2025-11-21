@@ -74,7 +74,7 @@
 ### Essential Documents
 - [README.md](README.md) - Project overview and quick start
 - [ARCHITECTURE.md](ARCHITECTURE.md) - System architecture and design principles
-- [CLAUDE.md](CLAUDE.md) - Complete project documentation (Russian) ⭐ **Updated with critical fixes**
+- [CLAUDE.md](CLAUDE.md) - Complete project documentation (Russian) ⭐ **Master reference**
 - [CONTRIBUTING.md](CONTRIBUTING.md) - Contribution guidelines
 - [CHANGELOG.md](CHANGELOG.md) - Version history and changes ⭐ **Updated with bugs #10-12**
 - [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md) - Build and compilation instructions
@@ -82,6 +82,8 @@
 ### Quick References
 - [QUICK_START_REFERENCE.md](QUICK_START_REFERENCE.md) - Quick start guide
 - [FILE_REFERENCE.md](FILE_REFERENCE.md) - File organization reference
+- [AI_ASSISTANT_QUICK_GUIDE.md](AI_ASSISTANT_QUICK_GUIDE.md) - ⭐ **NEW** Quick guide for AI assistants
+- [DOCUMENTATION_MAINTENANCE_GUIDE.md](DOCUMENTATION_MAINTENANCE_GUIDE.md) - ⭐ **NEW** How to maintain documentation
 
 ## 📖 Technical Documentation (docs/)
 
@@ -413,12 +415,14 @@
 
 ## 📍 Navigation Tips
 
-1. **Looking for a specific feature?** → Check [Feature & Component Reports](#️-feature--component-reports-docsreportsfeatures)
-2. **Found a bug?** → Check [Bug Reports](#-bug-reports--fixes-docsreportsbugs)
-3. **Need to verify a fix?** → Check [Test & Verification Reports](#-test--verification-reports-docsreportstests)
-4. **Understanding architecture?** → Start with [ARCHITECTURE.md](ARCHITECTURE.md)
-5. **Quick start?** → See [QUICK_START_REFERENCE.md](QUICK_START_REFERENCE.md)
-6. **Russian documentation?** → See [CLAUDE.md](CLAUDE.md)
+1. **New to the project?** → Start with [AI_ASSISTANT_QUICK_GUIDE.md](AI_ASSISTANT_QUICK_GUIDE.md) ⭐ **NEW**
+2. **Looking for a specific feature?** → Check [Feature & Component Reports](#️-feature--component-reports-docsreportsfeatures)
+3. **Found a bug?** → Check [Bug Reports](#-bug-reports--fixes-docsreportsbugs)
+4. **Need to verify a fix?** → Check [Test & Verification Reports](#-test--verification-reports-docsreportstests)
+5. **Understanding architecture?** → Start with [ARCHITECTURE.md](ARCHITECTURE.md)
+6. **Quick start?** → See [QUICK_START_REFERENCE.md](QUICK_START_REFERENCE.md)
+7. **Russian documentation?** → See [CLAUDE.md](CLAUDE.md) (Master reference)
+8. **Maintaining documentation?** → See [DOCUMENTATION_MAINTENANCE_GUIDE.md](DOCUMENTATION_MAINTENANCE_GUIDE.md) ⭐ **NEW**
 
 ## 🔄 Maintenance
 
@@ -428,6 +432,12 @@ This index should be updated when:
 - Major features are added/removed
 - Bug fixes are completed
 
+**Maintenance Guide**: See [DOCUMENTATION_MAINTENANCE_GUIDE.md](DOCUMENTATION_MAINTENANCE_GUIDE.md) for detailed instructions.
+
 **Last Updated:** 2025-11-22
 **Maintained by:** Claude Code
 **Status:** ✅ Up to date (Version 2.1) - **Twin Critics VF Clipping VERIFIED** ✅
+
+**New Guides** (2025-11-22):
+- [AI_ASSISTANT_QUICK_GUIDE.md](AI_ASSISTANT_QUICK_GUIDE.md) - Quick reference for AI assistants
+- [DOCUMENTATION_MAINTENANCE_GUIDE.md](DOCUMENTATION_MAINTENANCE_GUIDE.md) - How to maintain documentation
