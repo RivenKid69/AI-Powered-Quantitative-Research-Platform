@@ -218,6 +218,8 @@ cdef void build_observation_vector_c(
     int max_num_tokens,
     int num_tokens,
     float[::1] norm_cols_values,
+    unsigned char[::1] norm_cols_validity,
+    bint enable_validity_flags,
     float[::1] out_features
 ) noexcept nogil:
     """Populate ``out_features`` with the observation vector without acquiring the GIL."""
@@ -577,9 +579,9 @@ cdef void build_observation_vector_c(
 
     # --- External normalised columns --------------------------------------
     # Process 21 external features (cvd, garch, yang_zhang, returns, taker_buy_ratio, etc.)
-    # ISSUE #2: These features lack validity flags, so NaN→0.0 conversion in _clipf()
-    # creates ambiguity (missing data looks like zero). This is current design to prevent
-    # NaN propagation. Future: add validity flags similar to ma5_valid, rsi_valid.
+    # ISSUE #2 FIX (Phase 2 - COMPLETE): Now write validity flags to observation vector
+    # to enable model to distinguish missing data (NaN) from zero values.
+    # Validity flags are written AFTER token metadata (following FEATURES_LAYOUT order).
     for i in range(norm_cols_values.shape[0]):
         # Apply tanh normalization first, then clip to safe range
         # Note: _clipf converts NaN→0.0 (see ISSUE #2 in _clipf docstring)
@@ -609,6 +611,15 @@ cdef void build_observation_vector_c(
             out_features[feature_idx + token_id] = 1.0
 
         feature_idx += padded_tokens
+
+    # --- External validity flags (NEW - Phase 2 of ISSUE #2 fix) ----------
+    # Write validity flags for external features to enable model to distinguish
+    # missing data (NaN) from zero values. This eliminates semantic ambiguity.
+    # Position: After token metadata block (indices 63-83 for 21 external features)
+    if enable_validity_flags:
+        for i in range(norm_cols_values.shape[0]):
+            out_features[feature_idx] = 1.0 if norm_cols_validity[i] else 0.0
+            feature_idx += 1
 
 
 cpdef void build_observation_vector(
@@ -642,6 +653,8 @@ cpdef void build_observation_vector(
     int max_num_tokens,
     int num_tokens,
     float[::1] norm_cols_values,
+    unsigned char[::1] norm_cols_validity,
+    bint enable_validity_flags,
     float[::1] out_features
 ):
     """
@@ -716,5 +729,7 @@ cpdef void build_observation_vector(
         max_num_tokens,
         num_tokens,
         norm_cols_values,
+        norm_cols_validity,
+        enable_validity_flags,
         out_features,
     )

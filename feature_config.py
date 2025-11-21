@@ -144,6 +144,19 @@ def make_layout(obs_params=None):
             "bias": 0.0,
             "source": "external"
         })
+    # External validity flags block (NEW - Phase 2 of ISSUE #2 fix)
+    # One validity flag per external feature to distinguish missing data (NaN) from zero values
+    if ext_dim and ext_dim > 0:
+        layout.append({
+            "name": "external_validity",
+            "size": ext_dim,
+            "dtype": "float32",
+            "clip": None,
+            "scale": 1.0,
+            "bias": 0.0,
+            "source": "external",
+            "description": "Validity flags for external features (1.0=valid, 0.0=NaN/missing)"
+        })
     # Token metadata block (num_tokens_norm, token_id_norm)
     if max_tokens > 0:
         layout.append({

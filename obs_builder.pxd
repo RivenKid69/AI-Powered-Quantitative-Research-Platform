@@ -33,6 +33,8 @@ cdef void build_observation_vector_c(
     int max_num_tokens,
     int num_tokens,
     float[::1] norm_cols_values,
+    unsigned char[::1] norm_cols_validity,
+    bint enable_validity_flags,
     float[::1] out_features
 ) noexcept nogil
 
@@ -67,5 +69,7 @@ cpdef void build_observation_vector(
     int max_num_tokens,
     int num_tokens,
     float[::1] norm_cols_values,
+    unsigned char[::1] norm_cols_validity,
+    bint enable_validity_flags,
     float[::1] out_features
 )

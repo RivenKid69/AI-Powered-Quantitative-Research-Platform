@@ -55,6 +55,7 @@ def _compute_n_features() -> int:
     cdef int max_tokens = 1      # максимальное число токенов (подгоните при необходимости)
     cdef int num_tokens = 1
     norm_cols = np.zeros(21, dtype=np.float32)  # 21 external columns for 4h timeframe (see mediator.py:1018-1051 for full list)
+    norm_cols_validity = np.ones(21, dtype=np.uint8)  # All valid by default for feature counting
     # выделяем буфер заведомо большей длины
     buf = np.empty(256, dtype=np.float32)
     buf.fill(np.nan)
@@ -72,6 +73,8 @@ def _compute_n_features() -> int:
         0, max_tokens,  # token_id, max_num_tokens
         num_tokens,
         norm_cols,
+        norm_cols_validity,  # NEW - Phase 2 of ISSUE #2 fix
+        True,  # enable_validity_flags=True
         buf
     )
     # определяем индекс последнего заполненного элемента

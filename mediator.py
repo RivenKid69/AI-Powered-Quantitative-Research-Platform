@@ -1074,6 +1074,79 @@ class Mediator:
                 logger.debug(f"Feature '{col}' extraction failed: {e}, using default={default}")
             return default
 
+    @staticmethod
+    def _get_safe_float_with_validity(
+        row: Any,
+        col: str,
+        default: float = 0.0,
+        min_value: float = None,
+        max_value: float = None
+    ) -> tuple[float, bool]:
+        """
+        Safely extract float value with explicit validity flag.
+
+        ISSUE #2 FIX (COMPLETE): This method replaces silent NaN→default conversion
+        with explicit validity tracking, enabling model to distinguish missing data
+        from zero values.
+
+        Args:
+            row: Data row to extract from
+            col: Column name
+            default: Default value if extraction fails or value is NaN/Inf
+            min_value: Minimum allowed value (inclusive). If result < min_value, returns (default, False)
+            max_value: Maximum allowed value (inclusive). If result > max_value, returns (default, False)
+
+        Returns:
+            (value, is_valid) tuple where:
+            - value: Extracted float or default if invalid/out of range
+            - is_valid: True if original value was finite and within range, False otherwise
+
+        Validates:
+        - Not None → is_valid=False
+        - Can convert to float → is_valid=False if fails
+        - Is finite (not NaN/Inf) → is_valid=False if not finite
+        - Within [min_value, max_value] range → is_valid=False if out of range
+
+        Design Note (Issue #2 COMPLETE FIX):
+            Unlike _get_safe_float() which silently converts NaN→default, this method
+            returns explicit validity flag. This enables:
+            1. Model can learn to distinguish "missing data" (is_valid=False) from "zero value" (is_valid=True, value=0.0)
+            2. Robustness to data quality issues (API downtime, stale data, etc.)
+            3. Consistent with technical indicators (ma5_valid, rsi_valid, etc.)
+
+        Examples:
+        - volume, is_valid = _get_safe_float_with_validity(row, "volume", 1.0, min_value=0.0)
+        - price, is_valid = _get_safe_float_with_validity(row, "price", 50000.0, min_value=0.01, max_value=1e9)
+        - cvd, is_valid = _get_safe_float_with_validity(row, "cvd_24h", 0.0)
+          # is_valid=True: cvd=0.0 means balanced volume
+          # is_valid=False: cvd=0.0 means missing data
+        """
+        if row is None:
+            return (default, False)
+
+        try:
+            val = row.get(col) if hasattr(row, "get") else getattr(row, col, None)
+            if val is None:
+                return (default, False)
+
+            result = float(val)
+
+            # Check finite (NaN/Inf → invalid)
+            if not math.isfinite(result):
+                return (default, False)
+
+            # Range validation
+            if min_value is not None and result < min_value:
+                return (default, False)
+            if max_value is not None and result > max_value:
+                return (default, False)
+
+            # All checks passed - value is valid!
+            return (result, True)
+
+        except (TypeError, ValueError, KeyError, AttributeError):
+            return (default, False)
+
     def _extract_market_data(self, row: Any, state: Any, mark_price: float, prev_price: float) -> Dict[str, float]:
         """
         Extract basic market data from row.
@@ -1172,8 +1245,11 @@ class Mediator:
             "bb_upper": bb_upper,
         }
 
-    def _extract_norm_cols(self, row: Any) -> np.ndarray:
-        """Extract normalized columns for external features (cvd, garch, yang_zhang, etc.).
+    def _extract_norm_cols(self, row: Any) -> tuple[np.ndarray, np.ndarray]:
+        """Extract normalized columns for external features WITH validity flags.
+
+        ISSUE #2 FIX (COMPLETE): Now returns (values, validity) tuple to enable
+        model to distinguish missing data from zero values.
 
         Adapted for 4h timeframe:
         - GARCH windows: 200h/14d/30d (50/84/180 bars) instead of 500m/12h/24h
@@ -1187,44 +1263,49 @@ class Mediator:
         - Генерируется ret_7d, но используется только ret_4h, ret_12h, ret_24h
         - Причина: баланс между гибкостью генерации и компактностью observation
         - Это стандартная практика (sklearn fit на всех признаках, predict на подмножестве)
+
+        Returns:
+            values: (21,) float32 array - feature values (NaN→0.0 fallback)
+            validity: (21,) bool array - True if feature was valid, False if NaN/Inf/None
         """
-        norm_cols = np.zeros(21, dtype=np.float32)
+        norm_cols_values = np.zeros(21, dtype=np.float32)
+        norm_cols_validity = np.ones(21, dtype=bool)  # Assume valid by default
 
         # Map technical indicators from prepare_and_run.py to norm_cols
         # Original 8 features (adapted for 4h)
-        norm_cols[0] = self._get_safe_float(row, "cvd_24h", 0.0)
-        norm_cols[1] = self._get_safe_float(row, "cvd_7d", 0.0)  # 10080 минут = 7 дней
-        norm_cols[2] = self._get_safe_float(row, "yang_zhang_48h", 0.0)  # 12 bars = 48h
-        norm_cols[3] = self._get_safe_float(row, "yang_zhang_7d", 0.0)  # 10080 минут = 7 дней
-        norm_cols[4] = self._get_safe_float(row, "garch_200h", 0.0)  # 50 bars = 12000 min = 200h (минимум для GARCH на 4h)
-        norm_cols[5] = self._get_safe_float(row, "garch_14d", 0.0)  # 84 bars = 14 days
-        norm_cols[6] = self._get_safe_float(row, "ret_12h", 0.0)  # 3 bars
-        norm_cols[7] = self._get_safe_float(row, "ret_24h", 0.0)  # 6 bars
+        norm_cols_values[0], norm_cols_validity[0] = self._get_safe_float_with_validity(row, "cvd_24h", 0.0)
+        norm_cols_values[1], norm_cols_validity[1] = self._get_safe_float_with_validity(row, "cvd_7d", 0.0)  # 10080 минут = 7 дней
+        norm_cols_values[2], norm_cols_validity[2] = self._get_safe_float_with_validity(row, "yang_zhang_48h", 0.0)  # 12 bars = 48h
+        norm_cols_values[3], norm_cols_validity[3] = self._get_safe_float_with_validity(row, "yang_zhang_7d", 0.0)  # 10080 минут = 7 дней
+        norm_cols_values[4], norm_cols_validity[4] = self._get_safe_float_with_validity(row, "garch_200h", 0.0)  # 50 bars = 12000 min = 200h (минимум для GARCH на 4h)
+        norm_cols_values[5], norm_cols_validity[5] = self._get_safe_float_with_validity(row, "garch_14d", 0.0)  # 84 bars = 14 days
+        norm_cols_values[6], norm_cols_validity[6] = self._get_safe_float_with_validity(row, "ret_12h", 0.0)  # 3 bars
+        norm_cols_values[7], norm_cols_validity[7] = self._get_safe_float_with_validity(row, "ret_24h", 0.0)  # 6 bars
 
         # Additional 8 features for complete coverage (43 -> 51) - adapted for 4h
-        norm_cols[8] = self._get_safe_float(row, "ret_4h", 0.0)  # 1 bar
-        norm_cols[9] = self._get_safe_float(row, "sma_12000", 0.0)  # 50 bars = 12000 минут = 200h
-        norm_cols[10] = self._get_safe_float(row, "yang_zhang_30d", 0.0)  # 43200 минут = 30 дней
-        norm_cols[11] = self._get_safe_float(row, "parkinson_48h", 0.0)  # 12 bars = 48h
-        norm_cols[12] = self._get_safe_float(row, "parkinson_7d", 0.0)  # 10080 минут = 7 дней
-        norm_cols[13] = self._get_safe_float(row, "garch_30d", 0.0)  # 180 bars = 30 days
-        norm_cols[14] = self._get_safe_float(row, "taker_buy_ratio", 0.0)
-        norm_cols[15] = self._get_safe_float(row, "taker_buy_ratio_sma_24h", 0.0)  # 6 bars
+        norm_cols_values[8], norm_cols_validity[8] = self._get_safe_float_with_validity(row, "ret_4h", 0.0)  # 1 bar
+        norm_cols_values[9], norm_cols_validity[9] = self._get_safe_float_with_validity(row, "sma_12000", 0.0)  # 50 bars = 12000 минут = 200h
+        norm_cols_values[10], norm_cols_validity[10] = self._get_safe_float_with_validity(row, "yang_zhang_30d", 0.0)  # 43200 минут = 30 дней
+        norm_cols_values[11], norm_cols_validity[11] = self._get_safe_float_with_validity(row, "parkinson_48h", 0.0)  # 12 bars = 48h
+        norm_cols_values[12], norm_cols_validity[12] = self._get_safe_float_with_validity(row, "parkinson_7d", 0.0)  # 10080 минут = 7 дней
+        norm_cols_values[13], norm_cols_validity[13] = self._get_safe_float_with_validity(row, "garch_30d", 0.0)  # 180 bars = 30 days
+        norm_cols_values[14], norm_cols_validity[14] = self._get_safe_float_with_validity(row, "taker_buy_ratio", 0.0)
+        norm_cols_values[15], norm_cols_validity[15] = self._get_safe_float_with_validity(row, "taker_buy_ratio_sma_24h", 0.0)  # 6 bars
 
         # Additional 5 features for complete taker_buy_ratio coverage
         # Note: This brings norm_cols from 16 to 21 (not related to observation size 56->62)
-        norm_cols[16] = self._get_safe_float(row, "taker_buy_ratio_sma_8h", 0.0)  # 2 bars
-        norm_cols[17] = self._get_safe_float(row, "taker_buy_ratio_sma_16h", 0.0)  # 4 bars
-        norm_cols[18] = self._get_safe_float(row, "taker_buy_ratio_momentum_4h", 0.0)  # 1 bar
-        norm_cols[19] = self._get_safe_float(row, "taker_buy_ratio_momentum_8h", 0.0)  # 2 bars
-        norm_cols[20] = self._get_safe_float(row, "taker_buy_ratio_momentum_12h", 0.0)  # 3 bars
+        norm_cols_values[16], norm_cols_validity[16] = self._get_safe_float_with_validity(row, "taker_buy_ratio_sma_8h", 0.0)  # 2 bars
+        norm_cols_values[17], norm_cols_validity[17] = self._get_safe_float_with_validity(row, "taker_buy_ratio_sma_16h", 0.0)  # 4 bars
+        norm_cols_values[18], norm_cols_validity[18] = self._get_safe_float_with_validity(row, "taker_buy_ratio_momentum_4h", 0.0)  # 1 bar
+        norm_cols_values[19], norm_cols_validity[19] = self._get_safe_float_with_validity(row, "taker_buy_ratio_momentum_8h", 0.0)  # 2 bars
+        norm_cols_values[20], norm_cols_validity[20] = self._get_safe_float_with_validity(row, "taker_buy_ratio_momentum_12h", 0.0)  # 3 bars
         # NOTE: taker_buy_ratio_momentum_24h генерируется transformers.py, но НЕ используется
         # в observation для компактности (21 external признаков вместо 22)
 
         # NOTE: Normalization (tanh, clip) is applied in obs_builder.pyx when available.
         # In legacy fallback mode (when obs_builder is not available), normalization
         # is applied in the fallback path to ensure consistent behavior.
-        return norm_cols
+        return norm_cols_values, norm_cols_validity
 
     def _build_observation(self, *, row: Any | None, state: Any, mark_price: float) -> np.ndarray:
         """Build observation vector using obs_builder infrastructure with technical indicators."""
@@ -1303,8 +1384,10 @@ class Mediator:
         sim = getattr(env, "sim", None)
         indicators = self._extract_technical_indicators(row, sim, row_idx or 0)
 
-        # Extract normalized columns (cvd, garch, yang_zhang, etc.)
-        norm_cols_values = self._extract_norm_cols(row)
+        # Extract normalized columns WITH validity tracking (Issue #2 FIX - Phase 2 COMPLETE)
+        norm_cols_values, norm_cols_validity = self._extract_norm_cols(row)
+        # Convert validity to uint8 array for Cython (unsigned char[::1] in obs_builder.pyx)
+        norm_cols_validity_uint8 = norm_cols_validity.astype(np.uint8)
 
         # Get state values
         units = self._coerce_finite(getattr(state, "units", 0.0), default=0.0)
@@ -1333,6 +1416,8 @@ class Mediator:
         num_tokens = 1
 
         # Call obs_builder to construct observation vector
+        # Phase 2 of ISSUE #2 fix: Now passing validity flags to enable model
+        # to distinguish missing data (NaN) from zero values
         try:
             build_observation_vector(
                 float(market_data["price"]),
@@ -1365,6 +1450,8 @@ class Mediator:
                 int(max_num_tokens),
                 int(num_tokens),
                 norm_cols_values,
+                norm_cols_validity_uint8,
+                True,  # enable_validity_flags=True (hardcoded for Phase 2)
                 obs,
             )
         except Exception as e:
