@@ -1,7 +1,7 @@
 """
-INTEGRATION TEST: Test actual DistributionalPPO implementation
+INTEGRATION TEST: Test actual DistributionalPPO _quantile_huber_loss implementation
 
-This test validates the VF clipping fix in the actual DistributionalPPO code.
+This test validates the VF clipping fix by testing the _quantile_huber_loss method directly.
 Uses minimal mocking to test real code paths.
 """
 
@@ -13,49 +13,102 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import torch
 import numpy as np
-from unittest.mock import MagicMock, patch
+import pytest
 
 
-def test_quantile_huber_loss_reduction_parameter():
-    """Test that _quantile_huber_loss supports reduction parameter."""
-    print("\n" + "="*70)
-    print("INTEGRATION TEST: _quantile_huber_loss reduction parameter")
-    print("="*70)
+class TestQuantileHuberLoss:
+    """Test suite for _quantile_huber_loss method with reduction parameter."""
 
-    from distributional_ppo import DistributionalPPO
+    @pytest.fixture
+    def setup_method_vars(self):
+        """Setup test fixtures."""
+        from distributional_ppo import DistributionalPPO
 
-    # Create minimal PPO instance with mocked dependencies
-    policy = MagicMock()
-    policy.atoms = None
-    policy._value_type = "quantile"
+        # Create a partial instance just for testing the method
+        class PartialPPO:
+            def __init__(self):
+                self._quantile_huber_kappa = 1.0
+                self.num_quantiles = 5
+                self._quantile_levels = torch.linspace(0.1, 0.9, self.num_quantiles)
 
-    ppo = DistributionalPPO(policy=policy, env=None, verbose=0)
-    ppo._quantile_huber_kappa = 1.0
+            def _quantile_levels_tensor(self, device=None):
+                """Return quantile levels tensor (optionally on specific device)."""
+                if device is not None:
+                    return self._quantile_levels.to(device)
+                return self._quantile_levels
 
-    # Mock quantile levels
-    num_quantiles = 5
-    batch_size = 4
-    quantile_levels = torch.linspace(0.1, 0.9, num_quantiles)
+            # Copy the actual method from DistributionalPPO
+            _quantile_huber_loss = DistributionalPPO._quantile_huber_loss
 
-    with patch.object(ppo, '_quantile_levels_tensor', return_value=quantile_levels):
+        return PartialPPO()
+
+    def test_reduction_none(self, setup_method_vars):
+        """Test reduction='none' returns per-sample losses."""
+        ppo = setup_method_vars
+
+        batch_size = 4
+        num_quantiles = 5
+
         predicted = torch.randn(batch_size, num_quantiles, requires_grad=True)
         targets = torch.randn(batch_size, 1)
 
-        # Test all reduction modes
+        loss = ppo._quantile_huber_loss(predicted, targets, reduction='none')
+
+        assert loss.shape == (batch_size,), \
+            f"reduction='none' should return [{batch_size}], got {loss.shape}"
+        assert torch.all(torch.isfinite(loss)), "All losses should be finite"
+        print(f"✓ reduction='none' shape: {loss.shape}")
+        print(f"✓ loss values: {loss.tolist()}")
+
+    def test_reduction_mean(self, setup_method_vars):
+        """Test reduction='mean' returns scalar."""
+        ppo = setup_method_vars
+
+        batch_size = 4
+        num_quantiles = 5
+
+        predicted = torch.randn(batch_size, num_quantiles, requires_grad=True)
+        targets = torch.randn(batch_size, 1)
+
+        loss = ppo._quantile_huber_loss(predicted, targets, reduction='mean')
+
+        assert loss.shape == (), \
+            f"reduction='mean' should return scalar, got {loss.shape}"
+        assert torch.isfinite(loss), "Loss should be finite"
+        print(f"✓ reduction='mean' shape: {loss.shape}")
+        print(f"✓ loss value: {loss.item():.6f}")
+
+    def test_reduction_sum(self, setup_method_vars):
+        """Test reduction='sum' returns scalar."""
+        ppo = setup_method_vars
+
+        batch_size = 4
+        num_quantiles = 5
+
+        predicted = torch.randn(batch_size, num_quantiles, requires_grad=True)
+        targets = torch.randn(batch_size, 1)
+
+        loss = ppo._quantile_huber_loss(predicted, targets, reduction='sum')
+
+        assert loss.shape == (), \
+            f"reduction='sum' should return scalar, got {loss.shape}"
+        assert torch.isfinite(loss), "Loss should be finite"
+        print(f"✓ reduction='sum' shape: {loss.shape}")
+        print(f"✓ loss value: {loss.item():.6f}")
+
+    def test_reduction_relationships(self, setup_method_vars):
+        """Test mathematical relationships between reduction modes."""
+        ppo = setup_method_vars
+
+        batch_size = 4
+        num_quantiles = 5
+
+        predicted = torch.randn(batch_size, num_quantiles, requires_grad=True)
+        targets = torch.randn(batch_size, 1)
+
         loss_none = ppo._quantile_huber_loss(predicted, targets, reduction='none')
         loss_mean = ppo._quantile_huber_loss(predicted, targets, reduction='mean')
         loss_sum = ppo._quantile_huber_loss(predicted, targets, reduction='sum')
-
-        print(f"✓ reduction='none' shape: {loss_none.shape} (expected: ({batch_size},))")
-        print(f"✓ reduction='mean' shape: {loss_mean.shape} (expected: ())")
-        print(f"✓ reduction='sum' shape: {loss_sum.shape} (expected: ())")
-
-        assert loss_none.shape == (batch_size,), \
-            f"reduction='none' should return [{batch_size}], got {loss_none.shape}"
-        assert loss_mean.shape == (), \
-            f"reduction='mean' should return scalar, got {loss_mean.shape}"
-        assert loss_sum.shape == (), \
-            f"reduction='sum' should return scalar, got {loss_sum.shape}"
 
         # Verify mathematical relationships
         assert torch.allclose(loss_mean, loss_none.mean(), atol=1e-6), \
@@ -63,69 +116,18 @@ def test_quantile_huber_loss_reduction_parameter():
         assert torch.allclose(loss_sum, loss_none.sum(), atol=1e-6), \
             "reduction='sum' should equal sum of reduction='none'"
 
-        print(f"✓ loss_none values: {loss_none.tolist()}")
-        print(f"✓ loss_mean value: {loss_mean.item():.6f}")
-        print(f"✓ loss_sum value: {loss_sum.item():.6f}")
+        print(f"✓ mean relationship verified: {loss_mean.item():.6f} == {loss_none.mean().item():.6f}")
+        print(f"✓ sum relationship verified: {loss_sum.item():.6f} == {loss_none.sum().item():.6f}")
 
-        # Test gradients
-        loss_mean.backward()
-        assert predicted.grad is not None, "Gradients should exist"
-        assert torch.all(torch.isfinite(predicted.grad)), "Gradients should be finite"
+    def test_backward_compatibility_default_mean(self, setup_method_vars):
+        """Test backward compatibility - default reduction='mean'."""
+        ppo = setup_method_vars
 
-        print(f"✓ Gradient norm: {predicted.grad.norm().item():.6f}")
-        print("✅ PASS: _quantile_huber_loss reduction parameter works correctly")
+        batch_size = 4
+        num_quantiles = 5
 
-    return True
-
-
-def test_invalid_reduction_raises_error():
-    """Test that invalid reduction mode raises ValueError."""
-    print("\n" + "="*70)
-    print("INTEGRATION TEST: Invalid reduction error handling")
-    print("="*70)
-
-    from distributional_ppo import DistributionalPPO
-
-    policy = MagicMock()
-    policy.atoms = None
-    ppo = DistributionalPPO(policy=policy, env=None, verbose=0)
-    ppo._quantile_huber_kappa = 1.0
-
-    quantile_levels = torch.linspace(0.1, 0.9, 5)
-
-    with patch.object(ppo, '_quantile_levels_tensor', return_value=quantile_levels):
-        predicted = torch.randn(3, 5)
-        targets = torch.randn(3, 1)
-
-        try:
-            ppo._quantile_huber_loss(predicted, targets, reduction='invalid')
-            assert False, "Should have raised ValueError"
-        except ValueError as e:
-            assert "Invalid reduction mode" in str(e)
-            print(f"✓ Correctly raised ValueError: {e}")
-
-    print("✅ PASS: Invalid reduction handled correctly")
-    return True
-
-
-def test_backward_compatibility():
-    """Test backward compatibility - default reduction='mean'."""
-    print("\n" + "="*70)
-    print("INTEGRATION TEST: Backward compatibility")
-    print("="*70)
-
-    from distributional_ppo import DistributionalPPO
-
-    policy = MagicMock()
-    policy.atoms = None
-    ppo = DistributionalPPO(policy=policy, env=None, verbose=0)
-    ppo._quantile_huber_kappa = 1.0
-
-    quantile_levels = torch.linspace(0.1, 0.9, 5)
-
-    with patch.object(ppo, '_quantile_levels_tensor', return_value=quantile_levels):
-        predicted = torch.randn(4, 5)
-        targets = torch.randn(4, 1)
+        predicted = torch.randn(batch_size, num_quantiles)
+        targets = torch.randn(batch_size, 1)
 
         # Call without specifying reduction (should default to 'mean')
         loss_default = ppo._quantile_huber_loss(predicted, targets)
@@ -135,39 +137,75 @@ def test_backward_compatibility():
 
         assert torch.allclose(loss_default, loss_explicit), \
             "Default should equal explicit reduction='mean'"
-
         assert loss_default.shape == (), "Default should return scalar"
 
-        print(f"✓ Default loss: {loss_default.item():.6f}")
-        print(f"✓ Explicit mean loss: {loss_explicit.item():.6f}")
+        print(f"✓ Default matches explicit mean: {loss_default.item():.6f} == {loss_explicit.item():.6f}")
 
-    print("✅ PASS: Backward compatibility maintained")
-    return True
+    def test_invalid_reduction_raises_error(self, setup_method_vars):
+        """Test that invalid reduction mode raises ValueError."""
+        ppo = setup_method_vars
 
+        predicted = torch.randn(3, 5)
+        targets = torch.randn(3, 1)
 
-def test_mean_of_max_implementation():
-    """
-    Test that the actual implementation uses mean(max(...)) not max(mean(...)).
+        with pytest.raises(ValueError, match="Invalid reduction mode"):
+            ppo._quantile_huber_loss(predicted, targets, reduction='invalid')
 
-    This is a conceptual test since we can't directly test the training loop,
-    but we can verify the building blocks work correctly.
-    """
-    print("\n" + "="*70)
-    print("INTEGRATION TEST: mean(max) vs max(mean) in actual code")
-    print("="*70)
+        print("✓ Invalid reduction correctly raises ValueError")
 
-    from distributional_ppo import DistributionalPPO
+    def test_gradients_flow_correctly(self, setup_method_vars):
+        """Test that gradients flow correctly for all reduction modes."""
+        ppo = setup_method_vars
 
-    policy = MagicMock()
-    policy.atoms = None
-    ppo = DistributionalPPO(policy=policy, env=None, verbose=0)
-    ppo._quantile_huber_kappa = 1.0
+        for reduction in ['none', 'mean', 'sum']:
+            predicted = torch.randn(4, 5, requires_grad=True)
+            targets = torch.randn(4, 1)
 
-    batch_size = 4
-    num_quantiles = 5
-    quantile_levels = torch.linspace(0.1, 0.9, num_quantiles)
+            loss = ppo._quantile_huber_loss(predicted, targets, reduction=reduction)
 
-    with patch.object(ppo, '_quantile_levels_tensor', return_value=quantile_levels):
+            # Compute scalar for backward (if needed)
+            if reduction == 'none':
+                loss = loss.mean()
+
+            loss.backward()
+
+            assert predicted.grad is not None, f"Gradients should exist for reduction={reduction}"
+            assert torch.all(torch.isfinite(predicted.grad)), \
+                f"Gradients should be finite for reduction={reduction}"
+            assert predicted.grad.norm() > 0, \
+                f"Gradients should be non-zero for reduction={reduction}"
+
+            print(f"✓ Gradients flow correctly for reduction='{reduction}': norm={predicted.grad.norm().item():.6f}")
+
+    def test_per_sample_shapes_various_batch_sizes(self, setup_method_vars):
+        """Test per-sample loss shapes for various batch sizes."""
+        ppo = setup_method_vars
+
+        num_quantiles = 5
+        batch_sizes = [1, 4, 16, 64]
+
+        for batch_size in batch_sizes:
+            predicted = torch.randn(batch_size, num_quantiles)
+            targets = torch.randn(batch_size, 1)
+
+            loss = ppo._quantile_huber_loss(predicted, targets, reduction='none')
+
+            assert loss.shape == (batch_size,), \
+                f"Batch {batch_size}: expected shape ({batch_size},), got {loss.shape}"
+
+            print(f"✓ Batch size {batch_size:3d}: loss shape {loss.shape}")
+
+    def test_mean_of_max_vs_max_of_mean(self, setup_method_vars):
+        """
+        Test that we can correctly compute mean(max(...)) using reduction='none'.
+
+        This demonstrates the building block for VF clipping fix.
+        """
+        ppo = setup_method_vars
+
+        batch_size = 4
+        num_quantiles = 5
+
         # Create test data where mean(max) != max(mean)
         predicted_unclipped = torch.tensor([
             [1.0, 1.5, 2.0, 2.5, 3.0],
@@ -185,28 +223,18 @@ def test_mean_of_max_implementation():
 
         targets = torch.tensor([[2.0], [5.0], [3.0], [10.0]], dtype=torch.float32)
 
-        # Get per-sample losses using reduction='none'
-        loss_unclipped_per_sample = ppo._quantile_huber_loss(
-            predicted_unclipped, targets, reduction='none'
-        )
-        loss_clipped_per_sample = ppo._quantile_huber_loss(
-            predicted_clipped, targets, reduction='none'
-        )
+        # Get per-sample losses
+        loss_unclipped = ppo._quantile_huber_loss(predicted_unclipped, targets, reduction='none')
+        loss_clipped = ppo._quantile_huber_loss(predicted_clipped, targets, reduction='none')
 
-        # CORRECT implementation: mean(max(...))
-        correct_vf_loss = torch.mean(
-            torch.max(loss_unclipped_per_sample, loss_clipped_per_sample)
-        )
+        # CORRECT: mean(max(...))
+        correct_vf_loss = torch.mean(torch.max(loss_unclipped, loss_clipped))
 
         # INCORRECT (old bug): max(mean(...))
-        incorrect_vf_loss = torch.max(
-            loss_unclipped_per_sample.mean(),
-            loss_clipped_per_sample.mean()
-        )
+        incorrect_vf_loss = torch.max(loss_unclipped.mean(), loss_clipped.mean())
 
-        print(f"Loss unclipped per-sample: {loss_unclipped_per_sample.tolist()}")
-        print(f"Loss clipped per-sample:   {loss_clipped_per_sample.tolist()}")
-        print(f"\nElement-wise max: {torch.max(loss_unclipped_per_sample, loss_clipped_per_sample).tolist()}")
+        print(f"Loss unclipped per-sample: {loss_unclipped.tolist()}")
+        print(f"Loss clipped per-sample:   {loss_clipped.tolist()}")
         print(f"\nCorrect VF loss (mean of max):   {correct_vf_loss.item():.6f}")
         print(f"Incorrect VF loss (max of means): {incorrect_vf_loss.item():.6f}")
         print(f"Difference: {abs(correct_vf_loss.item() - incorrect_vf_loss.item()):.6f}")
@@ -215,91 +243,8 @@ def test_mean_of_max_implementation():
         assert not torch.allclose(correct_vf_loss, incorrect_vf_loss, atol=1e-4), \
             "Correct and incorrect should differ in this scenario"
 
-    print("✅ PASS: mean(max) correctly implemented (differs from max(mean))")
-    return True
-
-
-def test_per_sample_loss_shapes():
-    """Test that per-sample losses have correct shapes throughout."""
-    print("\n" + "="*70)
-    print("INTEGRATION TEST: Per-sample loss shapes")
-    print("="*70)
-
-    from distributional_ppo import DistributionalPPO
-
-    policy = MagicMock()
-    policy.atoms = None
-    ppo = DistributionalPPO(policy=policy, env=None, verbose=0)
-    ppo._quantile_huber_kappa = 1.0
-
-    batch_sizes = [1, 4, 16, 64]
-    num_quantiles = 5
-    quantile_levels = torch.linspace(0.1, 0.9, num_quantiles)
-
-    with patch.object(ppo, '_quantile_levels_tensor', return_value=quantile_levels):
-        for batch_size in batch_sizes:
-            predicted = torch.randn(batch_size, num_quantiles)
-            targets = torch.randn(batch_size, 1)
-
-            loss_none = ppo._quantile_huber_loss(predicted, targets, reduction='none')
-
-            assert loss_none.shape == (batch_size,), \
-                f"Batch {batch_size}: expected shape ({batch_size},), got {loss_none.shape}"
-
-            print(f"✓ Batch size {batch_size:3d}: loss shape {loss_none.shape}")
-
-    print("✅ PASS: Per-sample loss shapes correct for all batch sizes")
-    return True
-
-
-def run_integration_tests():
-    """Run all integration tests."""
-    print("\n" + "="*70)
-    print("STARTING INTEGRATION TESTS WITH ACTUAL CODE")
-    print("="*70)
-
-    tests = [
-        ("Quantile Huber loss reduction parameter", test_quantile_huber_loss_reduction_parameter),
-        ("Invalid reduction error handling", test_invalid_reduction_raises_error),
-        ("Backward compatibility", test_backward_compatibility),
-        ("mean(max) vs max(mean) implementation", test_mean_of_max_implementation),
-        ("Per-sample loss shapes", test_per_sample_loss_shapes),
-    ]
-
-    results = []
-    for name, test_func in tests:
-        try:
-            result = test_func()
-            results.append((name, result))
-        except Exception as e:
-            print(f"❌ FAIL: {name}")
-            print(f"   Error: {e}")
-            import traceback
-            traceback.print_exc()
-            results.append((name, False))
-
-    # Summary
-    print("\n" + "="*70)
-    print("INTEGRATION TEST SUMMARY")
-    print("="*70)
-
-    passed = sum(1 for _, result in results if result)
-    total = len(results)
-
-    for name, result in results:
-        status = "✅ PASS" if result else "❌ FAIL"
-        print(f"{status}: {name}")
-
-    print(f"\n{passed}/{total} integration tests passed")
-
-    if passed == total:
-        print("\n🎉 ALL INTEGRATION TESTS PASSED!")
-        return True
-    else:
-        print(f"\n⚠️  {total - passed} integration test(s) failed.")
-        return False
+        print("✓ mean(max) correctly differs from max(mean)")
 
 
 if __name__ == "__main__":
-    success = run_integration_tests()
-    exit(0 if success else 1)
+    pytest.main([__file__, "-v", "--tb=short"])
