@@ -3294,17 +3294,22 @@ class DistributionalPPO(RecurrentPPO):
             )
 
             # Compute clipped losses (cross-entropy with clipped distributions)
+            # Use torch.clamp for numerical stability (better than probs + epsilon)
+            # This ensures probabilities stay in valid range [1e-8, 1.0]
+            clipped_probs_1_safe = torch.clamp(clipped_probs_1, min=1e-8, max=1.0)
+            clipped_probs_2_safe = torch.clamp(clipped_probs_2, min=1e-8, max=1.0)
+
             if reduction == "none":
-                loss_c1_clipped = -(target_distribution * torch.log(clipped_probs_1 + 1e-8)).sum(dim=1)
-                loss_c2_clipped = -(target_distribution * torch.log(clipped_probs_2 + 1e-8)).sum(dim=1)
-                # Unclipped losses
+                loss_c1_clipped = -(target_distribution * torch.log(clipped_probs_1_safe)).sum(dim=1)
+                loss_c2_clipped = -(target_distribution * torch.log(clipped_probs_2_safe)).sum(dim=1)
+                # Unclipped losses (use F.log_softmax for numerical stability)
                 log_probs_1 = F.log_softmax(current_logits_1, dim=1)
                 log_probs_2 = F.log_softmax(current_logits_2, dim=1)
                 loss_c1_unclipped = -(target_distribution * log_probs_1).sum(dim=1)
                 loss_c2_unclipped = -(target_distribution * log_probs_2).sum(dim=1)
             elif reduction == "mean":
-                loss_c1_clipped = -(target_distribution * torch.log(clipped_probs_1 + 1e-8)).sum(dim=1).mean()
-                loss_c2_clipped = -(target_distribution * torch.log(clipped_probs_2 + 1e-8)).sum(dim=1).mean()
+                loss_c1_clipped = -(target_distribution * torch.log(clipped_probs_1_safe)).sum(dim=1).mean()
+                loss_c2_clipped = -(target_distribution * torch.log(clipped_probs_2_safe)).sum(dim=1).mean()
                 log_probs_1 = F.log_softmax(current_logits_1, dim=1)
                 log_probs_2 = F.log_softmax(current_logits_2, dim=1)
                 loss_c1_unclipped = -(target_distribution * log_probs_1).sum(dim=1).mean()
@@ -3450,6 +3455,8 @@ class DistributionalPPO(RecurrentPPO):
         loss_per_quantile = torch.abs(tau - indicator) * huber
 
         # Reduce over quantile dimension first, then apply batch reduction
+        # For uniform quantiles τ_i = (i + 0.5) / N, the mean is mathematically correct:
+        #   L = E_τ[ρ_τ(Q(τ) - T)] = (1/N) Σᵢ ρ_τᵢ(Q(τᵢ) - T) = mean(loss_per_quantile)
         # This gives per-sample loss: [batch]
         loss_per_sample = loss_per_quantile.mean(dim=1)
 
