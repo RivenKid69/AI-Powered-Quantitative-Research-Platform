@@ -526,7 +526,12 @@ def compute_grouped_explained_variance(
         if not math.isfinite(var_err):
             ev_grouped[key] = float("nan")
             continue
-        ev_value = float(1.0 - (var_err / var_true))
+        # Bug #7 fix: Add epsilon for numerical stability (match safe_explained_variance())
+        eps = 1e-12
+        ev_value = float(1.0 - (var_err / (var_true + eps)))
+        if not math.isfinite(ev_value):
+            ev_grouped[key] = float("nan")
+            continue
         ev_grouped[key] = ev_value
         if weights_group is None:
             effective_weight = float(sample_count)
