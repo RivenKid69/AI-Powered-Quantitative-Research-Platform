@@ -8390,78 +8390,70 @@ class DistributionalPPO(RecurrentPPO):
                     self.logger.record("warn/advantages_invalid_stats", 1.0)
                     # Skip normalization if statistics are invalid
                 else:
-                    # BUGFIX #2: Skip normalization when advantages are nearly uniform
-                    # When std is very small (< 1e-6), advantages are essentially uniform.
-                    # Normalization in this case amplifies numerical noise, which can cause:
-                    # - Large policy updates based on irrelevant noise
-                    # - Gradient instability in deterministic environments
+                    # FIX (2025-11-23): Use floor normalization instead of zeroing
+                    # ISSUE #2: Previous code zeroed advantages when std < 1e-6, stopping learning
+                    # BEST PRACTICE (CleanRL, Stable-Baselines3): Floor normalization with eps=1e-8
                     #
-                    # Best practice (Spinning Up, CleanRL): Skip normalization when std < threshold
-                    # Reference: https://spinningup.openai.com/en/latest/algorithms/ppo.html
+                    # Benefits of floor normalization:
+                    # 1. Preserves advantage ordering (maintains signal)
+                    # 2. Prevents division by zero (numerical stability)
+                    # 3. Allows learning to continue in low-variance regimes
+                    # 4. Follows industry standard (CleanRL, SB3 use eps=1e-8)
                     #
-                    # Why 1e-6? In deterministic environments or near-optimal policies:
-                    # - All advantages may be identical (std=0) or differ only by numerical error
-                    # - Normalizing with a floor (e.g., 1e-4) would amplify noise by 10000x+
-                    # - Setting to zero prevents large updates based on noise
-                    STD_THRESHOLD = 1e-6
+                    # Reference:
+                    # - CleanRL: (adv - mean) / (std + 1e-8)
+                    # - SB3: (adv - mean) / (std + 1e-8)
+                    # - Analysis: POTENTIAL_ISSUES_ANALYSIS_REPORT.md (Issue #2)
+                    STD_FLOOR = 1e-8
 
-                    if adv_std < STD_THRESHOLD:
-                        # Advantages are nearly uniform (deterministic environment or noise)
-                        # Set to zero to prevent large policy updates based on numerical noise
-                        # This is mathematically correct: if all outcomes have same advantage,
-                        # there's no preference, so policy should not update.
-                        rollout_buffer.advantages = np.zeros_like(
-                            rollout_buffer.advantages, dtype=np.float32
-                        )
+                    if adv_std < STD_FLOOR:
+                        # Low variance: use floor to preserve ordering
+                        normalized_advantages = (
+                            (rollout_buffer.advantages - adv_mean) / STD_FLOOR
+                        ).astype(np.float32)
 
-                        self.logger.record("warn/advantages_uniform_skipped_normalization", 1.0)
+                        self.logger.record("info/advantages_low_variance_floor_used", 1.0)
                         self.logger.record("train/advantages_mean_raw", adv_mean)
                         self.logger.record("train/advantages_std_raw", adv_std)
-                        self.logger.record("info/advantages_set_to_zero", 1.0)
-
-                        # Log details for debugging
-                        self.logger.record("train/advantages_norm_max_abs", 0.0)
-                        self.logger.record("train/advantages_norm_mean", 0.0)
-                        self.logger.record("train/advantages_norm_std", 0.0)
+                        self.logger.record("train/advantages_std_floor_applied", STD_FLOOR)
                     else:
-                        # Normal normalization (NO floor needed - std is sufficiently large)
+                        # Normal normalization (std is sufficiently large)
                         # Standard PPO normalization: (adv - mean) / std
                         # This ensures advantages have mean≈0 and std≈1 for stable training
                         normalized_advantages = (
                             (rollout_buffer.advantages - adv_mean) / adv_std
                         ).astype(np.float32)
 
-                        # Final safety check: ensure normalized advantages are finite
-                        if np.all(np.isfinite(normalized_advantages)):
-                            rollout_buffer.advantages = normalized_advantages
+                        self.logger.record("train/advantages_mean_raw", adv_mean)
+                        self.logger.record("train/advantages_std_raw", adv_std)
 
-                            # Log global normalization statistics
-                            self.logger.record("train/advantages_mean_raw", adv_mean)
-                            self.logger.record("train/advantages_std_raw", adv_std)
+                    # Final safety check: ensure normalized advantages are finite
+                    if np.all(np.isfinite(normalized_advantages)):
+                        rollout_buffer.advantages = normalized_advantages
 
-                            # Additional monitoring: track magnitude of normalized advantages
-                            norm_max = float(np.max(np.abs(normalized_advantages)))
-                            norm_mean = float(np.mean(normalized_advantages))
-                            norm_std = float(np.std(normalized_advantages, ddof=1))
+                        # Additional monitoring: track magnitude of normalized advantages
+                        norm_max = float(np.max(np.abs(normalized_advantages)))
+                        norm_mean = float(np.mean(normalized_advantages))
+                        norm_std = float(np.std(normalized_advantages, ddof=1))
 
-                            self.logger.record("train/advantages_norm_max_abs", norm_max)
-                            self.logger.record("train/advantages_norm_mean", norm_mean)
-                            self.logger.record("train/advantages_norm_std", norm_std)
+                        self.logger.record("train/advantages_norm_max_abs", norm_max)
+                        self.logger.record("train/advantages_norm_mean", norm_mean)
+                        self.logger.record("train/advantages_norm_std", norm_std)
 
-                            # Warn if normalized advantages are extreme (potential gradient explosion)
-                            if norm_max > 100.0:
-                                self.logger.record("warn/advantages_norm_extreme", norm_max)
+                        # Warn if normalized advantages are extreme (potential gradient explosion)
+                        if norm_max > 100.0:
+                            self.logger.record("warn/advantages_norm_extreme", norm_max)
 
-                            # Verify normalization worked as expected (mean≈0, std≈1)
-                            if abs(norm_mean) > 0.1:
-                                self.logger.record("warn/normalization_mean_nonzero", abs(norm_mean))
-                        else:
-                            # Normalization produced invalid values - skip it and log warning
-                            self.logger.record("warn/normalization_produced_invalid_values", 1.0)
-                            # Count how many are invalid
-                            invalid_count = float(np.sum(~np.isfinite(normalized_advantages)))
-                            total_count = float(normalized_advantages.size)
-                            self.logger.record("warn/normalization_invalid_fraction", invalid_count / total_count)
+                        # Verify normalization worked as expected (mean≈0, std≈1)
+                        if abs(norm_mean) > 0.1:
+                            self.logger.record("warn/normalization_mean_nonzero", abs(norm_mean))
+                    else:
+                        # Normalization produced invalid values - skip it and log warning
+                        self.logger.record("warn/normalization_produced_invalid_values", 1.0)
+                        # Count how many are invalid
+                        invalid_count = float(np.sum(~np.isfinite(normalized_advantages)))
+                        total_count = float(normalized_advantages.size)
+                        self.logger.record("warn/normalization_invalid_fraction", invalid_count / total_count)
             else:
                 # Empty buffer - log warning
                 self.logger.record("warn/empty_advantages_buffer", 1.0)
