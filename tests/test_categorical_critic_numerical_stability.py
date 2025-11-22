@@ -23,45 +23,22 @@ class TestCategoricalCriticNumericalStability:
     @pytest.fixture
     def setup_categorical_ppo(self):
         """Setup PPO with categorical critic for testing."""
-        # Mock environment with correct structure
-        import gymnasium as gym
-        from stable_baselines3.common.vec_env import DummyVecEnv
+        # Create minimal PPO instance with mocked dependencies
+        # Following the pattern from test_actual_ppo_vf_clipping_integration.py
 
-        def make_env():
-            return gym.make("CartPole-v1")
+        policy = MagicMock()
+        policy.atoms = torch.linspace(-10.0, 10.0, 21)  # Categorical critic
+        policy._value_type = "categorical"
 
-        env = DummyVecEnv([make_env for _ in range(2)])
+        ppo = DistributionalPPO(policy=policy, env=None, verbose=0)
+        ppo.clip_range_vf = 0.7  # Enable VF clipping
+        ppo._use_twin_critics = True
 
-        # Create PPO with categorical critic
-        policy_kwargs = {
-            "net_arch": {"pi": [32], "vf": [32]},
-            "arch_params": {
-                "critic": {
-                    "distributional": True,
-                    "categorical": True,  # CATEGORICAL CRITIC
-                    "num_atoms": 21,
-                    "v_min": -10.0,
-                    "v_max": 10.0,
-                    "use_twin_critics": True,
-                }
-            }
-        }
-
-        ppo = DistributionalPPO(
-            "CustomLSTMPolicy",  # Use the correct policy class
-            env,
-            policy_kwargs=policy_kwargs,
-            n_steps=64,
-            batch_size=32,
-            clip_range_vf=0.7,  # Enable VF clipping
-            verbose=0,
-        )
-
-        return ppo, env
+        return ppo
 
     def test_torch_clamp_prevents_invalid_probabilities(self, setup_categorical_ppo):
         """Test that torch.clamp prevents probabilities outside [1e-8, 1.0]."""
-        ppo, _ = setup_categorical_ppo
+        ppo = setup_categorical_ppo
 
         # Create test probabilities with edge cases
         batch_size = 4
@@ -96,7 +73,7 @@ class TestCategoricalCriticNumericalStability:
 
     def test_categorical_vf_clipping_numerical_stability(self, setup_categorical_ppo):
         """Test categorical VF clipping with edge case probabilities."""
-        ppo, _ = setup_categorical_ppo
+        ppo = setup_categorical_ppo
         policy = ppo.policy
 
         batch_size = 8
@@ -156,7 +133,7 @@ class TestCategoricalCriticNumericalStability:
 
     def test_gradient_flow_through_categorical_vf_clipping(self, setup_categorical_ppo):
         """Test that gradients flow correctly through categorical VF clipping."""
-        ppo, _ = setup_categorical_ppo
+        ppo = setup_categorical_ppo
 
         batch_size = 4
         latent_dim = 32
@@ -203,7 +180,7 @@ class TestCategoricalCriticNumericalStability:
 
     def test_loss_consistency_across_reduction_modes(self, setup_categorical_ppo):
         """Test that loss is consistent across different reduction modes."""
-        ppo, _ = setup_categorical_ppo
+        ppo = setup_categorical_ppo
 
         batch_size = 8
         latent_dim = 32
@@ -267,7 +244,7 @@ class TestCategoricalCriticNumericalStability:
 
     def test_no_nan_with_extreme_edge_cases(self, setup_categorical_ppo):
         """Test that no NaN occurs even with extreme edge cases."""
-        ppo, _ = setup_categorical_ppo
+        ppo = setup_categorical_ppo
 
         batch_size = 4
         latent_dim = 32
