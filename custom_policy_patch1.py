@@ -69,13 +69,28 @@ class QuantileValueHead(nn.Module):
         ✓ See: tests/test_quantile_levels_correctness.py
         ✓ See: QUANTILE_LEVELS_FINAL_VERDICT.md
 
+    Monotonicity Enforcement (NEW 2025-11-22):
+        Optional sorting to enforce monotonicity constraint: Q(tau_i) <= Q(tau_j) for tau_i < tau_j
+        - Enabled via `enforce_monotonicity` parameter
+        - Uses torch.sort() which is differentiable (supports autograd)
+        - Research: Quantile regression loss naturally encourages monotonicity (Dabney et al., 2018)
+                   but explicit enforcement can help early in training or with high noise
+        - Trade-off: May slightly reduce expressiveness but improves interpretability and CVaR correctness
+
     References:
         - Quantile Regression: Koenker & Bassett (1978)
         - Distributional RL: Bellemare et al. (2017) "A Distributional Perspective on RL"
         - Quantile Huber Loss: Dabney et al. (2018) "Implicit Quantile Networks"
+        - Monotonic Networks: Sill (1998) "Monotonic Networks"
     """
 
-    def __init__(self, input_dim: int, num_quantiles: int, huber_kappa: float) -> None:
+    def __init__(
+        self,
+        input_dim: int,
+        num_quantiles: int,
+        huber_kappa: float,
+        enforce_monotonicity: bool = False,  # FIX (BUG #3): Optional monotonicity enforcement
+    ) -> None:
         super().__init__()
         if num_quantiles <= 0:
             raise ValueError("'num_quantiles' must be positive for QuantileValueHead")
@@ -83,6 +98,7 @@ class QuantileValueHead(nn.Module):
         self.huber_kappa = float(huber_kappa)
         if not math.isfinite(self.huber_kappa) or self.huber_kappa <= 0.0:
             raise ValueError("'huber_kappa' must be a positive finite value")
+        self.enforce_monotonicity = enforce_monotonicity  # FIX (BUG #3)
         self.linear = nn.Linear(input_dim, self.num_quantiles)
 
         # Compute quantile levels (taus) using MIDPOINT FORMULA: tau_i = (i + 0.5) / N
@@ -96,7 +112,26 @@ class QuantileValueHead(nn.Module):
         self.register_buffer("taus", midpoints, persistent=True)
 
     def forward(self, latent: torch.Tensor) -> torch.Tensor:
-        return self.linear(latent)
+        """Forward pass with optional monotonicity enforcement.
+
+        FIX (BUG #3): If enforce_monotonicity=True, applies torch.sort() to ensure
+        Q(tau_i) <= Q(tau_j) for tau_i < tau_j. This is differentiable and supports
+        backward pass through autograd.
+
+        Args:
+            latent: Input latent features [batch_size, input_dim]
+
+        Returns:
+            Quantile predictions [batch_size, num_quantiles] (sorted if enforce_monotonicity=True)
+        """
+        quantiles = self.linear(latent)
+
+        # FIX (BUG #3): Optional monotonicity enforcement via sorting
+        # torch.sort() is differentiable - gradients flow through sorted indices
+        if self.enforce_monotonicity:
+            quantiles = torch.sort(quantiles, dim=1)[0]  # [0] = values, [1] = indices
+
+        return quantiles
 
 
 
@@ -336,9 +371,16 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
             self.quantile_huber_kappa = _coerce_arch_float(
                 critic_cfg.get("huber_kappa"), 1.0, "critic.huber_kappa"
             )
+            # FIX (BUG #3): Optional monotonicity enforcement for quantile predictions
+            # Default is False to preserve existing behavior and rely on quantile regression loss
+            # Set to True for explicit sorting (may help early in training or with high noise)
+            self.enforce_quantile_monotonicity = _coerce_arch_bool(
+                critic_cfg.get("enforce_monotonicity"), False, "critic.enforce_monotonicity"
+            )
         else:
             self.num_quantiles = 0
             self.quantile_huber_kappa = 1.0
+            self.enforce_quantile_monotonicity = False
 
         self.num_atoms = _coerce_arch_int(arch_params.get("num_atoms"), 51, "num_atoms")
         self.v_min = _coerce_arch_float(arch_params.get("v_min"), -10.0, "v_min")
@@ -646,8 +688,12 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
             self.optimizer_kwargs['lr'] = temp_lr
 
         if self._use_quantile_value_head:
+            # FIX (BUG #3): Pass enforce_monotonicity parameter to QuantileValueHead
             self.quantile_head = QuantileValueHead(
-                self.lstm_output_dim, self.num_quantiles, self.quantile_huber_kappa
+                self.lstm_output_dim,
+                self.num_quantiles,
+                self.quantile_huber_kappa,
+                enforce_monotonicity=self.enforce_quantile_monotonicity,
             )
             self._value_head_module = self.quantile_head
             # In distributional mode with quantiles we intentionally drop the
@@ -658,8 +704,12 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
 
             # Twin Critics: Create second quantile head with identical architecture
             if self._use_twin_critics:
+                # FIX (BUG #3): Pass enforce_monotonicity parameter to second head
                 self.quantile_head_2 = QuantileValueHead(
-                    self.lstm_output_dim, self.num_quantiles, self.quantile_huber_kappa
+                    self.lstm_output_dim,
+                    self.num_quantiles,
+                    self.quantile_huber_kappa,
+                    enforce_monotonicity=self.enforce_quantile_monotonicity,
                 )
                 self._value_head_module_2 = self.quantile_head_2
         else:

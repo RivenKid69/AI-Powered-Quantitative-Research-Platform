@@ -91,6 +91,8 @@ class PBTConfig:
         metric_name: Name of metric to optimize
         metric_mode: Optimization mode ('max' or 'min')
         ready_percentage: Percentage of population that must be ready for exploitation
+        min_ready_members: Minimum absolute number of ready members (fallback for deadlock prevention)
+        ready_check_max_wait: Maximum number of consecutive failed ready checks before fallback
         optimizer_exploit_strategy: Strategy for optimizer state during exploit
                                     ('reset' or 'copy')
                                     - 'reset': Reset optimizer state after exploit (recommended)
@@ -106,6 +108,8 @@ class PBTConfig:
     metric_name: str = "mean_reward"
     metric_mode: str = "max"
     ready_percentage: float = 0.8
+    min_ready_members: int = 2  # Minimum viable population for PBT
+    ready_check_max_wait: int = 10  # Max consecutive failed checks before fallback
     optimizer_exploit_strategy: str = "reset"
 
     def __post_init__(self) -> None:
@@ -124,6 +128,10 @@ class PBTConfig:
             raise ValueError(f"metric_mode must be 'max' or 'min', got {self.metric_mode}")
         if not 0.0 < self.ready_percentage <= 1.0:
             raise ValueError(f"ready_percentage must be in (0, 1], got {self.ready_percentage}")
+        if self.min_ready_members < 2:
+            raise ValueError(f"min_ready_members must be >= 2 (minimum viable population), got {self.min_ready_members}")
+        if self.ready_check_max_wait < 1:
+            raise ValueError(f"ready_check_max_wait must be >= 1, got {self.ready_check_max_wait}")
         if self.optimizer_exploit_strategy not in ("reset", "copy"):
             raise ValueError(
                 f"optimizer_exploit_strategy must be 'reset' or 'copy', got {self.optimizer_exploit_strategy}"
@@ -183,6 +191,7 @@ class PBTScheduler:
         self.population: List[PopulationMember] = []
         self._exploitation_count = 0
         self._exploration_count = 0
+        self._failed_ready_checks = 0  # FIX (BUG #2): Track consecutive failed ready checks
 
         # Set random seed
         if seed is not None:
@@ -196,7 +205,9 @@ class PBTScheduler:
         logger.info(
             f"PBT Scheduler initialized: population_size={config.population_size}, "
             f"perturbation_interval={config.perturbation_interval}, "
-            f"metric={config.metric_name} ({config.metric_mode})"
+            f"metric={config.metric_name} ({config.metric_mode}), "
+            f"ready_percentage={config.ready_percentage}, "
+            f"min_ready_members={config.min_ready_members} (fallback)"
         )
 
     def initialize_population(
@@ -272,13 +283,48 @@ class PBTScheduler:
             - 'copy': Optimizer state is INCLUDED in new_model_parameters
                      (caller should load optimizer state from checkpoint)
         """
+        # FIX (BUG #2): Improved ready check with fallback mechanism to prevent deadlock
         # Check if enough population members are ready
         ready_count = sum(1 for m in self.population if m.performance is not None)
         required_count = int(self.config.population_size * self.config.ready_percentage)
+        min_count = self.config.min_ready_members
 
+        # Primary check: ready_percentage threshold
         if ready_count < required_count:
-            logger.debug(f"Not enough ready members ({ready_count}/{required_count}), skipping PBT")
-            return None, member.hyperparams, None
+            self._failed_ready_checks += 1
+
+            # Fallback mechanism: if we've waited too long and have minimum viable population
+            if self._failed_ready_checks >= self.config.ready_check_max_wait and ready_count >= min_count:
+                logger.warning(
+                    f"PBT deadlock prevention: {self._failed_ready_checks} consecutive failed ready checks. "
+                    f"Proceeding with fallback: ready_count={ready_count} >= min_ready_members={min_count}. "
+                    f"Some workers may have crashed. Consider reducing ready_percentage or checking worker health."
+                )
+                self._failed_ready_checks = 0  # Reset counter after fallback
+            else:
+                # Still waiting for more members
+                if self._failed_ready_checks == 1:
+                    # Log first failure at INFO level
+                    logger.info(
+                        f"Not enough ready members ({ready_count}/{required_count}), skipping PBT. "
+                        f"Will use fallback after {self.config.ready_check_max_wait} consecutive failures."
+                    )
+                elif self._failed_ready_checks % 5 == 0:
+                    # Log every 5th failure at WARNING level
+                    logger.warning(
+                        f"Still waiting for ready members ({ready_count}/{required_count}). "
+                        f"Failed checks: {self._failed_ready_checks}/{self.config.ready_check_max_wait}. "
+                        f"Minimum viable population: {min_count}."
+                    )
+                return None, member.hyperparams, None
+        else:
+            # Sufficient members ready - reset failure counter
+            if self._failed_ready_checks > 0:
+                logger.info(
+                    f"Sufficient members now ready ({ready_count}/{required_count}). "
+                    f"Resuming normal PBT operation after {self._failed_ready_checks} failed checks."
+                )
+                self._failed_ready_checks = 0
 
         # Exploitation: decide whether to copy from better performer
         new_parameters = None
@@ -443,6 +489,7 @@ class PBTScheduler:
             "pbt/max_performance": np.max(performances) if performances else 0.0,
             "pbt/exploitation_count": self._exploitation_count,
             "pbt/exploration_count": self._exploration_count,
+            "pbt/failed_ready_checks": self._failed_ready_checks,  # FIX (BUG #2): Track deadlock risk
         }
 
     def _should_exploit(self, member: PopulationMember) -> bool:
