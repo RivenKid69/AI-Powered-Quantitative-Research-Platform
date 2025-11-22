@@ -59,7 +59,7 @@ model:
     beta_utility: 0.999          # EMA decay for utility tracking (forgetting prevention)
     beta1: 0.9                   # First moment coefficient (AdaptiveUPGD only)
     beta2: 0.999                 # Second moment coefficient (AdaptiveUPGD only)
-    adaptive_noise: false        # Enable adaptive noise scaling (set true if using VGS + UPGD)
+    adaptive_noise: true         # ✅ FIX (2025-11-22): Enable adaptive noise scaling when using VGS + UPGD
 
   # VARIANCE GRADIENT SCALER (VGS) - Automatic per-layer gradient normalization
   # See variance_gradient_scaler.py for algorithm details

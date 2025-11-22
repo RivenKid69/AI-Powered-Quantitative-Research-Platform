@@ -2267,6 +2267,59 @@ class DistributionalPPO(RecurrentPPO):
         )
         return states
 
+    def reset_lstm_states_to_initial(self) -> None:
+        """
+        Reset LSTM states to initial (zero) states.
+
+        This should be called after loading new policy weights (e.g., PBT exploit)
+        to ensure LSTM states are consistent with the new policy.
+
+        CRITICAL FIX (Issue #3 - 2025-11-22): When PBT exploit copies policy weights
+        from another agent, LSTM hidden states remain from the old policy, causing
+        temporal mismatch and prediction errors. This leads to:
+        - 1-2 episodes of unstable predictions (value loss spike 5-15%)
+        - LSTM states computed by old policy θ_old incompatible with new policy θ_new
+        - Degraded sample efficiency during population evolution
+
+        Use cases:
+        - After PBT exploit (policy weights copied from another agent) ✅ REQUIRED
+        - After loading checkpoint with different policy
+        - After any operation that changes policy weights significantly
+
+        Note:
+            This is different from _reset_lstm_states_for_done_envs which resets
+            only done environments. This method resets ALL environments.
+
+        Example:
+            ```python
+            # After PBT exploit
+            if new_parameters is not None:
+                model.policy.load_state_dict(new_parameters["policy"])
+                model.reset_lstm_states_to_initial()  # Prevent temporal mismatch
+            ```
+
+        References:
+            - Hochreiter & Schmidhuber (1997): "Long Short-Term Memory"
+            - Jaderberg et al. (2017): "Population Based Training"
+            - LSTM Episode Boundary Fix (2025-11-21): CRITICAL_LSTM_RESET_FIX_REPORT.md
+        """
+        if self._last_lstm_states is not None:
+            # Get initial (zero) states from policy
+            init_states = self.policy.recurrent_initial_state
+
+            # Clone to device
+            self._last_lstm_states = self._clone_states_to_device(init_states, self.device)
+
+            # Log reset event
+            if hasattr(self, 'logger') and self.logger is not None:
+                logger.info(
+                    "LSTM states reset to initial (zero) states after policy weight update "
+                    "(e.g., PBT exploit). This prevents temporal mismatch between old LSTM "
+                    "states and new policy weights."
+                )
+            else:
+                logger.info("LSTM states reset to initial (zero) states")
+
     def _build_value_prediction_cache_entry(
         self,
         rollout_data: RawRecurrentRolloutBufferSamples,
