@@ -349,7 +349,10 @@ def safe_explained_variance(
         var_res = var_res_num / denom
         if not math.isfinite(var_res) or var_res < 0.0:
             return float("nan")
-        ratio = var_res / var_y
+        # BUG FIX #6: Add epsilon to prevent numerical instability when var_y is very small
+        # var_y > 0 is checked above, but very small positive values (e.g., 1e-100) can cause overflow
+        eps = 1e-12  # Standard epsilon for variance ratios
+        ratio = var_res / (var_y + eps)
         if not math.isfinite(ratio):
             return float("nan")
         return float(1.0 - ratio)
@@ -367,7 +370,10 @@ def safe_explained_variance(
     var_res = float(np.var(y_true64 - y_pred64, ddof=1))
     if not math.isfinite(var_res):
         return float("nan")
-    ratio = var_res / var_y
+    # BUG FIX #6: Add epsilon to prevent numerical instability when var_y is very small
+    # (Same fix as weighted case above)
+    eps = 1e-12  # Standard epsilon for variance ratios
+    ratio = var_res / (var_y + eps)
     if not math.isfinite(ratio):
         return float("nan")
     return float(1.0 - ratio)
@@ -10811,7 +10817,10 @@ class DistributionalPPO(RecurrentPPO):
                                     quantiles_norm_clipped_for_loss = quantiles_norm_clipped[valid_indices]
                                 else:
                                     quantiles_norm_clipped_for_loss = quantiles_norm_clipped
-                                quantiles_for_ev = quantiles_norm_clipped_for_loss
+                                # BUG FIX #1.1: EV should use UNCLIPPED predictions to measure model's true capability
+                                # Using clipped predictions artificially inflates EV metric
+                                # quantiles_for_loss = unclipped model outputs (line 10468-10470)
+                                quantiles_for_ev = quantiles_for_loss
                                 # CRITICAL FIX V2: Correct PPO VF clipping implementation
                                 # PPO paper requires: L_VF = mean(max(L_unclipped, L_clipped))
                                 # where max is element-wise over batch, NOT max of two scalars!
@@ -11353,8 +11362,11 @@ class DistributionalPPO(RecurrentPPO):
                             )
                             bucket_value_mse_value += float(mse_tensor.item()) * weight
 
+                            # BUG FIX #1.2: EV should use UNCLIPPED predictions to measure model's true capability
+                            # Using clipped predictions artificially inflates EV metric
+                            # mean_values_norm_selected = unclipped model outputs (line 11338-11344)
                             value_pred_norm_for_ev = (
-                                mean_values_norm_clipped_selected.reshape(-1, 1)
+                                mean_values_norm_selected.reshape(-1, 1)
                             )
                             if self.normalize_returns:
                                 value_pred_norm_for_ev = value_pred_norm_for_ev.clamp(
