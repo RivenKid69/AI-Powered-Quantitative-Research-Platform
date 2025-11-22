@@ -330,6 +330,10 @@ class PBTTrainingCoordinator:
               → Caller should reset optimizer after loading model weights
             - If optimizer_exploit_strategy='copy': new_model_parameters will contain 'optimizer_state'
               → Caller should load optimizer state from new_model_parameters
+
+        IMPORTANT:
+            After applying new_model_parameters, caller MUST call apply_exploited_parameters()
+            to properly handle LSTM state reset and optimizer reset.
         """
         # Update performance in PBT scheduler
         if self.pbt_scheduler is not None:
@@ -356,6 +360,119 @@ class PBTTrainingCoordinator:
             self.sa_ppo_wrappers[member.member_id].on_update_end()
 
         return new_parameters, new_hyperparams, checkpoint_format
+
+    def apply_exploited_parameters(
+        self,
+        model: Any,
+        new_parameters: Dict[str, Any],
+        member: PopulationMember,
+    ) -> None:
+        """Apply exploited parameters from PBT to model.
+
+        This method handles:
+        1. Loading policy weights from new_parameters
+        2. Resetting LSTM states (FIX 2025-11-22 - prevents temporal mismatch)
+        3. Resetting optimizer state if strategy='reset'
+        4. Loading optimizer state if strategy='copy' and available
+
+        Args:
+            model: Model to update (e.g., DistributionalPPO)
+            new_parameters: New parameters from PBT exploit
+            member: Population member being updated
+
+        CRITICAL FIX (2025-11-22):
+            This method MUST be called after PBT exploit to prevent LSTM state
+            temporal mismatch. Without LSTM reset, the model will use old LSTM
+            states with new policy weights, causing 5-15% value loss spike for
+            1-2 episodes until states converge.
+
+        See: LSTM_STATE_RESET_AFTER_PBT_ANALYSIS.md for full analysis
+        """
+        if new_parameters is None:
+            return
+
+        # Extract policy state dict
+        if isinstance(new_parameters, dict) and "policy_state" in new_parameters:
+            policy_state = new_parameters["policy_state"]
+        else:
+            # Legacy format: direct policy state_dict
+            policy_state = new_parameters
+
+        # Load policy weights
+        if hasattr(model, "policy"):
+            model.policy.load_state_dict(policy_state)
+            logger.info(f"Member {member.member_id}: Loaded exploited policy weights")
+        elif hasattr(model, "load_state_dict"):
+            model.load_state_dict(policy_state)
+            logger.info(f"Member {member.member_id}: Loaded exploited model weights")
+        else:
+            raise ValueError(
+                f"Model for member {member.member_id} does not support load_state_dict. "
+                "Cannot apply exploited parameters."
+            )
+
+        # CRITICAL FIX (2025-11-22): Reset LSTM states after loading new weights
+        # This prevents temporal mismatch between old LSTM states and new policy
+        if hasattr(model, "reset_lstm_states_to_initial"):
+            model.reset_lstm_states_to_initial()
+            logger.info(
+                f"Member {member.member_id}: LSTM states reset to initial after PBT exploit "
+                "(prevents temporal mismatch)"
+            )
+        else:
+            logger.debug(
+                f"Member {member.member_id}: Model does not have LSTM states "
+                "(reset_lstm_states_to_initial not found)"
+            )
+
+        # Handle optimizer state based on strategy
+        optimizer_strategy = self.config.pbt.optimizer_exploit_strategy if self.config.pbt else "reset"
+
+        if optimizer_strategy == "reset":
+            # Reset optimizer to fresh state
+            if hasattr(model, "optimizer") and model.optimizer is not None:
+                # Reinitialize optimizer with current learning rate
+                current_lr = model.optimizer.param_groups[0]["lr"]
+                optimizer_class = type(model.optimizer)
+                optimizer_kwargs = {
+                    "lr": current_lr,
+                    **{k: v for k, v in model.optimizer.defaults.items() if k != "lr"}
+                }
+                model.optimizer = optimizer_class(model.policy.parameters(), **optimizer_kwargs)
+                logger.info(
+                    f"Member {member.member_id}: Optimizer reset to fresh state "
+                    f"(strategy=reset, lr={current_lr:.2e})"
+                )
+        else:  # copy
+            # Load optimizer state from new_parameters if available
+            if isinstance(new_parameters, dict) and "optimizer_state" in new_parameters:
+                if hasattr(model, "optimizer") and model.optimizer is not None:
+                    model.optimizer.load_state_dict(new_parameters["optimizer_state"])
+                    logger.info(
+                        f"Member {member.member_id}: Optimizer state loaded from checkpoint "
+                        "(strategy=copy)"
+                    )
+                else:
+                    logger.warning(
+                        f"Member {member.member_id}: optimizer_state found in checkpoint but "
+                        "model.optimizer is None. Cannot load optimizer state."
+                    )
+            else:
+                logger.warning(
+                    f"Member {member.member_id}: optimizer_exploit_strategy='copy' but "
+                    "optimizer_state NOT found in new_parameters. Optimizer will remain unchanged."
+                )
+
+        # Load VGS state if available
+        if isinstance(new_parameters, dict) and "vgs_state" in new_parameters:
+            if hasattr(model, "_variance_gradient_scaler") and model._variance_gradient_scaler is not None:
+                model._variance_gradient_scaler.load_state_dict(new_parameters["vgs_state"])
+                logger.info(f"Member {member.member_id}: VGS state loaded from checkpoint")
+            else:
+                logger.warning(
+                    f"Member {member.member_id}: vgs_state found in checkpoint but "
+                    "VGS not initialized. VGS state will NOT be loaded."
+                )
 
     def get_stats(self) -> Dict[str, Any]:
         """Get combined statistics from PBT and SA-PPO.

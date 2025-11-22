@@ -363,6 +363,9 @@ class TestRealPBT:
             # Load exploited weights
             worst_model.load_state_dict(new_state)
 
+            # NOTE: This test uses old-style direct load_state_dict for backward compatibility testing
+            # For new code with LSTM models, use coordinator.apply_exploited_parameters() instead
+
             # Verify weights changed
             # (They should be from a better performer)
 
@@ -430,9 +433,9 @@ class TestRealCoordinator:
                     model_state_dict=model.state_dict()
                 )
 
-                # Apply PBT updates
+                # Apply PBT updates (FIX 2025-11-22: use apply_exploited_parameters for LSTM reset)
                 if new_state is not None:
-                    model.load_state_dict(new_state)
+                    coordinator.apply_exploited_parameters(model, new_state, member)
 
         # Verify training happened
         assert all(len(m.history) > 0 for m in population)
