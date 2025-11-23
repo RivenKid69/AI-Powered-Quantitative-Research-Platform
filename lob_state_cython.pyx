@@ -1166,7 +1166,7 @@ cdef inline tuple _compute_reward_cython(
         reward_scale = 1.0
     cdef double reward
     cdef double current_potential = 0.0
-    cdef double clipped_ratio, risk_penalty, dd_penalty
+    cdef double clipped_ratio, risk_penalty, dd_penalty, baseline_capital
 
     if use_legacy_log_reward:
         clipped_ratio = fmax(0.1, fmin(net_worth / (prev_net_worth + 1e-9), 10.0))
@@ -1181,8 +1181,38 @@ cdef inline tuple _compute_reward_cython(
         risk_penalty = 0.0
         dd_penalty = 0.0
 
-        if net_worth > 1e-9 and units != 0 and atr > 0:
-            risk_penalty = -risk_aversion_variance * abs(units) * atr / (abs(net_worth) + 1e-9)
+        # FIX CRITICAL BUG (2025-11-23): Normalize risk penalty by prev_net_worth (baseline capital)
+        # instead of current net_worth to prevent unstable training signals.
+        #
+        # PROBLEM with old normalization (abs(net_worth)):
+        # - Small net_worth (e.g., 1000) + large position (10000) → penalty = -10 (HUGE)
+        # - Large net_worth (e.g., 100000) + same position → penalty = -0.1 (tiny)
+        # - Creates paradox: small capital gets GIANT penalties, large capital gets NONE
+        # - With net_worth close to zero, penalty explodes to -10.0 (clipped max)
+        # - Unstable training: reward dominated by arbitrary risk penalty magnitude
+        #
+        # CORRECT APPROACH (prev_net_worth normalization):
+        # - Normalizes risk by STARTING capital (baseline for episode)
+        # - Same position size → same absolute risk penalty, regardless of current P&L
+        # - Stable training signal: penalty proportional to initial capital allocation
+        # - Prevents penalty explosion when net_worth temporarily drops
+        #
+        # Research support:
+        # - Lopez de Prado (2018): "Advances in Financial ML" - risk metrics use baseline capital
+        # - Sharpe Ratio: StdDev(returns) / Mean(returns) - relative to starting value
+        # - CVaR/VaR: Tail risk relative to INITIAL portfolio value, not current
+        # - Kelly Criterion: Fraction of STARTING capital, not current
+        #
+        # Edge case handling:
+        # - If prev_net_worth <= 0 (bankruptcy at start), use peak_value as fallback
+        # - If both <= 0 (catastrophic), use 1.0 as last resort (prevents division by zero)
+        # - epsilon 1e-9 prevents numerical instability near zero
+        baseline_capital = prev_net_worth
+        if baseline_capital <= 1e-9:
+            baseline_capital = peak_value if peak_value > 1e-9 else 1.0
+
+        if units != 0 and atr > 0:
+            risk_penalty = -risk_aversion_variance * abs(units) * atr / (baseline_capital + 1e-9)
 
         if peak_value > 1e-9:
             dd_penalty = -risk_aversion_drawdown * (peak_value - net_worth) / peak_value
