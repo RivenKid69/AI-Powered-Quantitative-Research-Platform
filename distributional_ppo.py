@@ -11612,6 +11612,51 @@ class DistributionalPPO(RecurrentPPO):
                             safe_name = name.replace('.', '_')
                             self.logger.record(f"train/lstm_grad_norm/{safe_name}", float(lstm_grad_norm))
 
+                # CRITICAL FIX #7 (ISSUE #7): Monitor Twin Critics gradient flow
+                # Without monitoring, if one critic (Q2) has vanishing gradients,
+                # Twin Critics loses all benefit silently (min(Q1, Q2_stuck) = bad estimates)
+                # This detects gradient imbalance and alerts when Q2 stops learning
+                if getattr(self.policy, '_use_twin_critics', False):
+                    critic1_grad_norm = 0.0
+                    critic2_grad_norm = 0.0
+                    critic1_param_count = 0
+                    critic2_param_count = 0
+
+                    for name, module in self.policy.named_modules():
+                        # Identify critic heads (architecture-specific naming)
+                        is_critic1 = any(x in name for x in ['value_head_critic1', 'critic1', 'value_head.0'])
+                        is_critic2 = any(x in name for x in ['value_head_critic2', 'critic2', 'value_head.1'])
+
+                        if is_critic1 or is_critic2:
+                            for param in module.parameters():
+                                if param.grad is not None:
+                                    grad_norm_sq = param.grad.norm().item() ** 2
+                                    if is_critic1:
+                                        critic1_grad_norm += grad_norm_sq
+                                        critic1_param_count += 1
+                                    if is_critic2:
+                                        critic2_grad_norm += grad_norm_sq
+                                        critic2_param_count += 1
+
+                    if critic1_param_count > 0:
+                        critic1_grad_norm = math.sqrt(critic1_grad_norm)
+                        self.logger.record("train/critic1_grad_norm", float(critic1_grad_norm))
+                    if critic2_param_count > 0:
+                        critic2_grad_norm = math.sqrt(critic2_grad_norm)
+                        self.logger.record("train/critic2_grad_norm", float(critic2_grad_norm))
+
+                    # Alert on severe gradient imbalance (>100x ratio or vanishing gradients)
+                    if critic1_grad_norm > 1e-8 and critic2_grad_norm > 1e-8:
+                        ratio = critic1_grad_norm / critic2_grad_norm
+                        self.logger.record("train/critics_grad_ratio", float(ratio))
+                        if ratio > 100.0 or ratio < 0.01:
+                            self.logger.record("warn/twin_critics_gradient_imbalance", 1.0)
+                            self.logger.record("warn/critics_grad_imbalance_ratio", float(ratio))
+                    elif critic2_grad_norm < 1e-8 and critic2_param_count > 0:
+                        self.logger.record("warn/critic2_vanishing_gradients", 1.0)
+                    elif critic1_grad_norm < 1e-8 and critic1_param_count > 0:
+                        self.logger.record("warn/critic1_vanishing_gradients", 1.0)
+
                 post_clip_norm_sq = 0.0
                 for param in self.policy.parameters():
                     grad = param.grad

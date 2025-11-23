@@ -431,17 +431,31 @@ class PBTTrainingCoordinator:
         if optimizer_strategy == "reset":
             # Reset optimizer to fresh state
             if hasattr(model, "optimizer") and model.optimizer is not None:
-                # Reinitialize optimizer with current learning rate
-                current_lr = model.optimizer.param_groups[0]["lr"]
+                # CRITICAL FIX (ISSUE #4): Use NEW learning rate from PBT hyperparams
+                # Previously, used current_lr from old optimizer, ignoring PBT optimization
+                # This caused PBT hyperparameter optimization to be ineffective for learning_rate
+                if hasattr(member, "hyperparams") and "learning_rate" in member.hyperparams:
+                    new_lr = float(member.hyperparams["learning_rate"])
+                    logger.info(
+                        f"Member {member.member_id}: Using NEW learning rate from PBT: {new_lr:.2e}"
+                    )
+                else:
+                    # Fallback to current LR if hyperparams not available
+                    new_lr = model.optimizer.param_groups[0]["lr"]
+                    logger.warning(
+                        f"Member {member.member_id}: learning_rate NOT found in hyperparams, "
+                        f"using current optimizer LR: {new_lr:.2e}"
+                    )
+
                 optimizer_class = type(model.optimizer)
                 optimizer_kwargs = {
-                    "lr": current_lr,
+                    "lr": new_lr,
                     **{k: v for k, v in model.optimizer.defaults.items() if k != "lr"}
                 }
                 model.optimizer = optimizer_class(model.policy.parameters(), **optimizer_kwargs)
                 logger.info(
                     f"Member {member.member_id}: Optimizer reset to fresh state "
-                    f"(strategy=reset, lr={current_lr:.2e})"
+                    f"(strategy=reset, lr={new_lr:.2e})"
                 )
         else:  # copy
             # Load optimizer state from new_parameters if available
@@ -452,6 +466,21 @@ class PBTTrainingCoordinator:
                         f"Member {member.member_id}: Optimizer state loaded from checkpoint "
                         "(strategy=copy)"
                     )
+
+                    # CRITICAL FIX (ISSUE #4): Apply NEW learning rate from PBT hyperparams
+                    # Even with copy strategy, we must update LR to match PBT optimization
+                    if hasattr(member, "hyperparams") and "learning_rate" in member.hyperparams:
+                        new_lr = float(member.hyperparams["learning_rate"])
+                        for group in model.optimizer.param_groups:
+                            group["lr"] = new_lr
+                        logger.info(
+                            f"Member {member.member_id}: Applied NEW learning rate from PBT: {new_lr:.2e}"
+                        )
+                    else:
+                        logger.warning(
+                            f"Member {member.member_id}: learning_rate NOT found in hyperparams, "
+                            "keeping LR from copied optimizer state"
+                        )
                 else:
                     logger.warning(
                         f"Member {member.member_id}: optimizer_state found in checkpoint but "
