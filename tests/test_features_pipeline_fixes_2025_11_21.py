@@ -409,10 +409,10 @@ class TestEdgeCases:
         assert pd.isna(df_transformed['close'].iloc[0]), \
             "Single row after shift should be NaN"
 
-        # Since all values are NaN, feature becomes constant (is_constant=True)
-        # Constant features normalize to 0.0, not NaN
-        assert df_transformed['close_z'].iloc[0] == 0.0, \
-            "Constant feature (all NaN) should normalize to 0.0"
+        # Since all values are NaN after shift, column is marked as all-NaN
+        # All-NaN columns preserve NaN (not zeros) to maintain semantic distinction
+        assert pd.isna(df_transformed['close_z'].iloc[0]), \
+            "All-NaN column should preserve NaN (not convert to 0.0)"
 
     def test_empty_dataframe(self):
         """Test with empty dataframe."""

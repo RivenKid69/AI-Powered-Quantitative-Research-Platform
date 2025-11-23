@@ -36,6 +36,75 @@ CANON_PREFIX = [
     "number_of_trades","taker_buy_base_asset_volume","taker_buy_quote_asset_volume"
 ]
 
+# Metadata columns that should NOT be shifted (not features)
+METADATA_COLUMNS = {
+    "timestamp", "symbol", "wf_role", "close_orig",
+    # Add other metadata columns here if needed
+}
+
+# Target columns that should NOT be shifted (labels for prediction)
+TARGET_COLUMNS = {
+    "target", "target_return", "target_log_return", "target_volatility",
+    "target_sharpe", "target_sortino", "target_max_drawdown",
+    # Add other target columns here if needed
+}
+
+
+# ==============================================================================
+# FIX (CRITICAL): Data Leakage Prevention - Feature Column Identification
+# ==============================================================================
+
+def _columns_to_shift(df: pd.DataFrame) -> List[str]:
+    """
+    Identify all feature columns that must be shifted to prevent look-ahead bias.
+
+    CRITICAL: All features derived from price/volume (technical indicators, normalized
+    features, etc.) MUST be shifted by 1 period to ensure they represent information
+    available BEFORE the current decision point.
+
+    This prevents DATA LEAKAGE where:
+    - Model sees indicators calculated on future prices
+    - Features at time t contain information about close[t] or close[t+1]
+    - Training learns spurious correlations with unavailable future data
+
+    Returns columns to shift (excludes metadata and targets).
+
+    Args:
+        df: DataFrame to analyze
+
+    Returns:
+        List of column names to shift (all numeric features except metadata/targets)
+
+    Examples:
+        >>> df = pd.DataFrame({
+        ...     "timestamp": [1, 2, 3],
+        ...     "close": [100, 101, 102],
+        ...     "rsi_14": [50, 55, 60],  # Technical indicator - MUST shift!
+        ...     "target": [0.01, 0.02, 0.03],  # Target - DO NOT shift
+        ... })
+        >>> _columns_to_shift(df)
+        ['close', 'rsi_14']  # Excludes timestamp (metadata) and target
+    """
+    cols: List[str] = []
+    for c in df.columns:
+        # Skip metadata columns (timestamp, symbol, etc.)
+        if c in METADATA_COLUMNS:
+            continue
+
+        # Skip target columns (labels for prediction)
+        if c in TARGET_COLUMNS:
+            continue
+
+        # Skip already-normalized columns (they will be recomputed from shifted features)
+        if c.endswith("_z"):
+            continue
+
+        # Include all numeric columns (prices, volumes, indicators)
+        if _is_numeric(df[c]):
+            cols.append(c)
+
+    return cols
+
 
 # ==============================================================================
 # FIX (MEDIUM #3): Outlier Detection Utilities
@@ -225,17 +294,43 @@ class FeaturePipeline:
         if not frames:
             raise ValueError("No rows available to fit FeaturePipeline after applying training filters.")
 
-        # FIX: Apply shift() per-symbol BEFORE concat to prevent cross-symbol contamination
+        # FIX (CRITICAL): Shift ALL feature columns to prevent data leakage
+        # Per-symbol shift to prevent cross-symbol contamination
         # Each frame corresponds to one symbol, so we shift each independently
-        # FIX (2025-11-21): Always shift close in fit() to compute stats on previous close
+        #
+        # IMPORTANT: All technical indicators (RSI, MA, BB, etc.) MUST be shifted
+        # together with price/volume data to ensure they represent information
+        # available BEFORE the current decision point.
+        #
+        # Example of data leakage WITHOUT this fix:
+        #   t=0: close=100, rsi_14=50 (calculated from close[t-13:t])
+        #   t=1: close=105, rsi_14=60 (calculated from close[t-12:t+1])
+        #   After shift: close[t]=100 (from t-1), rsi_14[t]=60 (from t)
+        #   → Model sees RSI calculated on FUTURE prices (close[t+1])!
+        #
+        # Correct behavior WITH this fix:
+        #   After shift: close[t]=100 (from t-1), rsi_14[t]=50 (from t-1)
+        #   → Model sees only PAST information (consistent temporal alignment)
         shifted_frames: List[pd.DataFrame] = []
         for frame in frames:
-            if "close_orig" not in frame.columns and "close" in frame.columns:
-                frame_copy = frame.copy()
-                frame_copy["close"] = frame_copy["close"].shift(1)
-                shifted_frames.append(frame_copy)
-            else:
+            # Check if shift already applied (close_orig marker present)
+            # If close_orig exists, data is already shifted - skip shifting
+            if "close_orig" in frame.columns:
                 shifted_frames.append(frame)
+                continue
+
+            frame_copy = frame.copy()
+
+            # Identify all feature columns to shift (excludes metadata and targets)
+            cols_to_shift = _columns_to_shift(frame_copy)
+
+            if cols_to_shift:
+                # Shift all feature columns by 1 period
+                # This ensures consistent temporal alignment for all features
+                for col in cols_to_shift:
+                    frame_copy[col] = frame_copy[col].shift(1)
+
+            shifted_frames.append(frame_copy)
 
         big = pd.concat(shifted_frames, axis=0, ignore_index=True)
         cols = _columns_to_scale(big)
@@ -402,19 +497,40 @@ class FeaturePipeline:
 
         out = df.copy()
 
-        # FIX (2025-11-21): ALWAYS shift close to prevent look-ahead bias
-        # Previous logic was inverted: shift was skipped when _close_shifted_in_fit=True
-        # This caused scale mismatch: stats from shifted data applied to unshifted data
+        # FIX (CRITICAL): Shift ALL feature columns to prevent data leakage
+        # This must match the shifting logic in fit() for consistency
         #
-        # Correct behavior: If stats were computed on shifted data, transform must also
-        # operate on shifted data for consistency and to prevent look-ahead bias
-        if "close_orig" not in out.columns and "close" in out.columns:
-            if "symbol" in out.columns:
-                # Per-symbol shift to prevent cross-symbol contamination
-                out["close"] = out.groupby("symbol", group_keys=False)["close"].shift(1)
-            else:
-                # Single symbol case - standard shift
-                out["close"] = out["close"].shift(1)
+        # Rationale:
+        # 1. Statistics were computed on shifted features during fit()
+        # 2. Transform must operate on shifted features for scale consistency
+        # 3. All features must be temporally aligned to prevent look-ahead bias
+        #
+        # Example WITHOUT this fix (data leakage):
+        #   Training: Stats computed on shifted features (correct)
+        #   Inference: Only close shifted, indicators NOT shifted (WRONG!)
+        #   → Model sees indicators based on CURRENT prices (future info!)
+        #
+        # Example WITH this fix (no leakage):
+        #   Training: Stats computed on shifted features
+        #   Inference: ALL features shifted (consistent temporal alignment)
+        #   → Model sees only PAST information (correct behavior)
+
+        # Check if shift already applied (close_orig marker present)
+        # If close_orig exists, data is already shifted - skip shifting
+        if "close_orig" not in out.columns:
+            # Identify all feature columns to shift (excludes metadata and targets)
+            cols_to_shift = _columns_to_shift(out)
+
+            if cols_to_shift:
+                if "symbol" in out.columns:
+                    # Per-symbol shift to prevent cross-symbol contamination
+                    # Use groupby to shift each symbol's features independently
+                    for col in cols_to_shift:
+                        out[col] = out.groupby("symbol", group_keys=False)[col].shift(1)
+                else:
+                    # Single symbol case - standard shift
+                    for col in cols_to_shift:
+                        out[col] = out[col].shift(1)
 
         for c, ms in self.stats.items():
             if c not in out.columns:
