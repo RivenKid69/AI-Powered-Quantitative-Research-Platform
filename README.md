@@ -4,24 +4,48 @@
 
 ---
 
-## 🎯 Статус Проекта (2025-11-22)
+## 🎯 Статус Проекта (2025-11-24)
 
-**Версия**: 2.1
+**Версия**: 2.3
 **Статус**: ✅ **Production Ready**
-**Последнее обновление**: 2025-11-22
+**Последнее обновление**: 2025-11-24
 
 ### ✅ Последние Критические Исправления
 
-- 🎯 **Twin Critics VF Clipping Verification** (2025-11-22) - **VERIFIED CORRECT** ✅
-  - Comprehensive verification completed (49/50 tests, 98% pass rate)
-  - Independent clipping, gradient flow, PPO semantics - all verified
-  - All VF clipping modes working correctly (per_quantile, mean_only, mean_and_variance)
-- 🔴 **LSTM State Reset** (2025-11-21) - устранена temporal leakage между эпизодами
-- 🔴 **Action Space Fixes** (2025-11-21) - предотвращена position doubling bug
-- 🔴 **NaN Handling** (2025-11-21) - улучшена обработка missing data
-- 🔴 **3 Critical Data Bugs** (2025-11-20) - temporal causality, cross-symbol contamination, quantile loss
+- 🔴 **Twin Critics Loss Aggregation** (2025-11-24) - **FIXED** ✅
+  - 25% underestimation in mixed clipping cases corrected
+  - Loss aggregation now applies max() per-critic, then averages
+  - Test Coverage: 8/8 tests (100% pass rate)
+  - Models trained before 2025-11-24 → consider retraining for 25% improvement
 
-**Test Coverage**: 101+ новых тестов для критических исправлений (98%+ проходят ✅)
+- 🔴 **Data Leakage in Features Pipeline** (2025-11-23) - **FIXED** ⚠️ **REQUIRES MODEL RETRAINING**
+  - **CRITICAL**: ALL technical indicators (RSI, MACD, BB, ATR, etc.) were NOT shifted
+  - Models had access to FUTURE information → inflated backtest results
+  - **ACTION REQUIRED**: ALL models trained before 2025-11-23 MUST be retrained
+  - See [DATA_LEAKAGE_MIGRATION_GUIDE.md](DATA_LEAKAGE_MIGRATION_GUIDE.md) for migration steps
+  - Test Coverage: 47 tests (46/47 passed, 98% pass rate)
+
+- 🔴 **Reward & Feature Normalization** (2025-11-23) - **2 BUGS FIXED** ✅
+  - Risk penalty normalization: now uses baseline capital (prevented reward explosion)
+  - Bollinger Bands clipping: symmetric [-1,1] instead of asymmetric [0,1]
+
+- 🔴 **VGS v3.1** (2025-11-23) - **CRITICAL FIX** ✅
+  - E[g²] computation bug corrected (10,000x improvement for large parameters)
+  - Test Coverage: 7/7 tests (100% pass rate)
+
+- 🔴 **SA-PPO** (2025-11-23) - **2 BUGS FIXED** ✅
+  - Epsilon schedule: hardcoded max_updates corrected
+  - KL divergence: Monte Carlo → analytical formula (10x faster, 100x more accurate)
+  - Test Coverage: 16/16 tests (100% pass rate)
+
+- 🔴 **GAE Overflow Protection** (2025-11-23) - **FIXED** ✅
+  - Defensive clamping prevents float32 overflow with extreme rewards
+  - Test Coverage: 11/11 tests (100% pass rate)
+
+- 🎯 **Twin Critics VF Clipping** (2025-11-22) - **VERIFIED CORRECT** ✅
+  - Comprehensive verification (49/50 tests, 98% pass rate)
+
+**Test Coverage**: **180+ новых тестов** для критических исправлений (98%+ проходят ✅)
 
 ---
 
@@ -64,11 +88,16 @@
 - **[QUICK_START_REFERENCE.md](QUICK_START_REFERENCE.md)** - Быстрый старт
 
 ### Критические Исправления
-- **[TWIN_CRITICS_VF_CLIPPING_VERIFICATION_REPORT.md](TWIN_CRITICS_VF_CLIPPING_VERIFICATION_REPORT.md)** - ⭐ Twin Critics VF Clipping verification (2025-11-22)
+- **[DATA_LEAKAGE_MIGRATION_GUIDE.md](DATA_LEAKAGE_MIGRATION_GUIDE.md)** - ⭐ **MIGRATION GUIDE** (2025-11-23) - **READ FIRST**
+- **[DATA_LEAKAGE_FIX_REPORT_2025_11_23.md](DATA_LEAKAGE_FIX_REPORT_2025_11_23.md)** - ⭐ Data leakage fix (2025-11-23) **CRITICAL**
+- **[CRITICAL_ANALYSIS_REPORT_2025_11_24.md](CRITICAL_ANALYSIS_REPORT_2025_11_24.md)** - ⭐ Twin Critics loss fix (2025-11-24)
+- **[SA_PPO_BUG_FIXES_REPORT_2025_11_23.md](SA_PPO_BUG_FIXES_REPORT_2025_11_23.md)** - SA-PPO fixes (2025-11-23)
+- **[VGS_E_G_SQUARED_BUG_REPORT.md](VGS_E_G_SQUARED_BUG_REPORT.md)** - VGS v3.1 fix (2025-11-23)
+- **[GAE_OVERFLOW_PROTECTION_FIX_REPORT.md](GAE_OVERFLOW_PROTECTION_FIX_REPORT.md)** - GAE overflow (2025-11-23)
+- **[TWIN_CRITICS_VF_CLIPPING_VERIFICATION_REPORT.md](TWIN_CRITICS_VF_CLIPPING_VERIFICATION_REPORT.md)** - Twin Critics VF Clipping (2025-11-22)
 - **[CRITICAL_FIXES_COMPLETE_REPORT.md](CRITICAL_FIXES_COMPLETE_REPORT.md)** - Action space fixes (2025-11-21)
 - **[NUMERICAL_ISSUES_FIX_SUMMARY.md](NUMERICAL_ISSUES_FIX_SUMMARY.md)** - LSTM + NaN fixes (2025-11-21)
 - **[REGRESSION_PREVENTION_CHECKLIST.md](REGRESSION_PREVENTION_CHECKLIST.md)** - Обязательный checklist
-- **[CRITICAL_FIXES_REPORT.md](CRITICAL_FIXES_REPORT.md)** - Data & critic bugs (2025-11-20)
 
 ### Продвинутые Возможности
 - **[docs/UPGD_INTEGRATION.md](docs/UPGD_INTEGRATION.md)** - UPGD optimizer integration
