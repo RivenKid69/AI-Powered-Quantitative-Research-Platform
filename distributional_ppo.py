@@ -3102,11 +3102,21 @@ class DistributionalPPO(RecurrentPPO):
                 Categorical critic always uses mean-based clipping.
 
         Returns:
-            Tuple of (clipped_loss_avg, loss_c1_clipped, loss_c2_clipped, loss_unclipped_avg)
-            - clipped_loss_avg: Average of both critics' clipped losses
-            - loss_c1_clipped: Clipped loss for critic 1 (for logging)
-            - loss_c2_clipped: Clipped loss for critic 2 (for logging)
-            - loss_unclipped_avg: Average unclipped loss (for element-wise max)
+            Tuple of (clipped_loss_avg, loss_c1_clipped, loss_c2_clipped,
+                     loss_unclipped_avg, loss_c1_unclipped, loss_c2_unclipped)
+            - clipped_loss_avg: Average of both critics' clipped losses (deprecated)
+            - loss_c1_clipped: Clipped loss for critic 1
+            - loss_c2_clipped: Clipped loss for critic 2
+            - loss_unclipped_avg: Average unclipped loss (deprecated)
+            - loss_c1_unclipped: Unclipped loss for critic 1 (NEW - use this!)
+            - loss_c2_unclipped: Unclipped loss for critic 2 (NEW - use this!)
+
+        Note (2025-11-24):
+            The old return values (clipped_loss_avg, loss_unclipped_avg) are deprecated.
+            Use individual critic losses (loss_c1_*, loss_c2_*) for correct aggregation:
+                loss_c1_final = max(loss_c1_unclipped, loss_c1_clipped)
+                loss_c2_final = max(loss_c2_unclipped, loss_c2_clipped)
+                critic_loss = mean((loss_c1_final + loss_c2_final) / 2)
         """
         policy = self.policy
         use_quantile = getattr(policy, "_use_quantile_value_head", False)
@@ -3397,13 +3407,26 @@ class DistributionalPPO(RecurrentPPO):
             else:
                 raise ValueError(f"Invalid reduction: {reduction}")
 
-        # Average clipped losses
+        # FIX (2025-11-24): Return individual unclipped losses for correct PPO VF clipping
+        # Previous bug: averaged losses before max(), losing Twin Critics independence
+        # Correct approach: max() each critic independently, then average
+        # See: test_twin_critics_loss_aggregation.py for verification (25% error in mixed cases)
+
+        # Average clipped losses (for backward compatibility with some code paths)
         clipped_loss_avg = (loss_c1_clipped + loss_c2_clipped) / 2.0
 
-        # Average unclipped losses
+        # Average unclipped losses (for backward compatibility with some code paths)
         loss_unclipped_avg = (loss_c1_unclipped + loss_c2_unclipped) / 2.0
 
-        return clipped_loss_avg, loss_c1_clipped, loss_c2_clipped, loss_unclipped_avg
+        # Return individual losses for correct aggregation
+        return (
+            clipped_loss_avg,       # For backward compat (don't use for final loss!)
+            loss_c1_clipped,        # Critic 1 clipped loss
+            loss_c2_clipped,        # Critic 2 clipped loss
+            loss_unclipped_avg,     # For backward compat (don't use for final loss!)
+            loss_c1_unclipped,      # Critic 1 unclipped loss (NEW)
+            loss_c2_unclipped,      # Critic 2 unclipped loss (NEW)
+        )
 
     def _project_distribution(
         self,
@@ -9188,6 +9211,26 @@ class DistributionalPPO(RecurrentPPO):
                             value_states = getattr(dist_output, "value_states", None)
                             if value_states is not None:
                                 self.policy.last_value_state = value_states
+                    # POTENTIAL BUG (2025-11-24): This clips TARGET returns, not prediction changes!
+                    # =====================================================================
+                    # WARNING: This code clips the GROUND TRUTH targets, which is WRONG for PPO!
+                    #
+                    # PPO value clipping should clip PREDICTION CHANGES:
+                    #   V_clipped = V_old + clip(V_new - V_old, -epsilon, +epsilon)
+                    #
+                    # NOT the target itself:
+                    #   target_clipped = clip(target, -epsilon, +epsilon)  <-- WRONG!
+                    #
+                    # Example of catastrophic failure:
+                    #   - Actual return: 1.0 (100% profit)
+                    #   - value_clip_limit: 0.2 (typical PPO epsilon)
+                    #   - Clipped target: 0.2 (20%)
+                    #   - Model learns: Max possible return is 0.2!
+                    #
+                    # CURRENT STATUS: Safe (value_clip_limit=null in all configs)
+                    # ACTION: Do NOT set value_clip_limit unless you understand this bug!
+                    # See: test_target_returns_clipping.py for full analysis
+                    # =====================================================================
                     if (not self.normalize_returns) and (
                         self._value_clip_limit_unscaled is not None
                     ):
@@ -10255,6 +10298,7 @@ class DistributionalPPO(RecurrentPPO):
                         )
 
                         # НЕТ raw-clip при normalize_returns: полагаемся на нормализованный ±ret_clip
+                        # POTENTIAL BUG (2025-11-24): Clips TARGET returns! See line 9214 for full warning.
                         if (not self.normalize_returns) and (
                             self._value_clip_limit_unscaled is not None
                         ):
@@ -10670,22 +10714,31 @@ class DistributionalPPO(RecurrentPPO):
                                 )
 
                                 # Call the correct Twin Critics VF clipping method with mode
-                                clipped_loss_avg, loss_c1_clipped, loss_c2_clipped, loss_unclipped_avg = (
-                                    self._twin_critics_vf_clipping_loss(
-                                        latent_vf=latent_vf_selected,
-                                        targets=targets_norm_for_loss,
-                                        old_quantiles_critic1=old_quantiles_c1,
-                                        old_quantiles_critic2=old_quantiles_c2,
-                                        clip_delta=clip_delta,
-                                        reduction="none",
-                                        mode=self.distributional_vf_clip_mode,  # Pass mode parameter
-                                    )
+                                (
+                                    clipped_loss_avg,  # Deprecated (backward compat)
+                                    loss_c1_clipped,
+                                    loss_c2_clipped,
+                                    loss_unclipped_avg,  # Deprecated (backward compat)
+                                    loss_c1_unclipped,  # NEW (2025-11-24)
+                                    loss_c2_unclipped,  # NEW (2025-11-24)
+                                ) = self._twin_critics_vf_clipping_loss(
+                                    latent_vf=latent_vf_selected,
+                                    targets=targets_norm_for_loss,
+                                    old_quantiles_critic1=old_quantiles_c1,
+                                    old_quantiles_critic2=old_quantiles_c2,
+                                    clip_delta=clip_delta,
+                                    reduction="none",
+                                    mode=self.distributional_vf_clip_mode,  # Pass mode parameter
                                 )
 
-                                # Element-wise max, then mean (correct PPO semantics)
-                                critic_loss = torch.mean(
-                                    torch.max(loss_unclipped_avg, clipped_loss_avg)
-                                )
+                                # FIX (2025-11-24): Apply max() to EACH critic independently, then average
+                                # Previous bug: max(avg_uc, avg_c) underestimated loss by 25% in mixed cases
+                                # Correct approach: max(c1_uc, c1_c) and max(c2_uc, c2_c), then average
+                                # This preserves Twin Critics independence per PPO/TD3/SAC research
+                                # See: test_twin_critics_loss_aggregation.py for bug verification
+                                loss_c1_final = torch.max(loss_c1_unclipped, loss_c1_clipped)
+                                loss_c2_final = torch.max(loss_c2_unclipped, loss_c2_clipped)
+                                critic_loss = torch.mean((loss_c1_final + loss_c2_final) / 2.0)
 
                                 # Store losses for logging
                                 if not hasattr(self, '_twin_critic_vf_clip_loss_sum'):
@@ -11092,24 +11145,31 @@ class DistributionalPPO(RecurrentPPO):
                                 # Note: The method expects old_probs_critic1/critic2 for categorical mode
 
                                 # Call the correct Twin Critics VF clipping method (categorical mode)
-                                clipped_loss_avg, loss_c1_clipped, loss_c2_clipped, loss_unclipped_avg = (
-                                    self._twin_critics_vf_clipping_loss(
-                                        latent_vf=latent_vf_selected,
-                                        targets=None,  # Not used for categorical
-                                        old_quantiles_critic1=None,  # Not used for categorical
-                                        old_quantiles_critic2=None,  # Not used for categorical
-                                        clip_delta=clip_delta,
-                                        reduction="none",
-                                        old_probs_critic1=old_probs_c1,
-                                        old_probs_critic2=old_probs_c2,
-                                        target_distribution=target_distribution_selected
-                                    )
+                                (
+                                    clipped_loss_avg,  # Deprecated (backward compat)
+                                    loss_c1_clipped,
+                                    loss_c2_clipped,
+                                    loss_unclipped_avg,  # Deprecated (backward compat)
+                                    loss_c1_unclipped,  # NEW (2025-11-24)
+                                    loss_c2_unclipped,  # NEW (2025-11-24)
+                                ) = self._twin_critics_vf_clipping_loss(
+                                    latent_vf=latent_vf_selected,
+                                    targets=None,  # Not used for categorical
+                                    old_quantiles_critic1=None,  # Not used for categorical
+                                    old_quantiles_critic2=None,  # Not used for categorical
+                                    clip_delta=clip_delta,
+                                    reduction="none",
+                                    old_probs_critic1=old_probs_c1,
+                                    old_probs_critic2=old_probs_c2,
+                                    target_distribution=target_distribution_selected
                                 )
 
-                                # Element-wise max, then mean (correct PPO semantics)
-                                critic_loss = torch.mean(
-                                    torch.max(loss_unclipped_avg, clipped_loss_avg)
-                                )
+                                # FIX (2025-11-24): Apply max() to EACH critic independently, then average
+                                # Same fix as quantile critic above - preserves Twin Critics independence
+                                # See: test_twin_critics_loss_aggregation.py for bug verification
+                                loss_c1_final = torch.max(loss_c1_unclipped, loss_c1_clipped)
+                                loss_c2_final = torch.max(loss_c2_unclipped, loss_c2_clipped)
+                                critic_loss = torch.mean((loss_c1_final + loss_c2_final) / 2.0)
 
                                 # Store losses for logging
                                 if not hasattr(self, '_twin_critic_vf_clip_loss_cat_sum'):
@@ -11344,6 +11404,8 @@ class DistributionalPPO(RecurrentPPO):
                                 "train_pred_mean_raw_pre_clip", mean_values_unscaled
                             )
 
+                            # NOTE (2025-11-24): This clips predictions (not targets), safer than above
+                            # but still not correct PPO VF clipping (should clip changes, not values)
                             if (not self.normalize_returns) and (
                                 self._value_clip_limit_unscaled is not None
                             ):
