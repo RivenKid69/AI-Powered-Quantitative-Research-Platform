@@ -44,6 +44,7 @@ class SAPPOConfig:
         adaptive_epsilon: Whether to adapt epsilon based on training progress
         epsilon_schedule: Schedule for epsilon adaptation ('constant', 'linear', 'cosine')
         epsilon_final: Final epsilon value for schedule
+        max_updates: Optional override for epsilon schedule duration (computed from model if None)
     """
     enabled: bool = True
     perturbation: PerturbationConfig = None
@@ -55,6 +56,7 @@ class SAPPOConfig:
     adaptive_epsilon: bool = False
     epsilon_schedule: str = "constant"
     epsilon_final: float = 0.05
+    max_updates: Optional[int] = None
 
     def __post_init__(self) -> None:
         """Initialize default perturbation config if not provided."""
@@ -96,6 +98,9 @@ class StateAdversarialPPO:
 
         self._update_count = 0
         self._adversarial_enabled = False
+
+        # Compute max_updates for epsilon schedule (FIX: БАГ #1)
+        self._max_updates = self._compute_max_updates()
 
         # Statistics
         self._total_adversarial_samples = 0
@@ -159,6 +164,56 @@ class StateAdversarialPPO:
     def on_update_end(self) -> None:
         """Called at the end of each update."""
         pass
+
+    def _compute_max_updates(self) -> int:
+        """Compute maximum updates for epsilon schedule.
+
+        FIX: БАГ #1 - Replace hardcoded max_updates = 1000 with computed value
+
+        Priority:
+        1. config.max_updates (explicit override)
+        2. total_timesteps / n_steps from model
+        3. Infer from current progress (num_timesteps)
+        4. Conservative default (10000)
+
+        Returns:
+            Maximum number of updates for epsilon schedule
+        """
+        # Priority 1: Explicit override in config
+        if self.config.max_updates is not None:
+            logger.info(f"SA-PPO: Using configured max_updates={self.config.max_updates}")
+            return self.config.max_updates
+
+        # Priority 2: Compute from total_timesteps and n_steps
+        total_timesteps = getattr(self.model, 'total_timesteps', None)
+        n_steps = getattr(self.model, 'n_steps', None)
+
+        if total_timesteps is not None and n_steps is not None and n_steps > 0:
+            max_updates = total_timesteps // n_steps
+            logger.info(
+                f"SA-PPO: Computed max_updates={max_updates} from "
+                f"total_timesteps={total_timesteps}, n_steps={n_steps}"
+            )
+            return max_updates
+
+        # Priority 3: Infer from current progress (assume halfway through training)
+        num_timesteps = getattr(self.model, 'num_timesteps', 0)
+        if num_timesteps > 0 and n_steps is not None and n_steps > 0:
+            estimated_max = (num_timesteps * 2) // n_steps
+            logger.warning(
+                f"SA-PPO: Cannot determine total_timesteps. "
+                f"Estimating max_updates={estimated_max} from current progress "
+                f"(num_timesteps={num_timesteps}, n_steps={n_steps})"
+            )
+            return estimated_max
+
+        # Priority 4: Conservative default (more conservative than old hardcoded 1000)
+        logger.warning(
+            "SA-PPO: Cannot determine max_updates from model config. "
+            "Using conservative default value of 10000. "
+            "Set config.max_updates explicitly for accurate epsilon schedule."
+        )
+        return 10000
 
     def compute_adversarial_loss(
         self,
@@ -285,17 +340,30 @@ class StateAdversarialPPO:
 
         # Compute robust KL regularization
         robust_kl_penalty = 0.0
+        kl_method = "none"
         if self.config.robust_kl_coef > 0 and num_adversarial > 0:
-            # KL divergence between clean and adversarial policies
+            # Get distributions from clean and adversarial states
             with torch.no_grad():
                 dist_clean = self.model.policy.get_distribution(states_adv_base)
-                log_probs_clean = dist_clean.log_prob(actions_adv)
 
             dist_adv = self.model.policy.get_distribution(states_adv_perturbed)
-            log_probs_adv = dist_adv.log_prob(actions_adv)
 
-            # KL(clean || adversarial) - penalize large policy changes
-            kl_div = (torch.exp(log_probs_clean) * (log_probs_clean - log_probs_adv)).mean()
+            # Compute KL divergence: KL(clean || adversarial)
+            # FIX: БАГ #2 - Use analytical KL divergence when available
+            try:
+                # Analytical KL divergence (exact for Gaussian distributions)
+                kl_div = torch.distributions.kl_divergence(dist_clean, dist_adv).mean()
+                kl_method = "analytical"
+            except NotImplementedError:
+                # Fallback: Monte Carlo approximation
+                # KL(π₁||π₂) ≈ E_π₁[log π₁(a) - log π₂(a)]
+                with torch.no_grad():
+                    log_probs_clean = dist_clean.log_prob(actions_adv)
+
+                log_probs_adv = dist_adv.log_prob(actions_adv)
+                kl_div = (log_probs_clean - log_probs_adv).mean()
+                kl_method = "monte_carlo"
+
             robust_kl_penalty = self.config.robust_kl_coef * kl_div
             self._total_robust_kl_penalty += robust_kl_penalty.item()
 
@@ -311,6 +379,7 @@ class StateAdversarialPPO:
             "sa_ppo/entropy_loss": entropy_loss.item(),
             "sa_ppo/entropy": -entropy_loss.item(),  # Actual entropy value (positive)
             "sa_ppo/robust_kl_penalty": robust_kl_penalty if isinstance(robust_kl_penalty, float) else robust_kl_penalty.item(),
+            "sa_ppo/kl_method": kl_method,  # FIX: БАГ #2 - Log KL computation method
             "sa_ppo/num_adversarial": num_adversarial,
             "sa_ppo/num_clean": num_clean,
         })
@@ -378,13 +447,15 @@ class StateAdversarialPPO:
         return total_loss, info
 
     def _get_current_epsilon(self) -> float:
-        """Get current epsilon value based on schedule."""
+        """Get current epsilon value based on schedule.
+
+        FIX: БАГ #1 - Use computed max_updates instead of hardcoded 1000
+        """
         if not self.config.adaptive_epsilon:
             return self.config.perturbation.epsilon
 
-        # Assuming some max_updates for scheduling (can be made configurable)
-        max_updates = 1000  # TODO: make this configurable
-        progress = min(1.0, self._update_count / max_updates)
+        # Use computed max_updates (from __init__)
+        progress = min(1.0, self._update_count / self._max_updates)
 
         epsilon_init = self.config.perturbation.epsilon
         epsilon_final = self.config.epsilon_final
@@ -499,6 +570,8 @@ class StateAdversarialPPO:
     ) -> Tuple[float, Dict[str, float]]:
         """Compute robust KL regularization between clean and adversarial policies.
 
+        FIX: БАГ #2 - Use analytical KL divergence when available
+
         Args:
             states_clean: Clean state observations [batch_size, ...]
             states_adv: Adversarial (perturbed) state observations [batch_size, ...]
@@ -516,21 +589,40 @@ class StateAdversarialPPO:
         if batch_size == 0:
             return 0.0, info
 
-        # KL divergence between clean and adversarial policies
+        # Get distributions from clean and adversarial states
         with torch.no_grad():
             dist_clean = self.model.policy.get_distribution(states_clean)
-            log_probs_clean = dist_clean.log_prob(actions)
 
         dist_adv = self.model.policy.get_distribution(states_adv)
-        log_probs_adv = dist_adv.log_prob(actions)
 
-        # KL(clean || adversarial) - penalize large policy changes
-        kl_div = (torch.exp(log_probs_clean) * (log_probs_clean - log_probs_adv)).mean()
+        # Compute KL divergence: KL(clean || adversarial)
+        # Prefer analytical KL divergence for better accuracy and efficiency
+        kl_method = "unknown"
+        try:
+            # Analytical KL divergence (exact for Gaussian distributions)
+            # References:
+            # - PyTorch: torch.distributions.kl.kl_divergence
+            # - For Normal distributions: KL(π₁||π₂) = log(σ₂/σ₁) + (σ₁²+(μ₁-μ₂)²)/(2σ₂²) - 1/2
+            kl_div = torch.distributions.kl_divergence(dist_clean, dist_adv).mean()
+            kl_method = "analytical"
+        except NotImplementedError:
+            # Fallback: Monte Carlo approximation
+            # KL(π₁||π₂) ≈ E_π₁[log π₁(a) - log π₂(a)]
+            # Use actions sampled from clean distribution (from rollout buffer)
+            with torch.no_grad():
+                log_probs_clean = dist_clean.log_prob(actions)
+
+            log_probs_adv = dist_adv.log_prob(actions)
+            kl_div = (log_probs_clean - log_probs_adv).mean()
+            kl_method = "monte_carlo"
+
         robust_kl_penalty = float((self.config.robust_kl_coef * kl_div).item())
         self._total_robust_kl_penalty += robust_kl_penalty
 
         info.update({
             "sa_ppo/robust_kl_penalty": robust_kl_penalty,
+            "sa_ppo/kl_method": kl_method,
+            "sa_ppo/kl_divergence": float(kl_div.item()),
         })
 
         return robust_kl_penalty, info
