@@ -9211,36 +9211,34 @@ class DistributionalPPO(RecurrentPPO):
                             value_states = getattr(dist_output, "value_states", None)
                             if value_states is not None:
                                 self.policy.last_value_state = value_states
-                    # POTENTIAL BUG (2025-11-24): This clips TARGET returns, not prediction changes!
+                    # FIX (2025-11-24): REMOVED target clipping - targets should NEVER be clipped!
                     # =====================================================================
-                    # WARNING: This code clips the GROUND TRUTH targets, which is WRONG for PPO!
+                    # CRITICAL FIX: PPO value clipping should clip PREDICTION CHANGES, NOT targets!
                     #
-                    # PPO value clipping should clip PREDICTION CHANGES:
+                    # Correct PPO VF clipping:
                     #   V_clipped = V_old + clip(V_new - V_old, -epsilon, +epsilon)
+                    #   L = max((V_new - V_target)^2, (V_clipped - V_target)^2)
                     #
-                    # NOT the target itself:
-                    #   target_clipped = clip(target, -epsilon, +epsilon)  <-- WRONG!
+                    # The target V_target must remain UNCHANGED (ground truth).
                     #
-                    # Example of catastrophic failure:
+                    # Previous bug: Clipped targets, causing model to learn:
                     #   - Actual return: 1.0 (100% profit)
-                    #   - value_clip_limit: 0.2 (typical PPO epsilon)
-                    #   - Clipped target: 0.2 (20%)
-                    #   - Model learns: Max possible return is 0.2!
+                    #   - Clipped target: 0.2 (20%) ← WRONG!
+                    #   - Model learns: "Max possible return is 0.2" ← CATASTROPHIC!
                     #
-                    # CURRENT STATUS: Safe (value_clip_limit=null in all configs)
-                    # ACTION: Do NOT set value_clip_limit unless you understand this bug!
-                    # See: test_target_returns_clipping.py for full analysis
+                    # FIXED: Targets are now used UNCLIPPED everywhere.
+                    # See: test_target_clipping_fix.py for verification
                     # =====================================================================
+
+                    # Keep debug logging (but DON'T actually clip targets)
+                    raw_limit_bounds: Optional[tuple[Optional[float], Optional[float]]] = None
                     if (not self.normalize_returns) and (
                         self._value_clip_limit_unscaled is not None
                     ):
                         limit_unscaled = float(self._value_clip_limit_unscaled)
                         raw_limit_bounds = (-limit_unscaled, limit_unscaled)
-                        target_returns_raw = torch.clamp(
-                            target_returns_raw,
-                            min=-limit_unscaled,
-                            max=limit_unscaled,
-                        )
+                        # NOTE: We log what WOULD BE clipped, but DON'T actually clip!
+
                     target_raw_post_limit = target_returns_raw.detach()
 
                     self._record_value_debug_stats(
@@ -9252,13 +9250,12 @@ class DistributionalPPO(RecurrentPPO):
                         clip_bounds=raw_limit_bounds,
                     )
 
+                    # FIX (2025-11-24): Use UNCLIPPED targets everywhere (no .clamp()!)
                     if self.normalize_returns:
                         target_returns_norm_unclipped = (
                             target_returns_raw - ret_mu_tensor
                         ) / ret_std_tensor
-                        target_returns_norm = target_returns_norm_unclipped.clamp(
-                            self._value_norm_clip_min, self._value_norm_clip_max
-                        )
+                        target_returns_norm = target_returns_norm_unclipped  # NO CLIPPING!
                         norm_clip_bounds: Optional[
                             tuple[Optional[float], Optional[float]]
                         ] = (
@@ -9270,16 +9267,11 @@ class DistributionalPPO(RecurrentPPO):
                             (target_returns_raw / float(base_scale_safe))
                             * self._value_target_scale_effective
                         )
+                        target_returns_norm = target_returns_norm_unclipped  # NO CLIPPING!
                         if self._value_clip_limit_scaled is not None:
                             limit_scaled = float(self._value_clip_limit_scaled)
-                            target_returns_norm = torch.clamp(
-                                target_returns_norm_unclipped,
-                                min=-limit_scaled,
-                                max=limit_scaled,
-                            )
                             norm_clip_bounds = (-limit_scaled, limit_scaled)
                         else:
-                            target_returns_norm = target_returns_norm_unclipped
                             norm_clip_bounds = None
 
                     self._record_value_debug_stats(
@@ -9287,13 +9279,12 @@ class DistributionalPPO(RecurrentPPO):
                     )
                     self._record_value_debug_stats(
                         "ev_target_norm_post_clip",
-                        target_returns_norm,
+                        target_returns_norm,  # Now same as unclipped (no clipping applied)
                         clip_bounds=norm_clip_bounds,
                     )
 
-                    # CRITICAL FIX: Do NOT clip targets in eval! Only predictions should be clipped.
+                    # CRITICAL FIX: Use UNCLIPPED targets for explained variance computation
                     # Targets represent the actual GAE returns and should remain unchanged.
-                    # Use UNCLIPPED targets for explained variance computation
                     target_norm_col = target_returns_norm_unclipped.reshape(-1, 1)
                     target_raw_col = target_returns_raw.reshape(-1, 1)
 
@@ -10297,18 +10288,18 @@ class DistributionalPPO(RecurrentPPO):
                             old_values_tensor
                         )
 
-                        # НЕТ raw-clip при normalize_returns: полагаемся на нормализованный ±ret_clip
-                        # POTENTIAL BUG (2025-11-24): Clips TARGET returns! See line 9214 for full warning.
+                        # FIX (2025-11-24): REMOVED target clipping in training loop!
+                        # Targets should NEVER be clipped - only predictions should be clipped.
+                        # See: test_target_clipping_fix.py for verification
+
+                        # Keep debug logging (but DON'T actually clip targets)
+                        raw_limit_bounds_train: Optional[tuple[Optional[float], Optional[float]]] = None
                         if (not self.normalize_returns) and (
                             self._value_clip_limit_unscaled is not None
                         ):
                             limit_unscaled = float(self._value_clip_limit_unscaled)
                             raw_limit_bounds_train = (-limit_unscaled, limit_unscaled)
-                            target_returns_raw = torch.clamp(
-                                target_returns_raw,
-                                min=-limit_unscaled,
-                                max=limit_unscaled,
-                            )
+                            # NOTE: We log what WOULD BE clipped, but DON'T actually clip!
 
                         target_raw_post_limit = target_returns_raw.detach()
                         self._record_value_debug_stats(
@@ -10323,13 +10314,12 @@ class DistributionalPPO(RecurrentPPO):
                         weight_before_raw = weight
                         raw_weight = float(sample_weight)
 
+                        # FIX (2025-11-24): Use UNCLIPPED targets everywhere (no .clamp()!)
                         if self.normalize_returns:
                             target_returns_norm_raw = (
                                 target_returns_raw - ret_mu_tensor
                             ) / ret_std_tensor
-                            target_returns_norm = target_returns_norm_raw.clamp(
-                                self._value_norm_clip_min, self._value_norm_clip_max
-                            )
+                            target_returns_norm = target_returns_norm_raw  # NO CLIPPING!
                             norm_clip_bounds_train: Optional[
                                 tuple[Optional[float], Optional[float]]
                             ] = (
@@ -10341,16 +10331,11 @@ class DistributionalPPO(RecurrentPPO):
                                 (target_returns_raw / float(base_scale_safe))
                                 * self._value_target_scale_effective
                             )
+                            target_returns_norm = target_returns_norm_raw  # NO CLIPPING!
                             if self._value_clip_limit_scaled is not None:
                                 limit_scaled = float(self._value_clip_limit_scaled)
-                                target_returns_norm = torch.clamp(
-                                    target_returns_norm_raw,
-                                    min=-limit_scaled,
-                                    max=limit_scaled,
-                                )
                                 norm_clip_bounds_train = (-limit_scaled, limit_scaled)
                             else:
-                                target_returns_norm = target_returns_norm_raw
                                 norm_clip_bounds_train = None
 
                         self._record_value_debug_stats(
@@ -10358,7 +10343,7 @@ class DistributionalPPO(RecurrentPPO):
                         )
                         self._record_value_debug_stats(
                             "train_target_norm_post_clip",
-                            target_returns_norm,
+                            target_returns_norm,  # Now same as unclipped (no clipping applied)
                             clip_bounds=norm_clip_bounds_train,
                         )
 
