@@ -309,6 +309,56 @@ class TradingEnv(gym.Env):
             self._close_actual = self.df["close"].copy()
             self.df["close"] = self.df["close"].shift(1)
             self.df["_close_shifted"] = True  # Mark as shifted
+
+            # CRITICAL FIX (2025-11-23): Shift all price-derived technical indicators
+            # to prevent data leakage (look-ahead bias)
+            #
+            # Root Cause: Technical indicators (RSI, SMA, MACD) are calculated in
+            # transformers.py on ORIGINAL close prices. Then close is shifted here,
+            # but indicators remain unshifted, creating temporal misalignment:
+            #   - At timestep t, model sees:
+            #     - close[t] = price from t-1 (shifted)
+            #     - rsi[t] = RSI from close[t] ORIGINAL (not shifted)
+            #   - This is look-ahead bias: indicators contain future information!
+            #
+            # Solution: Shift all price-derived indicators by 1 step after close shift
+            #
+            # Reference: CRITICAL_BUGS_ANALYSIS_2025_11_23.md - Problem #1
+            #
+            # List of indicators to shift (from transformers.py and mediator.py):
+            # - rsi: RSI momentum indicator (period=14)
+            # - sma_*: Simple Moving Averages (e.g., sma_1200, sma_5040, sma_12000)
+            # - macd, macd_signal: MACD momentum indicators
+            # - momentum: Momentum indicator
+            # - atr: Average True Range (volatility)
+            # - cci: Commodity Channel Index
+            # - obv: On-Balance Volume
+            # - bb_lower, bb_upper: Bollinger Bands (not always present)
+            #
+            # Note: These indicators are computed from close prices, so they MUST
+            # be shifted together to maintain temporal consistency.
+
+            _indicators_to_shift = [
+                "rsi",           # RSI (from transformers.py:1050-1060)
+                "macd",          # MACD line
+                "macd_signal",   # MACD signal line
+                "momentum",      # Momentum indicator
+                "atr",           # Average True Range
+                "cci",           # Commodity Channel Index
+                "obv",           # On-Balance Volume
+                "bb_lower",      # Bollinger Band lower (optional)
+                "bb_upper",      # Bollinger Band upper (optional)
+            ]
+
+            # Shift SMA columns (sma_240, sma_720, sma_1200, sma_1440, sma_5040, sma_12000, etc.)
+            _sma_cols = [col for col in self.df.columns if col.startswith("sma_")]
+            _indicators_to_shift.extend(_sma_cols)
+
+            # Apply shift to all indicators that exist in dataframe
+            for _indicator in _indicators_to_shift:
+                if _indicator in self.df.columns:
+                    self.df[_indicator] = self.df[_indicator].shift(1)
+
         elif "close" in self.df.columns:
             # Already shifted, use as is
             self._close_actual = self.df["close"].copy()
