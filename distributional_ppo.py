@@ -262,6 +262,16 @@ def _compute_returns_with_time_limits(
 
     last_gae_lam = np.zeros(n_envs, dtype=np.float32)
 
+    # DEFENSIVE CLAMPING: Prevent GAE overflow in extreme reward scenarios
+    # Theoretical worst case: sustained high rewards → advantages ~10,000
+    # Float32 max: 3.4e38 (overflow risk is low, but defensive clamping improves robustness)
+    # Threshold: 1e6 (conservative, plenty of headroom: 10^32 below max)
+    #
+    # References:
+    # - Schulman et al. (2016), "High-Dimensional Continuous Control Using GAE"
+    # - Issue: Bug #4 GAE Overflow Risk (2025-11-23)
+    GAE_CLAMP_THRESHOLD = 1e6
+
     for step in reversed(range(buffer_size)):
         if step == buffer_size - 1:
             next_non_terminal = 1.0 - dones_float
@@ -276,7 +286,13 @@ def _compute_returns_with_time_limits(
             next_values = np.where(mask, time_limit_bootstrap[step], next_values)
 
         delta = rewards[step] + gamma * next_values * next_non_terminal - values[step]
+        # DEFENSIVE CLAMPING: Prevent overflow in delta computation
+        delta = np.clip(delta, -GAE_CLAMP_THRESHOLD, GAE_CLAMP_THRESHOLD)
+
         last_gae_lam = delta + gamma * gae_lambda * next_non_terminal * last_gae_lam
+        # DEFENSIVE CLAMPING: Prevent overflow in GAE accumulation
+        last_gae_lam = np.clip(last_gae_lam, -GAE_CLAMP_THRESHOLD, GAE_CLAMP_THRESHOLD)
+
         advantages[step] = last_gae_lam
 
     rollout_buffer.advantages = advantages.astype(np.float32, copy=False)

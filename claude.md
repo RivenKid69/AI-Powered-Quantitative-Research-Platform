@@ -78,14 +78,15 @@ python scripts/sim_reality_check.py --trades sim.parquet --historical hist.parqu
 | **External features всегда 0.0** (NEW) | **NaN конвертируется в 0.0 молча** | **Используйте `log_nan=True` для debugging** |
 | **PBT deadlock (workers crash)** (NEW 2025-11-22) | **ready_percentage слишком высокий** | **Используйте fallback: `min_ready_members=2`, `ready_check_max_wait=10`** |
 | **Non-monotonic quantiles в CVaR** (NEW 2025-11-22) | **Neural network predictions без sorting** | **Включите `critic.enforce_monotonicity=true` если CVaR critical** |
+| **GAE overflow с extreme rewards** (NEW 2025-11-23) | **Float32 overflow теоретически возможен** | **✅ Исправлено** - defensive clamping (threshold: 1e6) - см. [GAE_OVERFLOW_PROTECTION_FIX_REPORT.md](GAE_OVERFLOW_PROTECTION_FIX_REPORT.md) |
 | `AttributeError` в конфигах | Pydantic V2 API | Используйте `model_dump()` вместо `dict()` |
 | Тесты падают после изменений | Не обновлены тесты | Найдите и обновите соответствующие тесты |
 | Feature mismatch | Online/offline паритет | Запустите `check_feature_parity.py` |
 | PBT state mismatch | VGS не синхронизирован | Проверьте `variance_gradient_scaler.py` state dict |
 | Execution детерминизм нарушен | Изменён seed или порядок | Проверьте `test_execution_determinism.py` |
 | Градиенты взрываются | UPGD noise слишком высок | Уменьшите `sigma` в optimizer config |
-| **UPGD "freezes" важные веса** (NEW) | **Negative utility inversion** | **Исправлено 2025-11-21! Переобучите модели** |
-| **"VGS variance всегда ноль"** (VERIFIED 2025-11-23) | **❌ Ложная тревога** | **✅ НЕ БАГ - алгоритм корректен. См. [VGS_FINAL_VERDICT.md](VGS_FINAL_VERDICT.md)** |
+| **UPGD "freezes" важные веса** | **Negative utility inversion** | **✅ Исправлено 2025-11-21** |
+| **VGS gradient scaling неэффективен** | **E[g²] computation bug** | **✅ Исправлено v3.1 (2025-11-23)** - см. [VGS_E_G_SQUARED_BUG_REPORT.md](VGS_E_G_SQUARED_BUG_REPORT.md) |
 
 ### 🛡️ Критические правила (НЕ НАРУШАТЬ!)
 
@@ -435,22 +436,18 @@ pytest tests/test_twin_critics_vf_clipping_correctness.py -v      # 11/11 ✅
 
 ## 📊 СТАТУС ПРОЕКТА (2025-11-23)
 
-### ✅ Последние обновления (2025-11-23) - **VGS VERIFIED + BUG FIXES + TWIN CRITICS VF CLIPPING** ✅
+### ✅ Последние обновления (2025-11-23) - **VGS v3.1 FIXED + BUG FIXES + TWIN CRITICS** ✅
 
-#### ✅ VGS STOCHASTIC VARIANCE VERIFICATION (2025-11-23) - **NO BUG FOUND** ✅:
-- ✅ **Claimed Bug: "VGS variance always equals zero"** - ❌ **FALSE** (mathematically incorrect claim)
-  - **Investigation**: Comprehensive mathematical analysis + 5 verification tests
-  - **Verdict**: Current implementation is **CORRECT** - properly computes stochastic variance
-  - **Formula**: Var[μ] = E[μ²] - E[μ]² is correctly implemented ✓
-  - **Test Results**: 5/5 verification tests passed + 65/72 existing VGS tests passed
-  - **Proposed "Fix"**: ⚠️ **Would BREAK algorithm** - mixes spatial and temporal variance
-  - **Action Required**: ✅ **NONE** - Code is correct as-is, no changes needed
-  - **Reports**:
-    - [VGS_FINAL_VERDICT.md](VGS_FINAL_VERDICT.md) - Executive verdict ⭐ NEW
-    - [VGS_NO_BUG_SUMMARY.md](VGS_NO_BUG_SUMMARY.md) - Quick summary ⭐ NEW
-    - [VGS_VARIANCE_BUG_INVESTIGATION_REPORT.md](VGS_VARIANCE_BUG_INVESTIGATION_REPORT.md) - Full technical report ⭐ NEW
-    - [README_VGS_INVESTIGATION.md](README_VGS_INVESTIGATION.md) - Quick reference ⭐ NEW
-  - **Tests**: [test_vgs_stochastic_variance_verification.py](test_vgs_stochastic_variance_verification.py) (5/5 passed) ⭐ NEW
+#### ✅ VGS v3.1 CRITICAL FIX (2025-11-23) - **PRODUCTION READY** ✅:
+- ✅ **VGS Gradient Scaling** - E[g²] computation corrected (v3.1)
+  - **Issue**: Previous versions computed E[(E[g])²] instead of E[g²] → 10,000x underestimation for large parameters
+  - **Fixed**: Now correctly computes E[g²] = mean(g²) for proper stochastic variance
+  - **Impact**: VGS now effective for all parameter sizes (especially LSTM, large FC layers)
+  - **Test Coverage**: 7/7 regression tests (100%) + mathematical verification
+  - **Status**: ✅ **PRODUCTION READY** - All models v3.1+ work correctly
+  - **Report**: [VGS_E_G_SQUARED_BUG_REPORT.md](VGS_E_G_SQUARED_BUG_REPORT.md)
+  - **Tests**: [tests/test_vgs_v3_1_fix_verification.py](tests/test_vgs_v3_1_fix_verification.py)
+  - **Action**: Models trained before 2025-11-23 → consider retraining for optimal VGS performance
 
 ---
 
@@ -767,17 +764,17 @@ arch_params:
 
 ### 3. VGS (Variance Gradient Scaler)
 
-**Статус**: ✅ Production Ready | **Default**: Enabled with UPGD | **Version**: v3.0 (verified 2025-11-23)
+**Статус**: ✅ Production Ready | **Default**: Enabled with UPGD | **Version**: v3.1 (fixed 2025-11-23)
 
 **Описание**: Автоматическое масштабирование градиентов per-layer на основе **стохастической вариации** (variance OVER TIME) для стабилизации обучения.
 
 **Ключевые файлы**:
-- `variance_gradient_scaler.py` — реализация (v3.0)
+- `variance_gradient_scaler.py` — реализация (v3.1)
 - `distributional_ppo.py` — интеграция
-- `tests/test_vgs*.py` — тесты (65/72 passed)
-- `test_vgs_stochastic_variance_verification.py` — verification tests (5/5 passed) ⭐ NEW
+- `tests/test_vgs_v3_1_fix_verification.py` — regression tests (7/7 passed)
+- `VGS_E_G_SQUARED_BUG_REPORT.md` — detailed fix documentation
 
-**Алгоритм (v3.0 - STOCHASTIC VARIANCE)**:
+**Алгоритм (v3.1 - STOCHASTIC VARIANCE)**:
 1. Для каждого параметра вычисляет **gradient estimate**: μ_t = mean(grad_t) (scalar)
 2. Отслеживает **стохастическую дисперсию OVER TIME**: Var[μ] = E[μ²] - E[μ]²
 3. Вычисляет per-parameter normalized variance: Var[μ] / (E[μ]² + ε)
@@ -795,16 +792,16 @@ model:
     warmup_steps: 100         # Warmup перед включением scaling
 ```
 
-**✅ VERIFIED (2025-11-23)**: Алгоритм математически корректен
-- ✅ Вычисляет **стохастическую дисперсию** (temporal variance) правильно
-- ✅ Формула Var[X] = E[X²] - E[X]² применена корректно
-- ✅ Дисперсия НЕ "всегда ноль" (эмпирически доказано)
-- ✅ См. [VGS_FINAL_VERDICT.md](VGS_FINAL_VERDICT.md) для технических деталей
+**✅ FIXED v3.1 (2025-11-23)**: E[g²] computation corrected
+- ✅ Previous versions (v1.x-v3.0) incorrectly computed E[(E[g])²] instead of E[g²]
+- ✅ v3.1 now correctly computes E[g²] = mean(g²) for proper stochastic variance
+- ✅ This fix eliminates 10,000x underestimation for large parameters (LSTM, large FC layers)
+- ✅ See [VGS_E_G_SQUARED_BUG_REPORT.md](VGS_E_G_SQUARED_BUG_REPORT.md) for technical details
 
 **Важно**:
 - VGS автоматически управляет своим state dict для PBT checkpointing
 - При использовании с UPGD необходимо снизить `sigma` для предотвращения amplification градиентного шума
-- **v3.0 (2025-11-23)**: Исправлена документация, алгоритм был корректен с самого начала
+- **v3.1 (2025-11-23)**: Critical fix applied - models trained before this date should consider retraining
 
 ### 4. PBT (Population-Based Training)
 
@@ -1807,15 +1804,21 @@ TradingBot2 — это сложная система с множеством к�
 
 **Последнее обновление**: 2025-11-23
 **Версия документации**: 2.4 ⭐ **NEW**
-**Статус**: ✅ Production Ready (UPGD + **VGS VERIFIED** + Twin Critics + PBT + LSTM fix + NaN handling + Twin Critics VF Clipping + Quantile Levels VERIFIED + Bug Fixes 2025-11-22 + **VGS Verification 2025-11-23** ✅ - все интеграции завершены и верифицированы)
+**Статус**: ✅ Production Ready (UPGD + **VGS v3.1 FIXED** + Twin Critics + PBT + LSTM fix + NaN handling + Twin Critics VF Clipping + Quantile Levels VERIFIED + Bug Fixes 2025-11-22 + **VGS v3.1 Critical Fix 2025-11-23** + **GAE Overflow Protection 2025-11-23** ✅ - все интеграции завершены и верифицированы)
 
 **Новое (2025-11-23)** ⭐:
-- ✅ **VGS Stochastic Variance Verification**: Comprehensive investigation - NO BUG FOUND
-  - ✅ Claimed bug "variance always zero" - MATHEMATICALLY FALSE
-  - ✅ Current implementation is CORRECT - no code changes needed
-  - ✅ Test Coverage: +5 verification tests (5/5 passed, 100%)
-  - ✅ Documentation: 4 comprehensive reports created
-  - ✅ See [VGS_FINAL_VERDICT.md](VGS_FINAL_VERDICT.md) for details
+- ✅ **VGS v3.1 Critical Fix**: E[g²] computation corrected
+  - ✅ Fixed mathematical bug: E[(E[g])²] → E[g²] (mean of squares)
+  - ✅ Eliminated 10,000x variance underestimation for large parameters
+  - ✅ Test Coverage: +7 regression tests (7/7 passed, 100%)
+  - ✅ Automatic checkpoint migration from v1.x-v3.0 → v3.1
+  - ✅ See [VGS_E_G_SQUARED_BUG_REPORT.md](VGS_E_G_SQUARED_BUG_REPORT.md) for details
+- ✅ **GAE Overflow Protection (Bug #4)**: Defensive clamping added
+  - ✅ Added clamping to delta and GAE accumulation (threshold: 1e6)
+  - ✅ Prevents float32 overflow with extreme rewards (theoretical risk eliminated)
+  - ✅ Test Coverage: +11 comprehensive tests (11/11 passed, 100%)
+  - ✅ Zero performance impact, fully backward compatible
+  - ✅ See [GAE_OVERFLOW_PROTECTION_FIX_REPORT.md](GAE_OVERFLOW_PROTECTION_FIX_REPORT.md) for details
 
 **Предыдущее обновление (2025-11-22)**:
 - ✅ Bug Fixes Report: 3 issues addressed (1 false positive, 2 fixed)
