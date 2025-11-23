@@ -7,13 +7,11 @@ This module provides a mechanism to monitor and adaptively scale gradients
 during training based on their stochastic variance (temporal noise), which can
 improve training stability and convergence.
 
-**CRITICAL FIX in v3.0 (2025-11-23)**
-Previous versions (v1.x, v2.x) INCORRECTLY computed spatial variance (variance
-across parameter elements at ONE timestep) instead of stochastic variance
-(variance of gradient estimates OVER TIME). This has been FIXED in v3.0.
-
-v3.0 now correctly computes TRUE stochastic variance using E[g] and E[g²] tracked
-over time, which is the proper metric for gradient scaling and stability.
+**IMPORTANT: Fixed in v2.0 (2025-11-21)**
+Previous versions computed spatial variance (variance across all parameters at
+one timestep). This version correctly computes stochastic variance (variance of
+gradient estimates for each parameter over time), which is the proper metric for
+gradient scaling and stability.
 
 Key features:
 - Tracks per-parameter stochastic variance using exponential moving average
@@ -23,16 +21,13 @@ Key features:
 - Provides comprehensive logging for monitoring
 - Backward compatible checkpoint loading with soft migration
 
-Algorithm (v3.0 - CORRECTED):
-    1. For each parameter, track EMA of mean E[g] and mean of squares E[g²] OVER TIME
-    2. Compute stochastic variance: Var[g] = E[g²] - E[g]² (temporal variance)
+Algorithm:
+    1. For each parameter, track EMA of first moment (mean) and second moment (mean of squares)
+    2. Compute per-parameter variance: Var[g] = E[g²] - E[g]²
     3. Compute per-parameter normalized variance: Var[g] / (E[g]² + ε)
     4. Aggregate to global metric using 90th percentile (robust to outliers)
     5. Apply global adaptive scaling: g_scaled = g / (1 + α * global_var)
     6. Log metrics for analysis
-
-Note: v1.x-v2.x INCORRECTLY used torch.var() which computes SPATIAL variance
-(variance across elements at one timestep), not STOCHASTIC variance (over time).
 
 Hyperparameters:
     - enabled: Enable/disable variance scaling (default: True)
@@ -57,9 +52,8 @@ class VarianceGradientScaler:
     Monitors per-parameter stochastic variance (temporal gradient noise) during
     training and applies adaptive scaling to reduce variance and improve stability.
 
-    **v3.0 (2025-11-23): CRITICAL FIX - Now correctly computes stochastic variance
-    (variance OVER TIME) using E[g] and E[g²]. Previous versions incorrectly used
-    torch.var() which computes spatial variance (variance ACROSS ELEMENTS).**
+    **v2.0 (2025-11-21): Fixed to use per-parameter stochastic variance instead
+    of spatial variance.**
 
     Args:
         parameters: Iterable of parameters to track gradients for
@@ -116,14 +110,13 @@ class VarianceGradientScaler:
         # Step counter
         self._step_count: int = 0
 
-        # v3.0 (FIXED): Per-parameter stochastic variance tracking
-        # These track temporal variance (variance OVER TIME) for each parameter
-        # FIXED semantics in v3.0:
-        # - _param_grad_mean_ema stores E[g] (mean of gradients over time)
-        # - _param_grad_sq_ema stores E[g²] (mean of squared gradients over time)
-        # - Stochastic variance computed as: Var[g] = E[g²] - E[g]²
-        self._param_grad_mean_ema: Optional[torch.Tensor] = None  # [num_params] - E[g]
-        self._param_grad_sq_ema: Optional[torch.Tensor] = None    # [num_params] - E[g²]
+        # NEW v2.0 (v2.0.1 - numerically stable): Per-parameter stochastic variance tracking
+        # These track temporal variance (over time) for each parameter
+        # NOTE: Changed semantics in v2.0.1 for numerical stability:
+        # - _param_grad_mean_ema stores E[|g|] (mean of absolute gradients)
+        # - _param_grad_sq_ema stores Var[g] (variance from torch.var(), not E[g²])
+        self._param_grad_mean_ema: Optional[torch.Tensor] = None  # [num_params] - E[|g|]
+        self._param_grad_sq_ema: Optional[torch.Tensor] = None    # [num_params] - Var[g]
         self._param_numel: Optional[torch.Tensor] = None          # [num_params] - num elements per param
         self._param_ids: Dict[int, int] = {}                      # param id -> flat index
 
@@ -256,9 +249,8 @@ class VarianceGradientScaler:
     def update_statistics(self) -> None:
         """Update per-parameter stochastic variance statistics.
 
-        **v3.0 CRITICAL FIX**: Now correctly computes STOCHASTIC variance (variance
-        OVER TIME) using E[g] and E[g²]. Previous versions incorrectly used torch.var()
-        which computes SPATIAL variance (variance ACROSS ELEMENTS at one timestep).
+        **v2.0**: Now tracks per-parameter temporal variance (stochastic variance)
+        instead of spatial variance.
         """
         if self._parameters is None or len(self._parameters) == 0:
             return
@@ -267,32 +259,34 @@ class VarianceGradientScaler:
         if self._param_grad_mean_ema is None:
             self._initialize_per_param_stats()
 
-        # Update per-parameter stochastic variance (FIXED in v3.0)
+        # Update per-parameter stochastic variance (temporal variance)
         for i, param in enumerate(self._parameters):
             if param.grad is None:
                 continue
 
             grad = param.grad.data
+            # Compute per-parameter statistics using numerically stable torch.var()
+            # We track E[|g|] and Var[g] separately for stability
+            grad_abs_mean = grad.abs().mean().item()   # E[|g|] - used for normalization
+            grad_variance = grad.var(unbiased=False).item()  # Var[g] = E[(g - E[g])²] - numerically stable
 
-            # CRITICAL FIX (v3.0): Compute E[g] and E[g²] to get stochastic variance
-            # This tracks variance OVER TIME of the gradient MEAN, not spatial variance
-            grad_mean_current = grad.mean().item()              # Mean gradient at timestep t
-            grad_sq_current = grad_mean_current ** 2            # SQUARE of mean (not mean of squares!)
-
-            # Update EMA for this parameter using standard Adam-style formula
-            # Track E[g] and E[g²] over time
-            # Stochastic variance will be computed as: Var[g] = E[g²] - E[g]²
-            #
-            # IMPORTANT: Always use EMA formula, buffers are initialized to zeros
-            # Bias correction is applied when reading values, not when updating
-            self._param_grad_mean_ema[i] = (
-                self.beta * self._param_grad_mean_ema[i] +
-                (1 - self.beta) * grad_mean_current
-            )
-            self._param_grad_sq_ema[i] = (
-                self.beta * self._param_grad_sq_ema[i] +
-                (1 - self.beta) * grad_sq_current
-            )
+            # Update EMA for this parameter
+            # NOTE: We track E[|g|] (abs mean) and Var[g] (variance) separately
+            # This is numerically more stable than E[g] and E[g²]
+            if self._step_count == 1:
+                # Initialize on first step
+                self._param_grad_mean_ema[i] = grad_abs_mean  # E[|g|]
+                self._param_grad_sq_ema[i] = grad_variance    # Var[g]
+            else:
+                # Update EMA
+                self._param_grad_mean_ema[i] = (
+                    self.beta * self._param_grad_mean_ema[i] +
+                    (1 - self.beta) * grad_abs_mean
+                )
+                self._param_grad_sq_ema[i] = (
+                    self.beta * self._param_grad_sq_ema[i] +
+                    (1 - self.beta) * grad_variance
+                )
 
         # LEGACY: Update global statistics for backward compat logging
         # These are now SPATIAL variance (deprecated) and used only for logging
@@ -319,16 +313,15 @@ class VarianceGradientScaler:
         """
         Compute global normalized stochastic variance from per-parameter statistics.
 
-        **v3.0 CRITICAL FIX**: Now correctly computes stochastic variance (variance
-        OVER TIME) using formula Var[g] = E[g²] - E[g]². Previous versions incorrectly
-        used torch.var() which computes spatial variance (variance ACROSS ELEMENTS).
+        **v2.0**: Now uses per-parameter stochastic variance (temporal) instead of
+        spatial variance. Aggregates per-parameter variances using 90th percentile
+        (robust to outliers).
 
-        Formula (v3.0 - FIXED):
+        Formula (v2.0.1 - numerically stable):
             For each parameter i:
-                E[g_i] = EMA of gradient mean over time
-                E[g_i²] = EMA of squared gradient mean over time
-                Var[g_i] = E[g_i²] - E[g_i]²  # Stochastic variance (temporal)
-                normalized_var[i] = Var[g_i] / (E[g_i]² + ε)
+                Var[g_i] = torch.var(g_i)  # Computed directly for stability
+                E[|g_i|] = mean(|g_i|)     # Mean of absolute gradients
+                normalized_var[i] = Var[g_i] / (E[|g_i|]² + ε)
             global_var = percentile(normalized_var, 90)
 
         Returns:
@@ -345,22 +338,17 @@ class VarianceGradientScaler:
         bias_correction = 1.0 - self.beta ** self._step_count
 
         # Correct for bias
-        # v3.0 FIXED semantics:
-        # - _param_grad_mean_ema stores E[g] (mean of gradients over time)
-        # - _param_grad_sq_ema stores E[g²] (mean of squared gradients over time)
-        mean_corrected = self._param_grad_mean_ema / bias_correction  # E[g]
-        sq_corrected = self._param_grad_sq_ema / bias_correction      # E[g²]
+        # NOTE: New semantics (v2.0.1):
+        # - _param_grad_mean_ema stores E[|g|] (mean of absolute gradients)
+        # - _param_grad_sq_ema stores Var[g] (variance computed by torch.var())
+        abs_mean_corrected = self._param_grad_mean_ema / bias_correction  # E[|g|]
+        variance_corrected = self._param_grad_sq_ema / bias_correction     # Var[g]
 
-        # CRITICAL FIX: Compute stochastic variance as Var[g] = E[g²] - E[g]²
-        # This measures variance OVER TIME (temporal), not across elements (spatial)
-        variance = sq_corrected - mean_corrected.pow(2)
+        # Variance is already computed by torch.var(), so no need to subtract means
+        variance = torch.clamp(variance_corrected, min=0.0)  # Numerical stability
 
-        # Numerical stability: variance can be slightly negative due to floating point errors
-        variance = torch.clamp(variance, min=0.0)
-
-        # Compute per-parameter normalized variance: Var[g] / (|E[g]|² + ε)
-        # Using abs(E[g]) for scale invariance to gradient sign
-        denominator = torch.clamp(mean_corrected.abs().pow(2), min=1e-12) + self.eps
+        # Compute per-parameter normalized variance: Var[g] / (E[|g|]² + ε)
+        denominator = torch.clamp(abs_mean_corrected.pow(2), min=1e-12) + self.eps
         normalized_var_per_param = variance / denominator
 
         # Handle NaN/inf
@@ -440,25 +428,24 @@ class VarianceGradientScaler:
         Should be called after optimizer.step() to update statistics
         and log metrics.
 
-        **v3.0**: Now logs TRUE stochastic variance (temporal) instead of spatial variance.
+        **v2.0**: Now logs both stochastic variance (new) and spatial variance (legacy).
         """
         # FIXED: Increment step count BEFORE update for correct bias correction
         self._step_count += 1
         self.update_statistics()
 
-        # Log v3.0 metrics (per-parameter STOCHASTIC variance - FIXED)
+        # Log NEW v2.0 metrics (per-parameter stochastic variance)
         if self._param_grad_mean_ema is not None and self._param_grad_sq_ema is not None:
             bias_correction = 1.0 - self.beta ** self._step_count
 
-            # Compute per-parameter stochastic variances
-            # v3.0 FIXED semantics:
-            # - _param_grad_mean_ema stores E[g] (gradient mean over time)
-            # - _param_grad_sq_ema stores E[g²] (squared gradient mean over time)
-            mean_corrected = self._param_grad_mean_ema / bias_correction  # E[g]
-            sq_corrected = self._param_grad_sq_ema / bias_correction      # E[g²]
-            variance = sq_corrected - mean_corrected.pow(2)  # Var[g] = E[g²] - E[g]²
-            variance = torch.clamp(variance, min=0.0)  # Numerical stability
-            denominator = torch.clamp(mean_corrected.abs().pow(2), min=1e-12) + self.eps
+            # Compute per-parameter normalized variances
+            # NOTE: New semantics (v2.0.1):
+            # - _param_grad_mean_ema stores E[|g|]
+            # - _param_grad_sq_ema stores Var[g] directly
+            abs_mean_corrected = self._param_grad_mean_ema / bias_correction  # E[|g|]
+            variance_corrected = self._param_grad_sq_ema / bias_correction     # Var[g]
+            variance = torch.clamp(variance_corrected, min=0.0)
+            denominator = torch.clamp(abs_mean_corrected.pow(2), min=1e-12) + self.eps
             normalized_var_per_param = variance / denominator
             normalized_var_per_param = torch.where(
                 torch.isfinite(normalized_var_per_param),
@@ -541,8 +528,7 @@ class VarianceGradientScaler:
     def state_dict(self) -> Dict[str, Any]:
         """Return state dictionary for serialization.
 
-        **v3.0**: Includes FIXED per-parameter stochastic variance statistics.
-        Now stores E[g] and E[g²] instead of E[|g|] and spatial Var[g].
+        **v2.0**: Now includes per-parameter stochastic variance statistics.
         """
         state = {
             # Config
@@ -553,10 +539,9 @@ class VarianceGradientScaler:
             "warmup_steps": self.warmup_steps,
             "step_count": self._step_count,
 
-            # v3.0 FIXED: Per-parameter stochastic variance statistics
-            # Stores E[g] and E[g²] for computing Var[g] = E[g²] - E[g]²
-            "param_grad_mean_ema": self._param_grad_mean_ema,  # E[g]
-            "param_grad_sq_ema": self._param_grad_sq_ema,      # E[g²]
+            # NEW v2.0: Per-parameter stochastic variance statistics
+            "param_grad_mean_ema": self._param_grad_mean_ema,
+            "param_grad_sq_ema": self._param_grad_sq_ema,
             "param_numel": self._param_numel,
 
             # LEGACY v1.x: Global spatial variance statistics (for logging only)
@@ -566,7 +551,7 @@ class VarianceGradientScaler:
             "grad_max_ema": self._grad_max_ema,
 
             # Version marker for migration
-            "vgs_version": "3.0",  # UPDATED from 2.0
+            "vgs_version": "2.0",
         }
 
         return state
@@ -574,9 +559,9 @@ class VarianceGradientScaler:
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         """Load state from dictionary with backward compatibility.
 
-        **v3.0 CRITICAL FIX**: Automatically migrates old checkpoints (v1.x, v2.x with
-        INCORRECT spatial variance) to new format (v3.0 with CORRECT stochastic variance).
-        Old statistics are RESET with warning. Retraining is STRONGLY RECOMMENDED.
+        **v2.0**: Automatically migrates old checkpoints (v1.x with spatial variance)
+        to new format (v2.0 with per-parameter stochastic variance). Old statistics
+        are reset with a warning issued. Retraining is recommended.
         """
         # Load config parameters
         self.enabled = state_dict.get("enabled", self.enabled)
@@ -589,39 +574,28 @@ class VarianceGradientScaler:
         # Check version
         vgs_version = state_dict.get("vgs_version", "1.0")
 
-        if vgs_version in ["1.0", "2.0", "2.0.1"] or "param_grad_mean_ema" not in state_dict:
-            # OLD FORMAT (v1.x, v2.x with INCORRECT spatial variance)
+        if vgs_version == "1.0" or "param_grad_mean_ema" not in state_dict:
+            # OLD FORMAT (v1.x with spatial variance)
             import warnings
             warnings.warn(
                 "\n"
                 "=" * 80 + "\n"
-                "VGS v3.0 CRITICAL FIX: Stochastic Variance Migration\n"
+                "VGS Checkpoint Migration: OLD FORMAT DETECTED (v1.x - spatial variance)\n"
                 "=" * 80 + "\n"
-                f"Loading VGS checkpoint from version {vgs_version}.\n"
-                "\n"
-                "CRITICAL BUG FIXED in v3.0:\n"
-                "- Previous versions (v1.x, v2.x) INCORRECTLY computed SPATIAL variance\n"
-                "  (variance across parameter elements at ONE timestep)\n"
-                "- v3.0 now CORRECTLY computes STOCHASTIC variance\n"
-                "  (variance of gradient estimates OVER TIME)\n"
-                "\n"
-                "IMPACT:\n"
-                "- This is a FUNDAMENTAL fix to the algorithm\n"
-                "- Old VGS may have scaled gradients incorrectly:\n"
-                "  * Heterogeneous stable gradients -> incorrectly scaled down\n"
-                "  * Uniform noisy gradients -> not scaled (should have been)\n"
+                "Loading old VGS checkpoint with SPATIAL variance (variance across parameters).\n"
+                "This has been FIXED in v2.0 to use STOCHASTIC variance (temporal variance per-parameter).\n"
                 "\n"
                 "ACTION REQUIRED:\n"
-                "- Per-parameter statistics will be RESET to use correct computation.\n"
-                "- Training will continue with CORRECT stochastic variance tracking.\n"
-                "- STRONGLY RECOMMEND retraining models for optimal performance.\n"
+                "- Per-parameter stochastic variance statistics will be RESET.\n"
+                "- Training will continue normally with correct variance tracking.\n"
+                "- Retraining models is RECOMMENDED for optimal performance.\n"
                 "\n"
-                "See VGS_SPATIAL_VS_STOCHASTIC_BUG_REPORT.md for technical details.\n"
+                "See VGS_SPATIAL_VS_STOCHASTIC_VARIANCE_ANALYSIS.md for details.\n"
                 "=" * 80,
                 UserWarning
             )
 
-            # Reset per-parameter statistics (will be reinitialized with CORRECT computation)
+            # Reset per-parameter statistics (will be reinitialized on first step)
             self._param_grad_mean_ema = None
             self._param_grad_sq_ema = None
             self._param_numel = None
@@ -634,10 +608,10 @@ class VarianceGradientScaler:
             self._grad_max_ema = state_dict.get("grad_max_ema", None)
 
         else:
-            # NEW FORMAT (v3.0 with CORRECT stochastic variance)
+            # NEW FORMAT (v2.0 with per-parameter stochastic variance)
             # Load per-parameter statistics
-            self._param_grad_mean_ema = state_dict.get("param_grad_mean_ema", None)  # E[g]
-            self._param_grad_sq_ema = state_dict.get("param_grad_sq_ema", None)      # E[g²]
+            self._param_grad_mean_ema = state_dict.get("param_grad_mean_ema", None)
+            self._param_grad_sq_ema = state_dict.get("param_grad_sq_ema", None)
             self._param_numel = state_dict.get("param_numel", None)
             # param_ids will be rebuilt by _initialize_per_param_stats if needed
 
@@ -656,5 +630,5 @@ class VarianceGradientScaler:
             f"eps={self.eps}, "
             f"warmup_steps={self.warmup_steps}, "
             f"step_count={self._step_count}, "
-            f"version=3.0)"  # v3.0: FIXED stochastic variance computation
+            f"version=2.0)"  # Added version marker
         )
