@@ -20,7 +20,13 @@ Research references:
 import pytest
 import numpy as np
 import math
-from obs_builder import build_observation_vector
+
+try:
+    from obs_builder import build_observation_vector
+    HAVE_OBS_BUILDER = True
+except ImportError:
+    HAVE_OBS_BUILDER = False
+    pytest.skip("obs_builder (Cython module) not available", allow_module_level=True)
 
 
 class TestPrevPriceRetBarValidation:

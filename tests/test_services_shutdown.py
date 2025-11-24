@@ -1,6 +1,7 @@
 """Comprehensive tests for services.shutdown module."""
 import asyncio
 import signal
+import sys
 from unittest.mock import MagicMock, AsyncMock, patch
 
 import pytest
@@ -195,6 +196,7 @@ class TestShutdownManagerCallbackExecution:
 class TestShutdownManagerSignalHandling:
     """Tests for signal handling."""
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="SIGUSR1/SIGUSR2 not available on Windows")
     def test_register_signal_handler(self):
         """Test registering signal handler."""
         manager = ShutdownManager({})
@@ -211,6 +213,7 @@ class TestShutdownManagerSignalHandling:
             # Restore original
             signal.signal(signal.SIGUSR1, original)
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="SIGUSR1/SIGUSR2 not available on Windows")
     def test_unregister_signal_handler(self):
         """Test unregistering signal handler."""
         manager = ShutdownManager({})
@@ -225,6 +228,7 @@ class TestShutdownManagerSignalHandling:
         finally:
             signal.signal(signal.SIGUSR1, original)
 
+    @pytest.mark.skipif(sys.platform == "win32", reason="SIGUSR1/SIGUSR2 not available on Windows")
     def test_register_multiple_signals(self):
         """Test registering multiple signals."""
         manager = ShutdownManager({})

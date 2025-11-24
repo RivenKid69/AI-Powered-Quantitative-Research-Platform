@@ -35,3 +35,11 @@ extra = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "asyncio: marks tests as async (using pytest-asyncio)",
+    "ppo_bugs: marks tests for PPO bug fixes",
+    "integration: marks tests as integration tests",
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "requires_cython: marks tests that require compiled Cython modules",
+]
+asyncio_mode = "auto"

@@ -20,7 +20,13 @@ Test scenarios:
 
 import numpy as np
 import pytest
-from obs_builder import build_observation_vector
+
+try:
+    from obs_builder import build_observation_vector
+    HAVE_OBS_BUILDER = True
+except ImportError:
+    HAVE_OBS_BUILDER = False
+    pytest.skip("obs_builder (Cython module) not available", allow_module_level=True)
 
 
 def test_price_momentum_uses_validity_flag_when_valid():

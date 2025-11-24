@@ -102,14 +102,24 @@ class EventBus:
 
     # ------------------------------------------------------------------
     async def get(self) -> Any:
-        """Return the next event or ``None`` after :meth:`close`."""
+        """Return the next event or ``None`` after :meth:`close`.
+
+        If the bus is closed and the queue is empty, returns ``None`` immediately
+        without blocking.
+        """
+
+        # Check if bus is closed and queue is empty
+        if self._closed and self._queue.empty():
+            return None
 
         item = await self._queue.get()
         self._set_depth()
+
         if item is self._sentinel:
             # keep sentinel for other consumers
             await self._queue.put(self._sentinel)
             return None
+
         return item
 
     @property
@@ -120,22 +130,25 @@ class EventBus:
 
     # ------------------------------------------------------------------
     def close(self) -> None:
-        """Signal that no more events will be published."""
+        """Signal that no more events will be published.
+
+        If the queue is full, the sentinel is not added immediately but will
+        be returned by get() when the queue is drained. This ensures existing
+        events are not lost.
+        """
 
         if self._closed:
             return
         self._closed = True
+
+        # Try to add sentinel without removing existing events
         try:
             self._queue.put_nowait(self._sentinel)
         except asyncio.QueueFull:
-            try:
-                self._queue.get_nowait()
-            except asyncio.QueueEmpty:
-                pass
-            try:
-                self._queue.put_nowait(self._sentinel)
-            except asyncio.QueueFull:
-                pass
+            # Queue is full - sentinel will be implicitly added by get()
+            # when consumers drain the queue. This preserves all existing events.
+            pass
+
         self._set_depth()
 
     # ------------------------------------------------------------------

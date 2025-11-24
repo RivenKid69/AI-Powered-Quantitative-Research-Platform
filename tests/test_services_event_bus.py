@@ -282,10 +282,10 @@ class TestEventBusClose:
         assert result2 is None
 
 
-@pytest.mark.asyncio
 class TestEventBusContextManagers:
     """Tests for EventBus context manager support."""
 
+    @pytest.mark.asyncio
     async def test_async_context_manager(self):
         """Test async context manager closes bus on exit."""
         async with EventBus(queue_size=10, drop_policy="newest") as bus:
@@ -303,6 +303,7 @@ class TestEventBusContextManagers:
         # Bus should be closed after context exit
         assert bus._closed is True
 
+    @pytest.mark.asyncio
     async def test_async_context_manager_with_exception(self):
         """Test async context manager closes bus even on exception."""
         try:

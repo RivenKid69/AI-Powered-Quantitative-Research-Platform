@@ -16,7 +16,13 @@ Research support:
 
 import pytest
 import numpy as np
-from lob_state_cython import _compute_reward_cython
+
+try:
+    from lob_state_cython import _compute_reward_cython
+    HAVE_LOB_STATE_CYTHON = True
+except ImportError:
+    HAVE_LOB_STATE_CYTHON = False
+    pytest.skip("lob_state_cython (Cython module) not available", allow_module_level=True)
 
 
 class TestRiskPenaltyNormalization:

@@ -32,7 +32,7 @@ try:
     HAVE_SIMULATOR = True
 except ImportError:
     HAVE_SIMULATOR = False
-    pytestskip("MarketSimulator not available", allow_module_level=True)
+    pytest.skip("MarketSimulator not available", allow_module_level=True)
 
 try:
     from transformers import FeatureSpec, OnlineFeatureTransformer
