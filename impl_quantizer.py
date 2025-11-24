@@ -129,6 +129,8 @@ def _as_bool(value: Any, default: bool = False) -> bool:
             return True
         if v in {"0", "false", "no", "n", "off"}:
             return False
+        # Unknown string value, return default
+        return default
     return bool(value)
 
 

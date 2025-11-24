@@ -55,7 +55,7 @@ def _safe_positive_int(value: Any) -> Optional[int]:
         num = int(value)
     except (TypeError, ValueError):
         return None
-    if num < 0:
+    if num <= 0:
         return None
     return num
 
@@ -427,6 +427,9 @@ class FeesConfig:
         default_discount_mult = max(0.0, min(default_discount_mult, 1.0))
         if maker_mult is None:
             maker_mult = default_discount_mult if self.use_bnb_discount else 1.0
+        else:
+            # Clamp to valid range [0.0, 1.0]
+            maker_mult = max(0.0, min(maker_mult, 1.0))
         self.maker_discount_mult = maker_mult
 
         taker_mult_input = self.taker_discount_mult
@@ -434,6 +437,9 @@ class FeesConfig:
         taker_mult = _safe_float(taker_mult_input)
         if taker_mult is None:
             taker_mult = default_discount_mult if self.use_bnb_discount else 1.0
+        else:
+            # Clamp to valid range [0.0, 1.0]
+            taker_mult = max(0.0, min(taker_mult, 1.0))
         self.taker_discount_mult = taker_mult
 
         vip_input = self.vip_tier
@@ -572,7 +578,8 @@ class FeesConfig:
             if value is not None:
                 share_payload.setdefault(key, value)
 
-        share_cfg = MakerTakerShareSettings.parse(share_payload)
+        # Only parse if share_payload is not empty
+        share_cfg = MakerTakerShareSettings.parse(share_payload) if share_payload else None
         self.maker_taker_share_cfg = share_cfg
         if share_cfg is not None:
             share_dict = share_cfg.as_dict()
