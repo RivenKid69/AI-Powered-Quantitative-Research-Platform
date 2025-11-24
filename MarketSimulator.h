@@ -120,18 +120,35 @@ private:
     std::deque<double> w_var_close20;               // для std (BB)
     double sum5, sum20, sum20_sq;
     // RSI (Wilder)
+    // FIX (2025-11-24): Changed from static to member variables to prevent state leakage
+    // between MarketSimulator instances. Reference: Bug #2 in audit report.
     bool rsi_init;
     double avg_gain14, avg_loss14;
+    double prev_close_for_rsi;              // Previous close for RSI change calculation
+    std::deque<double> w_gain14, w_loss14;  // First 14 gains/losses for SMA initialization
+
     // ATR (Wilder)
+    // FIX (2025-11-24): Added w_tr14 deque for proper SMA(14) initialization
+    // Reference: Wilder (1978), "New Concepts in Technical Trading Systems"
     bool atr_init;
     double atr14, prev_close_for_atr;
+    std::deque<double> w_tr14;              // First 14 TRs for SMA initialization
     // MACD EMA
+    // FIX (2025-11-24): Added deques for proper SMA initialization of EMAs
+    // Reference: Standard practice in TA-Lib and other implementations
     double ema12, ema26, ema9;
     bool ema12_init, ema26_init, ema9_init;
+    std::deque<double> w_close12, w_close26;  // For SMA initialization of EMAs
+
     // OBV
     double obv;
+
     // Momentum
     std::deque<double> w_close10;
+
+    // OU state for CHOPPY_FLAT regime
+    // FIX (2025-11-24): Changed from static to member variable to prevent state leakage
+    double ou_state;
 
     // ГПСЧ
     std::mt19937_64 m_rng;

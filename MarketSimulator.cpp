@@ -144,11 +144,38 @@ void MarketSimulator::initialize_defaults() {
 
     // Индикаторы — нач. значения
     sum5 = 0.0; sum20 = 0.0; sum20_sq = 0.0;
-    rsi_init = false; avg_gain14 = 0.0; avg_loss14 = 0.0;
-    atr_init = false; atr14 = 0.0; prev_close_for_atr = NAN;
-    ema12 = ema26 = ema9 = 0.0; ema12_init = ema26_init = ema9_init = false;
+
+    // RSI initialization (member variables instead of static)
+    rsi_init = false;
+    avg_gain14 = 0.0;
+    avg_loss14 = 0.0;
+    prev_close_for_rsi = NAN;
+    w_gain14.clear();
+    w_loss14.clear();
+
+    // ATR initialization (with proper SMA warmup)
+    atr_init = false;
+    atr14 = 0.0;
+    prev_close_for_atr = NAN;
+    w_tr14.clear();
+
+    // MACD EMA initialization (with proper SMA warmup)
+    ema12 = ema26 = ema9 = 0.0;
+    ema12_init = ema26_init = ema9_init = false;
+    w_close12.clear();
+    w_close26.clear();
+
+    // OBV
     obv = 0.0;
-    w_close5.clear(); w_close20.clear(); w_tp20.clear(); w_var_close20.clear();
+
+    // OU state for CHOPPY_FLAT regime
+    ou_state = 0.0;
+
+    // Sliding windows for indicators
+    w_close5.clear();
+    w_close20.clear();
+    w_tp20.clear();
+    w_var_close20.clear();
     w_close10.clear();
 }
 
@@ -291,7 +318,11 @@ void MarketSimulator::update_indicators(std::size_t i) {
         v_bb_up[i]  = mean + 2.0 * sd;
     }
 
-    // ATR(14)
+    // ATR(14) - Wilder's Average True Range
+    // FIX (2025-11-24): Proper SMA(14) initialization instead of single TR value
+    // Reference: Wilder (1978), "New Concepts in Technical Trading Systems"
+    // Previous bug: atr14 = tr (single value) caused 10-50% error for first ~100 bars
+    // Now: Collect first 14 TRs, compute SMA, then apply Wilder smoothing
     double tr = 0.0;
     if (i == 0 || std::isnan(prev_close_for_atr)) {
         tr = highv - lowv;
@@ -300,67 +331,136 @@ void MarketSimulator::update_indicators(std::size_t i) {
         tr = std::max({highv - lowv, std::fabs(highv - cprev), std::fabs(lowv - cprev)});
     }
     prev_close_for_atr = closev;
-    if (!atr_init && i >= 13) { // накопили 14 TR
-        // простая средняя первых 14 TR
-        // Для точности можно хранить окно TR, но упростим: при i==13 считаем первичную среднюю через перезапуск.
-        atr_init = true;
-        atr14 = tr; // первый запуск — не идеально, но дальше будет Wilder-сглаживание
+
+    // Collect first 14 TRs for SMA initialization
+    if (w_tr14.size() < 14) {
+        w_tr14.push_back(tr);
     }
+
+    // Initialize ATR with SMA(14) when we have exactly 14 TRs
+    if (!atr_init && w_tr14.size() == 14) {
+        atr_init = true;
+        // Compute SMA of first 14 True Ranges (correct Wilder initialization)
+        double sum_tr = 0.0;
+        for (double t : w_tr14) sum_tr += t;
+        atr14 = sum_tr / 14.0;
+    }
+
+    // Apply Wilder's smoothing after initialization
     if (atr_init) {
-        // Wilder smoothing: ATR_t = (ATR_{t-1}*13 + TR_t)/14
+        // Wilder smoothing: ATR_t = (ATR_{t-1} * 13 + TR_t) / 14
         atr14 = (atr14 * 13.0 + tr) / 14.0;
         v_atr[i] = atr14;
     }
 
     // RSI(14), Wilder
-    // CRITICAL FIX (Bug #1 - 2025-11-24): Initialize with SMA of first 14 gains/losses
+    // FIX (2025-11-24): Multiple fixes applied:
+    // 1. Changed static variables to member variables to prevent state leakage (Bug #2)
+    // 2. Added edge case handling for gain=0 AND loss=0 → RSI=50 (Bug #3)
     // Reference: Wilder (1978), "New Concepts in Technical Trading Systems"
-    // Previous bug: Initialized with SINGLE value → 18-43% bias for 50-100 bars
-    // Now: Collect first 14 values, then compute SMA (like transformers.py)
-    static double prev_close_for_rsi = NAN;
     double change = 0.0;
-    if (i > 0 && !std::isnan(prev_close_for_rsi)) change = closev - prev_close_for_rsi;
+    if (i > 0 && !std::isnan(prev_close_for_rsi)) {
+        change = closev - prev_close_for_rsi;
+    }
     prev_close_for_rsi = closev;
+
     double gain = change > 0 ? change : 0.0;
     double loss = change < 0 ? -change : 0.0;
 
-    // Collect first 14 gains/losses for SMA initialization
-    static std::deque<double> gain_history14;
-    static std::deque<double> loss_history14;
-    if (gain_history14.size() < 14) {
-        gain_history14.push_back(gain);
-        loss_history14.push_back(loss);
+    // Collect first 14 gains/losses for SMA initialization (using member deques)
+    if (w_gain14.size() < 14) {
+        w_gain14.push_back(gain);
+        w_loss14.push_back(loss);
     }
 
-    if (!rsi_init && gain_history14.size() == 14) {
+    // Initialize RSI with SMA(14) when we have exactly 14 periods
+    if (!rsi_init && w_gain14.size() == 14) {
         rsi_init = true;
-        // Initialize with SMA (not single value!)
+        // Compute SMA of first 14 gains/losses (correct Wilder initialization)
         avg_gain14 = 0.0;
         avg_loss14 = 0.0;
-        for (double g : gain_history14) avg_gain14 += g;
-        for (double l : loss_history14) avg_loss14 += l;
+        for (double g : w_gain14) avg_gain14 += g;
+        for (double l : w_loss14) avg_loss14 += l;
         avg_gain14 /= 14.0;
         avg_loss14 /= 14.0;
     }
+
+    // Apply Wilder's smoothing and compute RSI after initialization
     if (rsi_init) {
         // Wilder's smoothing: (prev * 13 + new) / 14
         avg_gain14 = (avg_gain14 * 13.0 + gain) / 14.0;
         avg_loss14 = (avg_loss14 * 13.0 + loss) / 14.0;
-        double rs = (avg_loss14 == 0.0) ? std::numeric_limits<double>::infinity() : (avg_gain14 / avg_loss14);
-        double rsi = 100.0 - (100.0 / (1.0 + rs));
+
+        // FIX (Bug #3): Handle edge case when both gain and loss are zero
+        // This happens during maintenance windows or circuit breakers (14+ identical prices)
+        // Old behavior: RSI=100 (wrong - appeared as max bullish)
+        // New behavior: RSI=50 (correct - neutral, no movement)
+        double rsi;
+        if (avg_gain14 == 0.0 && avg_loss14 == 0.0) {
+            // No price movement → neutral RSI
+            rsi = 50.0;
+        } else if (avg_loss14 == 0.0) {
+            // Only gains → max RSI (extremely bullish)
+            rsi = 100.0;
+        } else if (avg_gain14 == 0.0) {
+            // Only losses → min RSI (extremely bearish)
+            rsi = 0.0;
+        } else {
+            // Normal case: compute RS and RSI
+            double rs = avg_gain14 / avg_loss14;
+            rsi = 100.0 - (100.0 / (1.0 + rs));
+        }
         v_rsi[i] = rsi;
     }
 
-    // MACD(12,26) + signal(9) на close
+    // MACD(12,26) + signal(9) on close
+    // FIX (2025-11-24): Proper SMA initialization for EMA12 and EMA26 (Bug #4)
+    // Reference: Standard practice in TA-Lib and other implementations
+    // Previous approach: EMA initialized with first close value (suboptimal)
+    // New approach: Initialize EMA12 with SMA(12), EMA26 with SMA(26) for better accuracy
     const double alpha12 = 2.0 / (12.0 + 1.0);
     const double alpha26 = 2.0 / (26.0 + 1.0);
     const double alpha9  = 2.0 / ( 9.0 + 1.0);
-    ema12 = ema_step(ema12, closev, alpha12, ema12_init);
-    ema26 = ema_step(ema26, closev, alpha26, ema26_init);
-    double macd = ema12 - ema26;
-    v_macd[i] = macd;
-    ema9  = ema_step(ema9, macd, alpha9, ema9_init);
-    v_macd_signal[i] = ema9;
+
+    // Collect closes for SMA initialization
+    w_close12.push_back(closev);
+    if (w_close12.size() > 12) w_close12.pop_front();
+
+    w_close26.push_back(closev);
+    if (w_close26.size() > 26) w_close26.pop_front();
+
+    // Initialize EMA12 with SMA(12) when we have exactly 12 periods
+    if (!ema12_init && w_close12.size() == 12) {
+        ema12_init = true;
+        double sum12 = 0.0;
+        for (double c : w_close12) sum12 += c;
+        ema12 = sum12 / 12.0;
+    } else if (ema12_init) {
+        // Apply standard EMA formula after initialization
+        ema12 = alpha12 * closev + (1.0 - alpha12) * ema12;
+    }
+
+    // Initialize EMA26 with SMA(26) when we have exactly 26 periods
+    if (!ema26_init && w_close26.size() == 26) {
+        ema26_init = true;
+        double sum26 = 0.0;
+        for (double c : w_close26) sum26 += c;
+        ema26 = sum26 / 26.0;
+    } else if (ema26_init) {
+        // Apply standard EMA formula after initialization
+        ema26 = alpha26 * closev + (1.0 - alpha26) * ema26;
+    }
+
+    // Compute MACD only when both EMAs are initialized
+    double macd = 0.0;
+    if (ema12_init && ema26_init) {
+        macd = ema12 - ema26;
+        v_macd[i] = macd;
+
+        // Signal line EMA(9) - can use simple initialization since MACD values are already warmed up
+        ema9 = ema_step(ema9, macd, alpha9, ema9_init);
+        v_macd_signal[i] = ema9;
+    }
 
     // Momentum(10)
     w_close10.push_back(closev);
@@ -428,7 +528,8 @@ double MarketSimulator::step(std::size_t i, double black_swan_probability, bool 
     double r = rp.mu + rp.sigma * z;
 
     // CHOPPY_FLAT: добавим OU-компонент (reversion)
-    static double ou_state = 0.0;
+    // FIX (2025-11-24): Changed ou_state from static to member variable
+    // to prevent state leakage between MarketSimulator instances
     if (m_curr_regime == MarketRegime::CHOPPY_FLAT) {
         double eta = 0.003 * m_stdnorm(m_rng);
         ou_state = (1.0 - rp.kappa) * ou_state + eta;
