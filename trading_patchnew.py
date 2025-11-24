@@ -348,11 +348,28 @@ class TradingEnv(gym.Env):
                 "obv",           # On-Balance Volume
                 "bb_lower",      # Bollinger Band lower (optional)
                 "bb_upper",      # Bollinger Band upper (optional)
+                "taker_buy_ratio",  # Taker Buy Ratio base value
             ]
 
             # Shift SMA columns (sma_240, sma_720, sma_1200, sma_1440, sma_5040, sma_12000, etc.)
             _sma_cols = [col for col in self.df.columns if col.startswith("sma_")]
             _indicators_to_shift.extend(_sma_cols)
+
+            # FIX (2025-11-24): Shift ALL price-derived indicators to prevent data leakage
+            # These indicators are computed from close prices in transformers.py and
+            # must be shifted to maintain temporal consistency with shifted close prices.
+            # Without this fix, these indicators contain look-ahead information.
+            _pattern_prefixes = [
+                "yang_zhang_",      # Yang-Zhang volatility (computed from OHLC)
+                "parkinson_",       # Parkinson volatility (computed from High-Low)
+                "garch_",           # GARCH volatility (computed from returns)
+                "ret_",             # Returns (computed from close prices)
+                "cvd_",             # Cumulative Volume Delta
+                "taker_buy_ratio_", # Taker Buy Ratio derivatives (SMA, momentum)
+            ]
+            for _prefix in _pattern_prefixes:
+                _prefix_cols = [col for col in self.df.columns if col.startswith(_prefix)]
+                _indicators_to_shift.extend(_prefix_cols)
 
             # Apply shift to all indicators that exist in dataframe
             for _indicator in _indicators_to_shift:

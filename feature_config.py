@@ -85,19 +85,20 @@ def make_layout(obs_params=None):
         "description": "ret_bar (bar-to-bar return), vol_proxy (volatility proxy from ATR)"
     })
 
-    # Block 6: Agent state features (indices 23-28)
+    # Block 6: Agent state features (indices 23-29)
+    # FIX (2025-11-24): Added signal_pos (index 29) - critical for signal_only mode
     layout.append({
         "name": "agent",
-        "size": 6,
+        "size": 7,
         "dtype": "float32",
         "clip": DEFAULT_TANH_CLIP,
         "scale": 1.0,
         "bias": 0.0,
         "source": "agent",
-        "description": "cash_ratio, position_ratio, vol_imbalance, trade_intensity, realized_spread, fill_ratio"
+        "description": "cash_ratio, position_ratio, vol_imbalance, trade_intensity, realized_spread, fill_ratio, signal_pos"
     })
 
-    # Block 7: Microstructure proxies (indices 29-31)
+    # Block 7: Microstructure proxies (indices 30-32) - shifted +1 after signal_pos
     layout.append({
         "name": "microstructure",
         "size": 3,
@@ -109,7 +110,7 @@ def make_layout(obs_params=None):
         "description": "price_momentum, bb_squeeze, trend_strength (MACD divergence)"
     })
 
-    # Block 8: Bollinger Bands context (indices 32-33)
+    # Block 8: Bollinger Bands context (indices 33-34) - shifted +1 after signal_pos
     # NOTE: This was missing from previous versions!
     layout.append({
         "name": "bb_context",
@@ -122,7 +123,7 @@ def make_layout(obs_params=None):
         "description": "bb_position (price within bands), bb_width_norm (band width normalized)"
     })
 
-    # Block 9: Event metadata (indices 34-38)
+    # Block 9: Event metadata (indices 35-39) - shifted +1 after signal_pos
     layout.append({
         "name": "metadata",
         "size": 5,
