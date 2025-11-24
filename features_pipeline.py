@@ -179,6 +179,7 @@ class FeaturePipeline:
         enable_winsorization: bool = True,  # FIX (MEDIUM #3): Winsorization enabled by default
         winsorize_percentiles: Tuple[float, float] = (1.0, 99.0),
         strict_idempotency: bool = True,  # FIX (2025-11-21): Fail on repeated transform_df()
+        preserve_close_orig: bool = False,  # ENHANCEMENT (2025-11-25): Optional close_orig preservation
     ):
         """Container for feature normalization statistics.
 
@@ -201,6 +202,14 @@ class FeaturePipeline:
             double-shifting and data corruption. If False, make transform_df() idempotent
             (return already-transformed DataFrame unchanged).
             Default: True (strict mode for data integrity)
+        preserve_close_orig:
+            If True, create 'close_orig' column with unshifted close prices before
+            shifting features. This is useful for post-training analysis and comparison.
+            Default: False (not needed for standard ML pipeline)
+
+            NOTE: Online inference (live trading) does NOT need close_orig because
+            current prices come directly from market data feeds, not from transformed
+            features. This option is primarily for offline analysis and debugging.
         """
 
         # stats: {col: {"mean": float, "std": float, "is_constant": bool, "winsorize_bounds": tuple}}
@@ -209,6 +218,7 @@ class FeaturePipeline:
         self.enable_winsorization = enable_winsorization
         self.winsorize_percentiles = winsorize_percentiles
         self.strict_idempotency = strict_idempotency
+        self.preserve_close_orig = preserve_close_orig
 
         # FIX (2025-11-21): Removed _close_shifted_in_fit flag - always shift in transform_df()
         # Previous logic was inverted and caused look-ahead bias
@@ -518,6 +528,11 @@ class FeaturePipeline:
         # Check if shift already applied (close_orig marker present)
         # If close_orig exists, data is already shifted - skip shifting
         if "close_orig" not in out.columns:
+            # ENHANCEMENT (2025-11-25): Optionally preserve original close price
+            # before shifting for post-training analysis and debugging
+            if self.preserve_close_orig and "close" in out.columns:
+                out["close_orig"] = out["close"].copy()
+
             # Identify all feature columns to shift (excludes metadata and targets)
             cols_to_shift = _columns_to_shift(out)
 
@@ -589,6 +604,7 @@ class FeaturePipeline:
     def save(self, path: str) -> None:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         # FIX (2025-11-21): Save configuration flags for reproducibility
+        # ENHANCEMENT (2025-11-25): Added preserve_close_orig flag
         payload = {
             "stats": self.stats,
             "metadata": self.metadata,
@@ -596,6 +612,7 @@ class FeaturePipeline:
                 "enable_winsorization": self.enable_winsorization,
                 "winsorize_percentiles": self.winsorize_percentiles,
                 "strict_idempotency": self.strict_idempotency,
+                "preserve_close_orig": self.preserve_close_orig,
             }
         }
         with open(path, "w", encoding="utf-8") as f:
@@ -609,6 +626,7 @@ class FeaturePipeline:
             stats = payload.get("stats", {})
             metadata = payload.get("metadata", {})
             # FIX (2025-11-21): Load configuration flags if available
+            # ENHANCEMENT (2025-11-25): Added preserve_close_orig flag
             config = payload.get("config", {})
             return cls(
                 stats=stats,
@@ -616,6 +634,7 @@ class FeaturePipeline:
                 enable_winsorization=config.get("enable_winsorization", True),
                 winsorize_percentiles=tuple(config.get("winsorize_percentiles", [1.0, 99.0])),
                 strict_idempotency=config.get("strict_idempotency", True),
+                preserve_close_orig=config.get("preserve_close_orig", False),
             )
         else:
             # Backwards compatibility for legacy artifacts containing only stats.

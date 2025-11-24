@@ -29,6 +29,18 @@ os.makedirs(OUT_DIR, exist_ok=True)
 
 
 def _read_raw(path: str) -> pd.DataFrame:
+    """
+    Read and normalize CSV candle data.
+
+    IMPORTANT TIMESTAMP SEMANTICS (Fixed 2025-11-25):
+    - timestamp = close_time (end of bar) for consistency with Parquet path
+    - Previously used floor(close_time / bar_duration) which gave OPEN TIME
+    - This caused 4-hour offset when merging CSV and Parquet data
+    - Now both paths use CLOSE TIME consistently
+
+    Binance close_time convention: end of interval minus 1ms
+    Example 4h bar 00:00-04:00: close_time = 14399 (03:59:59)
+    """
     df = pd.read_csv(path)
     # Convert open/close time to seconds
     for c in ["open_time","close_time"]:
@@ -36,8 +48,13 @@ def _read_raw(path: str) -> pd.DataFrame:
             df[c] = (df[c] // 1000).astype("int64")
         else:
             df[c] = df[c].astype("int64")
-    # Canonical timestamp = close_time floored to 4h boundary (changed from hour for 4h timeframe)
-    df["timestamp"] = (df["close_time"] // 14400) * 14400  # Changed from 3600 (1h) to 14400 (4h)
+
+    # FIX (2025-11-25): Use close_time directly (CLOSE TIME) instead of floor division
+    # OLD (WRONG): df["timestamp"] = (df["close_time"] // 14400) * 14400  # OPEN TIME
+    # NEW (CORRECT): df["timestamp"] = df["close_time"]  # CLOSE TIME
+    # This ensures consistency with _normalize_ohlcv() which also uses CLOSE TIME
+    df["timestamp"] = df["close_time"]
+
     # Ensure symbol
     if "symbol" not in df.columns:
         sym = os.path.splitext(os.path.basename(path))[0]
@@ -267,6 +284,13 @@ def _parse_args():
 
 
 def _read_fng() -> pd.DataFrame:
+    """
+    Read Fear & Greed index data.
+
+    NOTE (2025-11-25): Fear & Greed timestamps are typically daily (00:00 UTC),
+    so floor division is acceptable here for alignment to 4h bars. However, for
+    consistency we keep the floor logic only for alignment purposes.
+    """
     if not os.path.exists(FNG):
         return pd.DataFrame(columns=["timestamp","fear_greed_value","fear_greed_value_norm"])
     f = pd.read_csv(FNG)
@@ -274,7 +298,12 @@ def _read_fng() -> pd.DataFrame:
         f["timestamp"] = (f["timestamp"] // 1000).astype("int64")
     else:
         f["timestamp"] = f["timestamp"].astype("int64")
-    f["timestamp"] = (f["timestamp"] // 14400) * 14400  # Changed from 3600 (1h) to 14400 (4h) for 4h timeframe
+
+    # NOTE: Fear & Greed data is typically daily. We floor to 4h boundaries for
+    # alignment with candle data. This is acceptable since F&G updates once per day.
+    # Using floor here aligns F&G timestamps to the START of 4h bars for merge_asof.
+    f["timestamp"] = (f["timestamp"] // 14400) * 14400
+
     if "fear_greed_value" not in f.columns and "value" in f.columns:
         f = f.rename(columns={"value":"fear_greed_value"})
     f["fear_greed_value_norm"] = f["fear_greed_value"].astype(float) / 100.0
@@ -283,6 +312,13 @@ def _read_fng() -> pd.DataFrame:
 
 
 def _read_events() -> pd.DataFrame:
+    """
+    Read economic events data.
+
+    NOTE (2025-11-25): Economic events have precise timestamps. We floor to 4h
+    boundaries for alignment with candle data. This is acceptable for merge_asof
+    with tolerance window (EVENT_HORIZON_HOURS).
+    """
     if not os.path.exists(EVENTS):
         return pd.DataFrame(columns=["timestamp","importance_level"])
     e = pd.read_csv(EVENTS)
@@ -290,7 +326,11 @@ def _read_events() -> pd.DataFrame:
         e["timestamp"] = (e["timestamp"] // 1000).astype("int64")
     else:
         e["timestamp"] = e["timestamp"].astype("int64")
-    e["timestamp"] = (e["timestamp"] // 14400) * 14400  # Changed from 3600 (1h) to 14400 (4h) for 4h timeframe
+
+    # NOTE: Events have precise timestamps but we floor to 4h for alignment.
+    # This is acceptable since merge_asof uses tolerance window (EVENT_HORIZON_HOURS).
+    e["timestamp"] = (e["timestamp"] // 14400) * 14400
+
     e = e.sort_values("timestamp")[["timestamp","importance_level"]]
     return e
 
