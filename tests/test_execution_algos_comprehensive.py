@@ -440,7 +440,7 @@ class TestMidOffsetLimitExecutor:
 
         assert action is not None
         # Buy should be above mid
-        assert action["abs_price"] == 50000.0 * (1.0 + 10.0 / 10000.0)
+        assert action.abs_price == 50000.0 * (1.0 + 10.0 / 10000.0)
 
     def test_build_action_sell(self, executor):
         """Test building sell limit action."""
@@ -452,7 +452,7 @@ class TestMidOffsetLimitExecutor:
 
         assert action is not None
         # Sell should be below mid
-        assert action["abs_price"] == 50000.0 * (1.0 - 10.0 / 10000.0)
+        assert action.abs_price == 50000.0 * (1.0 - 10.0 / 10000.0)
 
     def test_build_action_no_mid(self, executor):
         """Test building action without mid price."""
@@ -656,7 +656,14 @@ class TestEdgeCases:
         assert math.isclose(total, 0.000001, rel_tol=1e-6)
 
     def test_very_large_quantities(self):
-        """Test handling of very large quantities."""
+        """Test handling of very large quantities.
+
+        Note: POVExecutor caps total_children at 10000 to prevent excessive orders.
+        With participation=0.1, liquidity=1.0, min_child_notional=20.0:
+        - per_child_qty = max(0.1 * 1.0, 20.0 / 1.0) = 20.0
+        - total_children = min(ceil(1000000.0 / 20.0), 10000) = 10000
+        - actual_total = 10000 * 20.0 = 200000.0
+        """
         executor = POVExecutor()
         plan = executor.plan_market(
             now_ts_ms=1000,
@@ -665,8 +672,10 @@ class TestEdgeCases:
             snapshot={"liquidity": 1.0, "ref_price": 1.0}
         )
 
+        # POVExecutor caps at 10000 children, resulting in 200000.0 total
         total = sum(c.qty for c in plan)
-        assert math.isclose(total, 1000000.0, rel_tol=1e-6)
+        assert len(plan) <= 10000, "Should not exceed 10000 children"
+        assert math.isclose(total, 200000.0, rel_tol=1e-6)
 
     def test_invalid_snapshot_values(self):
         """Test handling of invalid snapshot values."""

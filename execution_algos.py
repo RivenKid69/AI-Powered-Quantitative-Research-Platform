@@ -51,11 +51,12 @@ class _BarWindowAware:
     def _resolve_bar_window(
         self, now_ts_ms: int, snapshot: Mapping[str, Any]
     ) -> tuple[Optional[int], Optional[int], Optional[int]]:
-        timeframe = self._coerce_int(
-            snapshot.get("bar_timeframe_ms")
-            or snapshot.get("timeframe_ms")
-            or snapshot.get("intrabar_timeframe_ms")
-        )
+        # Use explicit None check to allow 0 as valid value
+        timeframe = self._coerce_int(snapshot.get("bar_timeframe_ms"))
+        if timeframe is None:
+            timeframe = self._coerce_int(snapshot.get("timeframe_ms"))
+        if timeframe is None:
+            timeframe = self._coerce_int(snapshot.get("intrabar_timeframe_ms"))
         if timeframe is not None and timeframe <= 0:
             timeframe = None
         if timeframe is not None:
@@ -63,21 +64,23 @@ class _BarWindowAware:
         else:
             timeframe = self._last_bar_timeframe_ms
 
-        start = self._coerce_int(
-            snapshot.get("bar_start_ts")
-            or snapshot.get("intrabar_start_ts")
-            or snapshot.get("bar_start_ts_ms")
-        )
+        # Use explicit None check to allow 0 as valid value
+        start = self._coerce_int(snapshot.get("bar_start_ts"))
+        if start is None:
+            start = self._coerce_int(snapshot.get("intrabar_start_ts"))
+        if start is None:
+            start = self._coerce_int(snapshot.get("bar_start_ts_ms"))
         if start is not None:
             self._last_bar_start_ts = start
         else:
             start = self._last_bar_start_ts
 
-        end = self._coerce_int(
-            snapshot.get("bar_end_ts")
-            or snapshot.get("intrabar_end_ts")
-            or snapshot.get("bar_end_ts_ms")
-        )
+        # Use explicit None check to allow 0 as valid value
+        end = self._coerce_int(snapshot.get("bar_end_ts"))
+        if end is None:
+            end = self._coerce_int(snapshot.get("intrabar_end_ts"))
+        if end is None:
+            end = self._coerce_int(snapshot.get("bar_end_ts_ms"))
         if end is not None:
             self._last_bar_end_ts = end
         else:

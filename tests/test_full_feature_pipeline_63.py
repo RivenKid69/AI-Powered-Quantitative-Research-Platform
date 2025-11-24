@@ -21,17 +21,17 @@ def test_ext_norm_dim_is_21():
 
 
 def test_n_features_is_63():
-    """Проверка что N_FEATURES = 63 (было 62, добавили ATR validity flag)"""
+    """Проверка что N_FEATURES = 84 (было 63, добавили 21 external_validity flags)"""
     # make_layout должен был вызваться при импорте
     from feature_config import N_FEATURES as computed_features
-    assert computed_features == 63, f"Expected N_FEATURES=63, got {computed_features}"
+    assert computed_features == 84, f"Expected N_FEATURES=84, got {computed_features}"
 
 
 def test_feature_layout_sum():
-    """Проверка что сумма всех блоков = 63"""
+    """Проверка что сумма всех блоков = 84"""
     from feature_config import FEATURES_LAYOUT
 
-    # Updated for corrected block structure (2025-11-20)
+    # Updated for corrected block structure (2025-11-24)
     expected_sizes = {
         "bar": 3,
         "ma5": 2,           # Split from old indicators (20)
@@ -43,6 +43,7 @@ def test_feature_layout_sum():
         "bb_context": 2,    # Added (was missing!)
         "metadata": 5,
         "external": 21,     # было 16, стало 21
+        "external_validity": 21,  # NEW: validity flags for external features
         "token_meta": 2,
         "token": 1,
     }
@@ -56,7 +57,7 @@ def test_feature_layout_sum():
                 f"Block '{name}' has size {size}, expected {expected_sizes[name]}"
         total += size
 
-    assert total == 63, f"Total features = {total}, expected 63"
+    assert total == 84, f"Total features = {total}, expected 84"
 
 
 def test_mediator_extract_norm_cols_size():

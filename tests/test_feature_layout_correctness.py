@@ -159,16 +159,17 @@ def test_feature_layout_matches_obs_builder():
 
 def test_feature_config_has_correct_total_size():
     """
-    Verify FEATURES_LAYOUT sums to 63 features.
+    Verify FEATURES_LAYOUT sums to 84 features.
 
     This test ensures compute_n_features() works correctly regardless of block order.
+    Note: Feature count updated from 63 to 84 in latest version.
     """
     from feature_config import FEATURES_LAYOUT, N_FEATURES
 
     total = sum(block['size'] for block in FEATURES_LAYOUT)
 
-    assert total == 63, f"FEATURES_LAYOUT total size = {total}, expected 63"
-    assert N_FEATURES == 63, f"N_FEATURES = {N_FEATURES}, expected 63"
+    assert total == 84, f"FEATURES_LAYOUT total size = {total}, expected 84"
+    assert N_FEATURES == 84, f"N_FEATURES = {N_FEATURES}, expected 84"
 
 
 def test_feature_config_block_order_documentation():
@@ -181,6 +182,7 @@ def test_feature_config_block_order_documentation():
     from feature_config import FEATURES_LAYOUT
 
     # Expected order from obs_builder.pyx (actual implementation)
+    # Note: Feature count updated from 63 to 84 in latest version
     expected_order = [
         ("bar", 3),              # 0-2
         ("ma5", 2),              # 3-4
@@ -192,8 +194,9 @@ def test_feature_config_block_order_documentation():
         ("bb_context", 2),       # 32-33
         ("metadata", 5),         # 34-38
         ("external", 21),        # 39-59
-        ("token_meta", 2),       # 60-61
-        ("token", 1),            # 62
+        ("external_validity", 21),  # 60-80 (NEW: validity flags for external features)
+        ("token_meta", 2),       # 81-82
+        ("token", 1),            # 83
     ]
 
     # Current feature_config.py order
@@ -205,7 +208,7 @@ def test_feature_config_block_order_documentation():
         pass
     else:
         # Document the discrepancy (warning, not failure)
-        print("\n⚠️  WARNING: feature_config.py block order doesn't match obs_builder.pyx")
+        print("\nWARNING: feature_config.py block order doesn't match obs_builder.pyx")
         print("This is a DOCUMENTATION issue, not a runtime bug.")
         print("\nExpected order (from obs_builder.pyx):")
         idx = 0
@@ -223,12 +226,14 @@ def test_feature_config_block_order_documentation():
         total_expected = sum(size for _, size in expected_order)
         total_actual = sum(size for _, size in actual_order)
 
-        assert total_expected == total_actual == 63, \
+        # Note: Feature count updated from 63 to 84 in latest version
+        # This test is for documentation only, so we just verify totals match
+        assert total_expected == total_actual, \
             f"Total size mismatch: expected {total_expected}, actual {total_actual}"
 
-        print("\n✓ Total size is correct (63)")
-        print("✓ Runtime behavior is unaffected (order not used for indexing)")
-        print("⚠️  Consider updating feature_config.py for documentation consistency")
+        print(f"\nOK: Total size is correct ({total_expected})")
+        print("OK: Runtime behavior is unaffected (order not used for indexing)")
+        print("NOTE: Consider updating feature_config.py for documentation consistency")
 
 
 if __name__ == "__main__":
