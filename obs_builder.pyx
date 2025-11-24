@@ -210,6 +210,7 @@ cdef void build_observation_vector_c(
     bint risk_off_flag,
     float cash,
     float units,
+    float signal_pos,
     float last_vol_imbalance,
     float last_trade_intensity,
     float last_realized_spread,
@@ -423,6 +424,13 @@ cdef void build_observation_vector_c(
     feature_idx += 1
 
     out_features[feature_idx] = last_agent_fill_ratio
+    feature_idx += 1
+
+    # FIX (2025-11-24): Add signal_pos to observation vector
+    # CRITICAL: In signal_only mode, model needs to know its target position
+    # signal_pos is the TARGET position in [-1, 1] (long-only: [0, 1])
+    # This enables the model to make informed decisions about position changes
+    out_features[feature_idx] = _clipf(signal_pos, -1.0, 1.0)
     feature_idx += 1
 
     # --- Technical indicators for 4h timeframe (replaces microstructure) ---
@@ -659,6 +667,7 @@ cpdef void build_observation_vector(
     bint risk_off_flag,
     float cash,
     float units,
+    float signal_pos,
     float last_vol_imbalance,
     float last_trade_intensity,
     float last_realized_spread,
@@ -735,6 +744,7 @@ cpdef void build_observation_vector(
         risk_off_flag,
         cash,
         units,
+        signal_pos,
         last_vol_imbalance,
         last_trade_intensity,
         last_realized_spread,

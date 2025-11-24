@@ -1415,6 +1415,15 @@ class Mediator:
         max_num_tokens = 1
         num_tokens = 1
 
+        # FIX (2025-11-24): Get signal_pos for observation vector
+        # CRITICAL: In signal_only mode, model needs to know its target position
+        signal_source = getattr(
+            self,
+            "_last_signal_position",
+            getattr(self.env, "_last_signal_position", 0.0),
+        )
+        signal_pos = self._coerce_finite(signal_source, default=0.0)
+
         # Call obs_builder to construct observation vector
         # Phase 2 of ISSUE #2 fix: Now passing validity flags to enable model
         # to distinguish missing data (NaN) from zero values
@@ -1442,6 +1451,7 @@ class Mediator:
                 bool(risk_off_flag),
                 float(cash),
                 float(units),
+                float(signal_pos),
                 float(last_vol_imbalance),
                 float(last_trade_intensity),
                 float(last_realized_spread),
