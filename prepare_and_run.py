@@ -74,8 +74,10 @@ def _to_seconds_any(x: pd.Series) -> pd.Series:
             raise ValueError("NaNs after numeric conversion")
         return s_series.astype("int64")
     except Exception:
-        dt = pd.to_datetime(x, errors="coerce", utc=True, infer_datetime_format=True)
-        return (dt.view("int64") // 1_000_000_000).astype("int64")
+        # Convert to datetime (infer_datetime_format deprecated, now default behavior)
+        dt = pd.to_datetime(x, errors="coerce", utc=True)
+        # Convert to int64 nanoseconds then to seconds
+        return (dt.astype("int64") // 1_000_000_000).astype("int64")
 
 
 def _infer_symbol(path: str, df: pd.DataFrame) -> str:
@@ -93,19 +95,32 @@ def _infer_symbol(path: str, df: pd.DataFrame) -> str:
 def _normalize_ohlcv(df: pd.DataFrame, path: str) -> pd.DataFrame:
     cols = {_canon(c): c for c in df.columns}
 
+    # EXPLICIT close_time candidates (removed generic "timestamp" to avoid ambiguity)
     close_time_cands = [
-        "timestamp", "closetime", "klineclosetime", "endtime", "barend",
-        "time", "t", "ts", "tsms", "ts_ms"
+        "closetime", "close_time", "klineclosetime", "endtime", "barend",
+        "closetimet", "ts_close", "close_ts"
     ]
+    # EXPLICIT open_time candidates
     open_time_cands = [
-        "opentime", "open_time", "klineopentime", "starttime", "barstart"
+        "opentime", "open_time", "klineopentime", "starttime", "barstart",
+        "opentimet", "ts_open", "open_ts"
+    ]
+    # GENERIC time candidates (used only as fallback with warning)
+    generic_time_cands = [
+        "timestamp", "time", "t", "ts", "tsms", "ts_ms"
     ]
 
     ts = None
+    ts_source = None
+
+    # Priority 1: Look for EXPLICIT close_time columns
     for key in close_time_cands:
         if key in cols:
             ts = _to_seconds_any(df[cols[key]])
+            ts_source = f"close_time:{cols[key]}"
             break
+
+    # Priority 2: Look for EXPLICIT open_time columns and add duration
     if ts is None:
         for key in open_time_cands:
             if key in cols:
@@ -113,7 +128,25 @@ def _normalize_ohlcv(df: pd.DataFrame, path: str) -> pd.DataFrame:
                 # Используем BAR_DURATION из конфига, по умолчанию 14400 (4h)
                 bar_duration_sec = int(os.environ.get("BAR_DURATION_SEC", "14400"))
                 ts = _to_seconds_any(df[cols[key]]) + bar_duration_sec  # 4h бар → сместим к закрытию
+                ts_source = f"open_time+duration:{cols[key]}"
                 break
+
+    # Priority 3: Fallback to GENERIC time columns (with warning about ambiguity)
+    if ts is None:
+        for key in generic_time_cands:
+            if key in cols:
+                ts = _to_seconds_any(df[cols[key]])
+                ts_source = f"generic_time:{cols[key]}"
+                import warnings
+                warnings.warn(
+                    f"{path}: Using generic time column '{cols[key]}' - ambiguous whether open or close time. "
+                    f"Treating as close_time. For clarity, use explicit column names: "
+                    f"'open_time'/'close_time' or 'opentime'/'closetime'.",
+                    UserWarning
+                )
+                break
+
+    # Priority 4: Last resort - search for any column with "time" or "date" in name
     if ts is None:
         for c in df.columns:
             cn = _canon(c)
@@ -121,6 +154,13 @@ def _normalize_ohlcv(df: pd.DataFrame, path: str) -> pd.DataFrame:
                 cand = _to_seconds_any(df[c])
                 if cand.notna().any():
                     ts = cand
+                    ts_source = f"fallback:{c}"
+                    import warnings
+                    warnings.warn(
+                        f"{path}: Using fallback time column '{c}' - ambiguous semantics. "
+                        f"Treating as close_time. Consider renaming to explicit 'open_time' or 'close_time'.",
+                        UserWarning
+                    )
                     break
     if ts is None:
         raise ValueError(f"{path}: no usable time column; have: {list(df.columns)}")
