@@ -121,10 +121,36 @@ def load_all_data(feather_paths: List[str], synthetic_fraction: float = 0.0, see
         if "taker_buy_quote_asset_volume" not in df.columns:
             df["taker_buy_quote_asset_volume"] = 0.0
         df = _ensure_required_columns(df)
-        # Не ломаем OHLC: оставляем close как есть, а «прошлый close» кладём отдельно
-        if "close" in df.columns:
-            df["close_orig"] = df["close"].astype(float)
-            df["close_prev"] = df["close_orig"].shift(1)  # используйте это в фичах вместо сдвига самого close
+        # =========================================================================
+        # FIX (2025-11-25): REMOVED close_orig and close_prev creation
+        # =========================================================================
+        # PROBLEM: Creating close_orig here caused CRITICAL DATA LEAKAGE!
+        #
+        # The semantic conflict was:
+        # 1. THIS FILE created close_orig as "backup of original close" (NOT shifted)
+        # 2. features_pipeline.py treated close_orig as "marker that data ALREADY shifted"
+        # 3. Result: features_pipeline SKIPPED shifting → DATA LEAKAGE!
+        #
+        # Root cause: features_pipeline.py:326-330 checks:
+        #   if "close_orig" in frame.columns:
+        #       shifted_frames.append(frame)  # SKIP SHIFTING!
+        #       continue
+        #
+        # So when data flowed through training:
+        # - load_all_data() created close_orig (unshifted)
+        # - features_pipeline.fit() saw close_orig → SKIPPED shift
+        # - Model saw UNSHIFTED features → learned from FUTURE information!
+        #
+        # SOLUTION: Remove close_orig/close_prev creation here.
+        # - features_pipeline.py handles shifting properly without this marker
+        # - trading_patchnew.py handles _close_actual internally
+        # - This eliminates the semantic conflict
+        #
+        # References:
+        # - CLAUDE.md: DATA_LEAKAGE_FIX_REPORT_2025_11_23.md
+        # - tests/test_data_leakage_prevention.py
+        # - tests/test_close_orig_semantic_fix.py (NEW)
+        # =========================================================================
         # Merge Fear & Greed on the same hour (left join to preserve OHLCV)
         orig_fear_col = None
         if "fear_greed_value" in df.columns:

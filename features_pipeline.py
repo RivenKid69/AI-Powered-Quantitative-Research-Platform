@@ -38,7 +38,7 @@ CANON_PREFIX = [
 
 # Metadata columns that should NOT be shifted (not features)
 METADATA_COLUMNS = {
-    "timestamp", "symbol", "wf_role", "close_orig",
+    "timestamp", "symbol", "wf_role", "close_orig", "_close_shifted",
     # Add other metadata columns here if needed
 }
 
@@ -158,10 +158,11 @@ def _is_numeric(s: pd.Series) -> bool:
 
 def _columns_to_scale(df: pd.DataFrame) -> List[str]:
     # Key columns which are numeric but shouldn't be z-scored directly:
-    exclude = {"timestamp"}  # 'symbol' non-numeric already excluded
+    # FIX (2025-11-25): Added _close_shifted marker column to exclusion set
+    exclude = {"timestamp", "_close_shifted"}  # 'symbol' non-numeric already excluded
     cols: List[str] = []
     for c in df.columns:
-        if c in exclude: 
+        if c in exclude:
             continue
         if c == "symbol":
             continue
@@ -339,6 +340,10 @@ class FeaturePipeline:
                 # This ensures consistent temporal alignment for all features
                 for col in cols_to_shift:
                     frame_copy[col] = frame_copy[col].shift(1)
+
+                # FIX (2025-11-25): Add column-based marker for TradingEnv compatibility
+                # This marker tells TradingEnv that data is already shifted
+                frame_copy["_close_shifted"] = True
 
             shifted_frames.append(frame_copy)
 
@@ -546,6 +551,11 @@ class FeaturePipeline:
                     # Single symbol case - standard shift
                     for col in cols_to_shift:
                         out[col] = out[col].shift(1)
+
+                # FIX (2025-11-25): Add column-based marker for TradingEnv compatibility
+                # TradingEnv checks for "_close_shifted" column, not attrs
+                # This prevents double-shifting when data flows: features_pipeline → TradingEnv
+                out["_close_shifted"] = True
 
         for c, ms in self.stats.items():
             if c not in out.columns:
