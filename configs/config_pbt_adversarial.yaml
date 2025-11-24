@@ -121,8 +121,8 @@ model:
     gae_lambda: 0.95
     clip_range: 0.10  # Will be optimized by PBT
 
-    clip_range_vf: null
-    vf_clip_warmup_updates: 0
+    clip_range_vf: 0.7                 # ✅ FIX (2025-11-24): Enable VF clipping for PPO stability & Twin Critics
+    vf_clip_warmup_updates: 10         # Warmup: gradually enable VF clipping over first 10 updates
     vf_clip_threshold_ev: null
 
     ent_coef: 0.001  # Will be optimized by PBT
@@ -143,7 +143,7 @@ model:
     n_steps: 2048
     n_epochs: 4
     batch_size: 64
-    microbatch_size: 64
+    microbatch_size: 200               # ✅ FIX (2025-11-24): Increase for CVaR stability (200*0.05=10 tail samples)
     seed: 20240518
     kl_early_stop: true
     kl_exceed_stop_fraction: 0.15

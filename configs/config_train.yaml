@@ -78,8 +78,8 @@ model:
     gae_lambda: 0.95
     clip_range: 0.10                   # не душим обновления (0.1–0.2 норма)
 
-    clip_range_vf: null                # отключаем клиппинг ценности, чтобы не занижать дисперсию
-    vf_clip_warmup_updates: 0          # при необходимости можно дать warmup до включения vf-клипа
+    clip_range_vf: 0.7                 # ✅ FIX (2025-11-24): Enable VF clipping for PPO stability & Twin Critics
+    vf_clip_warmup_updates: 10         # Warmup: gradually enable VF clipping over first 10 updates
     vf_clip_threshold_ev: null         # или задать порог explained variance для активации клипа
 
     ent_coef: 0.001
@@ -101,7 +101,7 @@ model:
     n_steps: 2048                      # больше контекста/стабильнее Â
     n_epochs: 4                        # разумный компромисс вместо 1
     batch_size: 64                     # типичный минибатч для PPO
-    microbatch_size: 64
+    microbatch_size: 200               # ✅ FIX (2025-11-24): Increase for CVaR stability (200*0.05=10 tail samples)
     seed: 20240518
     # target_kl можно переопределить через вложенный блок algo.params.kl
     kl_early_stop: true

@@ -63,8 +63,8 @@ model:
     reward_cap: 10.0
     value_scale_update_enabled: true
 
-    clip_range_vf: null
-    vf_clip_warmup_updates: 0
+    clip_range_vf: 0.7                 # ✅ FIX (2025-11-24): Enable VF clipping for PPO stability & Twin Critics
+    vf_clip_warmup_updates: 10         # Warmup: gradually enable VF clipping over first 10 updates
     vf_clip_threshold_ev: 9999.0
 
 

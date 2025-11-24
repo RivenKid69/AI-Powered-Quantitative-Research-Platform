@@ -5130,6 +5130,7 @@ class DistributionalPPO(RecurrentPPO):
         y_true_tensor_raw: Optional[torch.Tensor] = None,
         variance_floor: float = 1e-8,
         record_fallback: bool = True,
+        allow_fallback: bool = True,  # ✅ NEW (2025-11-24): Control fallback behavior
         group_keys: Optional[Sequence[str]] = None,
     ) -> tuple[
         Optional[float],
@@ -5137,7 +5138,13 @@ class DistributionalPPO(RecurrentPPO):
         Optional[torch.Tensor],
         dict[str, Any],
     ]:
-        """Return explained variance, flattened tensors, and diagnostic metrics."""
+        """Return explained variance, flattened tensors, and diagnostic metrics.
+
+        Args:
+            allow_fallback: If True (default), use raw values fallback when primary EV fails.
+                            If False, disable fallback for strict evaluation contexts.
+                            ✅ NEW (2025-11-24): Added to control optimistic bias risk.
+        """
 
         metrics: dict[str, Any] = {
             "n_samples": 0.0,
@@ -5233,11 +5240,13 @@ class DistributionalPPO(RecurrentPPO):
         explained_var: Optional[float] = None if need_fallback else primary_ev_value
         fallback_used = False
 
-        # DATA LEAKAGE WARNING: Fallback uses raw values which may include training data
-        # when this function is called for combined primary+reserve sets. This can
-        # produce optimistically biased EV estimates. Consider disabling fallback for
-        # reserve-only EV calculations to maintain strict train/test separation.
-        if need_fallback and y_true_tensor_raw is not None:
+        # ✅ IMPROVED (2025-11-24): Optimistic bias warning (NOT data leakage)
+        # OPTIMISTIC BIAS WARNING: Fallback uses raw (unnormalized) values when normalized
+        # values have near-zero variance. This may produce higher EV estimates than the
+        # primary path, creating optimistic bias in monitoring metrics. Training is NOT
+        # affected (gradients use primary path only). Use allow_fallback=False for strict
+        # evaluation contexts where optimistic bias must be avoided.
+        if need_fallback and allow_fallback and y_true_tensor_raw is not None:
             y_true_raw_flat = y_true_tensor_raw.flatten()
             # Use already processed predictions for consistency and efficiency
             y_pred_flat_full = y_pred_tensor.flatten()
@@ -5295,8 +5304,12 @@ class DistributionalPPO(RecurrentPPO):
                         logger = getattr(self, "logger", None)
                         if logger is not None:
                             logger.record("train/value_explained_variance_fallback", 1.0)
-                            # Log warning about potential data leakage in fallback path
-                            logger.record("warn/ev_fallback_data_leakage_risk", 1.0)
+                            # ✅ RENAMED (2025-11-24): Clarify actual risk (optimistic bias, not data leakage)
+                            logger.record("warn/ev_fallback_optimistic_bias_risk", 1.0)
+                            # Track potential bias magnitude
+                            if primary_ev_value is not None and math.isfinite(primary_ev_value):
+                                fallback_delta = float(fallback_ev) - primary_ev_value
+                                logger.record("info/ev_primary_vs_fallback_delta", fallback_delta)
 
         if explained_var is None:
             # This can only happen if need_fallback=True and fallback failed
@@ -12102,6 +12115,7 @@ class DistributionalPPO(RecurrentPPO):
                 mask_tensor=primary_mask_tensor,
                 y_true_tensor_raw=primary_raw_tensor,
                 record_fallback=False,
+                allow_fallback=False,  # ✅ NEW (2025-11-24): Strict evaluation for primary-only (no optimistic bias)
                 group_keys=primary_group_keys,
             )
 
@@ -12139,6 +12153,7 @@ class DistributionalPPO(RecurrentPPO):
                 y_pred_tensor,
                 mask_tensor=mask_tensor_for_ev,
                 y_true_tensor_raw=y_true_tensor_raw,
+                allow_fallback=True,  # ✅ DEFAULT (2025-11-24): Allow fallback for combined metrics (optimistic bias acceptable for monitoring)
                 group_keys=ev_group_keys,
             )
 
