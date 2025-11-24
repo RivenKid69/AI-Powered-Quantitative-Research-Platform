@@ -395,13 +395,18 @@ def test_service_eval_run_snapshot_config():
 
         with mock.patch("service_eval.snapshot_config") as mock_snapshot:
             with mock.patch("service_eval.read_any") as mock_read:
-                with mock.patch("service_eval.calculate_metrics"):
+                with mock.patch("service_eval.calculate_metrics") as mock_calc:
                     with mock.patch("service_eval.plot_equity_curve"):
                         mock_read.return_value = pd.DataFrame({
                             "ts_ms": [1000],
                             "pnl": [0.0],
                             "equity": [10000.0],
                         })
+
+                        mock_calc.return_value = {
+                            "equity": {"total_return": 0.0},
+                            "trades": {"total_trades": 0},
+                        }
 
                         service.run()
 
@@ -486,10 +491,11 @@ def test_from_config_single_profile(sample_trades_df, sample_reports_df):
 def test_from_config_all_profiles(sample_trades_df, sample_reports_df):
     """Test from_config with all_profiles=True."""
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Create files for each profile
-        for prof in ["conservative", "balanced", "aggressive"]:
-            trades_path = os.path.join(tmpdir, f"trades_{prof}.csv")
-            reports_path = os.path.join(tmpdir, f"reports_{prof}.csv")
+        # Create files for each ExecutionProfile
+        from core_config import ExecutionProfile
+        for prof in ExecutionProfile:
+            trades_path = os.path.join(tmpdir, f"trades_{prof.value}.csv")
+            reports_path = os.path.join(tmpdir, f"reports_{prof.value}.csv")
             sample_trades_df.to_csv(trades_path, index=False)
             sample_reports_df.to_csv(reports_path, index=False)
 
@@ -504,20 +510,21 @@ def test_from_config_all_profiles(sample_trades_df, sample_reports_df):
         with mock.patch("service_eval.di_registry.build_graph") as mock_build:
             with mock.patch("service_eval.calculate_metrics") as mock_calc:
                 with mock.patch("service_eval.plot_equity_curve"):
-                    with mock.patch("os.path.exists") as mock_exists:
-                        mock_build.return_value = {}
-                        mock_calc.return_value = {
-                            "equity": {"sharpe_ratio": 1.5},
-                            "trades": {"total_trades": 5},
-                        }
-                        mock_exists.return_value = True
+                    mock_build.return_value = {}
+                    mock_calc.return_value = {
+                        "equity": {"sharpe_ratio": 1.5},
+                        "trades": {"total_trades": 5},
+                    }
 
-                        metrics = from_config(cfg, all_profiles=True)
+                    metrics = from_config(cfg, all_profiles=True)
 
-                        # Verify metrics returned for all profiles
-                        assert isinstance(metrics, dict)
-                        # Should have entries for profiles
-                        assert len(metrics) > 0
+                    # Verify metrics returned for all profiles
+                    assert isinstance(metrics, dict)
+                    # Should have entries for all ExecutionProfile values
+                    assert len(metrics) == len(ExecutionProfile)
+                    # Verify all profile keys are present
+                    for prof in ExecutionProfile:
+                        assert prof.value in metrics
 
 
 def test_from_config_with_execution_profile(sample_trades_df, sample_reports_df):
@@ -593,7 +600,8 @@ def test_service_eval_empty_trades():
         trades_path = os.path.join(tmpdir, "trades.csv")
         reports_path = os.path.join(tmpdir, "reports.csv")
 
-        pd.DataFrame().to_csv(trades_path, index=False)
+        # Create empty DataFrame with expected columns to avoid EmptyDataError
+        pd.DataFrame(columns=["ts_ms", "pnl"]).to_csv(trades_path, index=False)
         pd.DataFrame({"equity": [10000.0]}).to_csv(reports_path, index=False)
 
         cfg = EvalConfig(

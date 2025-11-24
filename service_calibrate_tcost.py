@@ -128,6 +128,10 @@ def calibrate(
     if data.empty:
         raise ValueError("Недостаточно данных для калибровки (после очистки пусто).")
 
+    # Check for minimum number of data points for meaningful regression
+    if len(data) < 3:
+        raise ValueError(f"Недостаточно данных для калибровки (требуется минимум 3 точки, получено {len(data)}).")
+
     X = np.column_stack([
         np.ones(len(data), dtype=float),
         data["vol_bps"].values.astype(float),

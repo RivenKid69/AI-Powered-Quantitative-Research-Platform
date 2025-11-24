@@ -154,6 +154,8 @@ class BarBacktestSimBridge:
     def _safe_float(value: Any, default: float = 0.0) -> float:
         try:
             out = float(value)
+            if not math.isfinite(out):
+                return default
         except (TypeError, ValueError):
             return default
         return out

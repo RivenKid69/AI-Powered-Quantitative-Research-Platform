@@ -84,8 +84,11 @@ def run(cfg: SlippageCalibrateConfig) -> Dict[str, float]:
 
     if "half_spread_bps" in df.columns:
         half = df["half_spread_bps"].astype(float).fillna(default_spread_bps * 0.5)
-    else:
+    elif "spread_bps" in df.columns:
         half = df["spread_bps"].fillna(default_spread_bps) * 0.5
+    else:
+        # Neither spread_bps nor half_spread_bps available, use default
+        half = pd.Series([default_spread_bps * 0.5] * len(df), index=df.index)
 
     q = float(cfg.min_half_spread_quantile)
     if 0.0 < q < 1.0 and not half.dropna().empty:

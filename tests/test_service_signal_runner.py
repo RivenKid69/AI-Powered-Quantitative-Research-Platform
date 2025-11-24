@@ -365,8 +365,9 @@ def test_daily_entry_limiter_snapshot():
     assert snapshot["entries_today"] == 0
     assert snapshot["reset_hour"] == 8
 
-    # After some entries
-    limiter.allow("BTCUSDT", 1000, entry_steps=3)
+    # After some entries (use realistic timestamp from 2024)
+    ts_2024 = int(datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    limiter.allow("BTCUSDT", ts_2024, entry_steps=3)
     snapshot = limiter.snapshot("BTCUSDT")
     assert snapshot["entries_today"] == 3
 
@@ -379,9 +380,10 @@ def test_daily_entry_limiter_export_state():
     state = limiter.export_state()
     assert state == {}
 
-    # After entries
-    limiter.allow("BTCUSDT", 1000, entry_steps=2)
-    limiter.allow("ETHUSDT", 2000, entry_steps=1)
+    # After entries (use realistic timestamps from 2024)
+    ts_2024 = int(datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    limiter.allow("BTCUSDT", ts_2024, entry_steps=2)
+    limiter.allow("ETHUSDT", ts_2024 + 1000, entry_steps=1)
 
     state = limiter.export_state()
     assert "BTCUSDT" in state
@@ -396,8 +398,8 @@ def test_daily_entry_limiter_restore_state():
 
     # Restore state
     state = {
-        "BTCUSDT": {"count": 3, "day_key": "2024-01-01_00"},
-        "ETHUSDT": {"count": 1, "day_key": "2024-01-01_00"},
+        "BTCUSDT": {"count": 3, "day_key": "2024-01-01T00"},
+        "ETHUSDT": {"count": 1, "day_key": "2024-01-01T00"},
     }
     limiter.restore_state(state)
 
@@ -405,10 +407,11 @@ def test_daily_entry_limiter_restore_state():
     snapshot = limiter.snapshot("BTCUSDT")
     assert snapshot["entries_today"] == 3
 
-    # Should respect restored count
-    assert limiter.allow("BTCUSDT", 1000, entry_steps=1) is True  # 4/5
-    assert limiter.allow("BTCUSDT", 2000, entry_steps=1) is True  # 5/5
-    assert limiter.allow("BTCUSDT", 3000, entry_steps=1) is False  # 6/5 - rejected
+    # Should respect restored count (use realistic timestamps from 2024)
+    ts_2024 = int(datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc).timestamp() * 1000)
+    assert limiter.allow("BTCUSDT", ts_2024, entry_steps=1) is True  # 4/5
+    assert limiter.allow("BTCUSDT", ts_2024 + 1000, entry_steps=1) is True  # 5/5
+    assert limiter.allow("BTCUSDT", ts_2024 + 2000, entry_steps=1) is False  # 6/5 - rejected
 
 
 def test_daily_entry_limiter_restore_state_disabled():
@@ -449,84 +452,105 @@ def test_schedule_no_trade_checker_disabled():
 
 def test_schedule_no_trade_checker_daily_window():
     """Test _ScheduleNoTradeChecker with daily UTC windows."""
-    cfg = mock.Mock()
-    cfg.maintenance = mock.Mock()
-    cfg.maintenance.daily_utc = ["00:00-00:05", "08:00-08:05"]
-    cfg.maintenance.funding_buffer_min = 0
-    cfg.maintenance.custom_ms = []
+    with mock.patch("service_signal_runner.NO_TRADE_FEATURES_DISABLED", False):
+        cfg = mock.Mock()
+        cfg.maintenance = mock.Mock()
+        cfg.maintenance.daily_utc = ["00:00-00:05", "08:00-08:05"]
+        cfg.maintenance.funding_buffer_min = 0
+        cfg.maintenance.custom_ms = []
+        # Also set fallback attrs on cfg
+        cfg.daily_utc = []
+        cfg.funding_buffer_min = 0
+        cfg.custom_ms = []
 
-    checker = _ScheduleNoTradeChecker(cfg)
+        checker = _ScheduleNoTradeChecker(cfg)
 
-    assert checker.enabled is True
+        assert checker.enabled is True
 
-    # Timestamp in daily window (00:02 UTC)
-    ts_in_window = int(datetime(2024, 1, 1, 0, 2, tzinfo=timezone.utc).timestamp() * 1000)
-    blocked, reason = checker.evaluate(ts_in_window)
-    assert blocked is True
-    assert reason == "MAINTENANCE_DAILY"
+        # Timestamp in daily window (00:02 UTC)
+        ts_in_window = int(datetime(2024, 1, 1, 0, 2, tzinfo=timezone.utc).timestamp() * 1000)
+        blocked, reason = checker.evaluate(ts_in_window)
+        assert blocked is True
+        assert reason == "MAINTENANCE_DAILY"
 
-    # Timestamp outside window (05:00 UTC)
-    ts_out_window = int(datetime(2024, 1, 1, 5, 0, tzinfo=timezone.utc).timestamp() * 1000)
-    blocked, reason = checker.evaluate(ts_out_window)
-    assert blocked is False
-    assert reason is None
+        # Timestamp outside window (05:00 UTC)
+        ts_out_window = int(datetime(2024, 1, 1, 5, 0, tzinfo=timezone.utc).timestamp() * 1000)
+        blocked, reason = checker.evaluate(ts_out_window)
+        assert blocked is False
+        assert reason is None
 
 
 def test_schedule_no_trade_checker_funding_buffer():
     """Test _ScheduleNoTradeChecker with funding buffer."""
-    cfg = mock.Mock()
-    cfg.maintenance = mock.Mock()
-    cfg.maintenance.daily_utc = []
-    cfg.maintenance.funding_buffer_min = 5  # 5 minutes
-    cfg.maintenance.custom_ms = []
+    with mock.patch("service_signal_runner.NO_TRADE_FEATURES_DISABLED", False):
+        cfg = mock.Mock()
+        cfg.maintenance = mock.Mock()
+        cfg.maintenance.daily_utc = []
+        cfg.maintenance.funding_buffer_min = 5  # 5 minutes
+        cfg.maintenance.custom_ms = []
+        # Also set fallback attrs on cfg
+        cfg.daily_utc = []
+        cfg.funding_buffer_min = 0
+        cfg.custom_ms = []
 
-    checker = _ScheduleNoTradeChecker(cfg)
+        checker = _ScheduleNoTradeChecker(cfg)
 
-    assert checker.enabled is True
+        assert checker.enabled is True
 
-    # Timestamp near funding time (00:02 UTC - within 5min of 00:00)
-    ts_funding = int(datetime(2024, 1, 1, 0, 2, tzinfo=timezone.utc).timestamp() * 1000)
-    blocked, reason = checker.evaluate(ts_funding)
-    assert blocked is True
-    assert reason == "MAINTENANCE_FUNDING"
+        # Timestamp near funding time (00:02 UTC - within 5min of 00:00)
+        ts_funding = int(datetime(2024, 1, 1, 0, 2, tzinfo=timezone.utc).timestamp() * 1000)
+        blocked, reason = checker.evaluate(ts_funding)
+        assert blocked is True
+        assert reason == "MAINTENANCE_FUNDING"
 
 
 def test_schedule_no_trade_checker_custom_window():
     """Test _ScheduleNoTradeChecker with custom millisecond windows."""
-    cfg = mock.Mock()
-    cfg.maintenance = mock.Mock()
-    cfg.maintenance.daily_utc = []
-    cfg.maintenance.funding_buffer_min = 0
-    cfg.maintenance.custom_ms = [
-        {"start": 1000, "end": 2000},
-    ]
+    with mock.patch("service_signal_runner.NO_TRADE_FEATURES_DISABLED", False):
+        cfg = mock.Mock()
+        cfg.maintenance = mock.Mock()
+        cfg.maintenance.daily_utc = []
+        cfg.maintenance.funding_buffer_min = 0
+        # Use realistic timestamps from 2024
+        ts_start = int(datetime(2024, 1, 1, 0, 0, tzinfo=timezone.utc).timestamp() * 1000)
+        ts_end = int(datetime(2024, 1, 1, 0, 5, tzinfo=timezone.utc).timestamp() * 1000)
+        cfg.maintenance.custom_ms = [
+            {"start_ts_ms": ts_start, "end_ts_ms": ts_end},
+        ]
+        # Also set fallback attrs on cfg
+        cfg.daily_utc = []
+        cfg.funding_buffer_min = 0
+        cfg.custom_ms = []
 
-    checker = _ScheduleNoTradeChecker(cfg)
+        checker = _ScheduleNoTradeChecker(cfg)
 
-    assert checker.enabled is True
+        assert checker.enabled is True
 
-    # Timestamp in custom window
-    blocked, reason = checker.evaluate(1500)
-    assert blocked is True
-    assert reason == "MAINTENANCE_CUSTOM"
+        # Timestamp in custom window
+        ts_in_window = int(datetime(2024, 1, 1, 0, 2, tzinfo=timezone.utc).timestamp() * 1000)
+        blocked, reason = checker.evaluate(ts_in_window)
+        assert blocked is True
+        assert reason == "MAINTENANCE_CUSTOM"
 
-    # Timestamp outside custom window
-    blocked, reason = checker.evaluate(3000)
-    assert blocked is False
+        # Timestamp outside custom window
+        ts_out_window = int(datetime(2024, 1, 1, 1, 0, tzinfo=timezone.utc).timestamp() * 1000)
+        blocked, reason = checker.evaluate(ts_out_window)
+        assert blocked is False
 
 
 def test_schedule_no_trade_checker_fallback_config_structure():
     """Test _ScheduleNoTradeChecker with alternative config structure."""
-    # Config without maintenance sub-block
-    cfg = mock.Mock()
-    cfg.maintenance = None
-    cfg.daily_utc = ["12:00-12:05"]
-    cfg.funding_buffer_min = 3
-    cfg.custom_ms = []
+    with mock.patch("service_signal_runner.NO_TRADE_FEATURES_DISABLED", False):
+        # Config without maintenance sub-block
+        cfg = mock.Mock()
+        cfg.maintenance = None
+        cfg.daily_utc = ["12:00-12:05"]
+        cfg.funding_buffer_min = 3
+        cfg.custom_ms = []
 
-    checker = _ScheduleNoTradeChecker(cfg)
+        checker = _ScheduleNoTradeChecker(cfg)
 
-    assert checker.enabled is True
+        assert checker.enabled is True
 
 
 def test_schedule_no_trade_checker_exception_handling():
