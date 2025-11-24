@@ -5733,8 +5733,6 @@ class _Worker:
         dyn_stage_cfg = self._pipeline_cfg.get("dynamic_guard") if self._pipeline_cfg else None
         dyn_stage_enabled = dyn_stage_cfg is None or dyn_stage_cfg.enabled
 
-        if not NO_TRADE_FEATURES_DISABLED and self._dynamic_guard is not None:
-
         if NO_TRADE_FEATURES_DISABLED or self._dynamic_guard is None:
             pass
         else:
