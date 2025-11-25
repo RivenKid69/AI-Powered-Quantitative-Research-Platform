@@ -46,9 +46,13 @@ class AdaptiveUPGD(torch.optim.Optimizer):
             When True, noise scales proportionally to gradient magnitude,
             maintaining constant noise-to-signal ratio regardless of VGS scaling.
         noise_beta: EMA decay for gradient norm tracking (default: 0.999).
-            Only used when adaptive_noise=True.
+            Only used when adaptive_noise=True and instant_noise_scale=False.
         min_noise_std: Minimum noise std to prevent noise from becoming zero (default: 1e-6).
             Only used when adaptive_noise=True.
+        instant_noise_scale: Use current gradient norm directly instead of EMA (default: True).
+            When True, bypasses EMA smoothing for immediate VGS compatibility.
+            Ensures noise-to-signal ratio remains constant when VGS scales gradients.
+            When False, uses EMA smoothing (original behavior, slow VGS adaptation).
 
     Example:
         >>> optimizer = AdaptiveUPGD(model.parameters(), lr=3e-4)
@@ -70,6 +74,7 @@ class AdaptiveUPGD(torch.optim.Optimizer):
         adaptive_noise: bool = False,
         noise_beta: float = 0.999,
         min_noise_std: float = 1e-6,
+        instant_noise_scale: bool = True,
     ) -> None:
         if not 0.0 <= lr:
             raise ValueError(f"Invalid learning rate: {lr}")
@@ -101,6 +106,7 @@ class AdaptiveUPGD(torch.optim.Optimizer):
             adaptive_noise=adaptive_noise,
             noise_beta=noise_beta,
             min_noise_std=min_noise_std,
+            instant_noise_scale=instant_noise_scale,
         )
         super(AdaptiveUPGD, self).__init__(params, defaults)
 
@@ -111,6 +117,7 @@ class AdaptiveUPGD(torch.optim.Optimizer):
             group.setdefault("adaptive_noise", False)
             group.setdefault("noise_beta", 0.999)
             group.setdefault("min_noise_std", 1e-6)
+            group.setdefault("instant_noise_scale", True)  # Default to VGS-compatible mode
 
     @torch.no_grad()
     def step(self, closure: Optional[callable] = None) -> Optional[float]:
@@ -197,7 +204,7 @@ class AdaptiveUPGD(torch.optim.Optimizer):
                     # Compute current gradient norm (per parameter)
                     current_grad_norm = p.grad.data.norm().item()
 
-                    # Update gradient norm EMA
+                    # Update gradient norm EMA (for backwards compatibility and diagnostics)
                     grad_norm_ema = state["grad_norm_ema"]
                     grad_norm_ema = (
                         group["noise_beta"] * grad_norm_ema
@@ -205,14 +212,22 @@ class AdaptiveUPGD(torch.optim.Optimizer):
                     )
                     state["grad_norm_ema"] = grad_norm_ema
 
-                    # Apply bias correction for gradient norm EMA
-                    bias_correction_noise = 1 - group["noise_beta"] ** state["step"]
-                    grad_norm_corrected = grad_norm_ema / bias_correction_noise
+                    if group["instant_noise_scale"]:
+                        # VGS-COMPATIBLE: Use current gradient norm directly
+                        # This ensures noise-to-signal ratio stays constant when VGS scales gradients
+                        # FIX (2025-11-26): Resolves 212x amplification with VGS + adaptive_noise
+                        grad_norm_for_noise = current_grad_norm
+                    else:
+                        # Original behavior: Use EMA with bias correction
+                        # Note: This can cause noise amplification when VGS scales gradients
+                        # because EMA adapts slowly (beta=0.999 means ~0.1% per step)
+                        bias_correction_noise = 1 - group["noise_beta"] ** state["step"]
+                        grad_norm_for_noise = grad_norm_ema / bias_correction_noise
 
                     # Scale sigma to maintain constant noise-to-signal ratio
                     # Ensure minimum noise floor to prevent zero noise
                     adaptive_sigma = max(
-                        group["sigma"] * grad_norm_corrected,
+                        group["sigma"] * grad_norm_for_noise,
                         group["min_noise_std"]
                     )
                     noise = torch.randn_like(p.grad) * adaptive_sigma

@@ -160,7 +160,7 @@ class TestSignalPosInObservation:
             "mediator.py"
         )
 
-        with open(mediator_path, "r") as f:
+        with open(mediator_path, "r", encoding="utf-8") as f:
             source = f.read()
 
         # Check that _build_observation method uses signal_pos

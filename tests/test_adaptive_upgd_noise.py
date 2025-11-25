@@ -72,6 +72,25 @@ class TestAdaptiveNoiseUnit:
         assert optimizer.param_groups[0]["noise_beta"] == 0.99
         assert optimizer.param_groups[0]["min_noise_std"] == 1e-5
 
+    def test_instant_noise_scale_default(self):
+        """Test that instant_noise_scale defaults to True for VGS compatibility."""
+        model = SimpleModel()
+        optimizer = AdaptiveUPGD(model.parameters(), adaptive_noise=True)
+
+        # instant_noise_scale should default to True (VGS-compatible)
+        assert optimizer.param_groups[0]["instant_noise_scale"] is True
+
+    def test_instant_noise_scale_can_be_disabled(self):
+        """Test that instant_noise_scale can be set to False."""
+        model = SimpleModel()
+        optimizer = AdaptiveUPGD(
+            model.parameters(),
+            adaptive_noise=True,
+            instant_noise_scale=False,  # Use EMA-based noise (old behavior)
+        )
+
+        assert optimizer.param_groups[0]["instant_noise_scale"] is False
+
     def test_state_initialization(self):
         """Test that grad_norm_ema is initialized for adaptive noise."""
         model = SimpleModel()
@@ -551,14 +570,10 @@ class TestProblem4Resolution:
             loss1.backward()
             gn_baseline = compute_grad_norm(model_baseline)
 
-            # Effective noise std = sigma * grad_norm_ema (with adaptive noise)
-            ema_baseline = None
-            for p in model_baseline.parameters():
-                if p.grad is not None:
-                    ema_baseline = opt_baseline.state[p].get("grad_norm_ema", 1.0)
-                    break
-
-            noise_std_baseline = upgd_sigma * ema_baseline
+            # With instant_noise_scale=True (default), noise_std = sigma * current_grad_norm
+            # This ensures noise-to-signal ratio = sigma (constant)
+            # FIX (2025-11-26): Changed from EMA-based to current-grad-norm-based measurement
+            noise_std_baseline = upgd_sigma * gn_baseline  # Matches optimizer's instant_noise_scale=True
             baseline_ratios.append(noise_std_baseline / gn_baseline if gn_baseline > 0 else 0)
             opt_baseline.step()
 
@@ -571,13 +586,9 @@ class TestProblem4Resolution:
             vgs.scale_gradients()
             gn_test_post = compute_grad_norm(model_test)
 
-            ema_test = None
-            for p in model_test.parameters():
-                if p.grad is not None:
-                    ema_test = opt_test.state[p].get("grad_norm_ema", 1.0)
-                    break
-
-            noise_std_test = upgd_sigma * ema_test
+            # With instant_noise_scale=True, noise is computed from POST-VGS gradient norm
+            # This maintains constant noise-to-signal ratio even with VGS scaling
+            noise_std_test = upgd_sigma * gn_test_post  # Matches optimizer's instant_noise_scale=True
             test_ratios.append(noise_std_test / gn_test_post if gn_test_post > 0 else 0)
 
             opt_test.step()

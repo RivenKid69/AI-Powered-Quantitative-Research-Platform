@@ -120,6 +120,7 @@ python -m services.universe --output data/universe/symbols.json
 | PBT state mismatch | VGS не синхронизирован | Проверьте `variance_gradient_scaler.py` state dict |
 | step() IndexError при пустом df | Нет защиты от пустого DataFrame | ✅ Фикс 2025-11-25: проверка len(df)==0 в step() |
 | signal_pos в obs отстаёт от market data | Obs содержал prev_signal_pos (t), но market data из t+1 | ✅ Фикс 2025-11-26: obs содержит next_signal_pos (t+1) |
+| VGS + AdaptiveUPGD: noise 212x amplification | EMA (beta=0.999) слишком медленно адаптируется к VGS scaling | ✅ Фикс 2025-11-26: `instant_noise_scale=True` (default) |
 
 ---
 
@@ -511,6 +512,7 @@ if self._reward_signal_only:
 
 | Дата | Исправление | Влияние |
 |------|-------------|---------|
+| **2025-11-26** | AdaptiveUPGD instant_noise_scale fix | VGS + UPGD noise 212x amplification → 1.0x (constant ratio) |
 | **2025-11-26** | signal_pos in observation uses next_signal_pos | Temporal mismatch: market data t+1, position t → теперь оба t+1 |
 | **2025-11-25** | Empty DataFrame protection in step() | IndexError при пустом df → graceful termination |
 | **2025-11-25** | step() observation from NEXT row (Gymnasium) | Duplicate obs: reset() и step()#1 возвращали одну row |
@@ -869,5 +871,5 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-11-26
-**Версия документации**: 3.6 (signal_pos in observation temporal alignment fix)
+**Версия документации**: 3.7 (AdaptiveUPGD instant_noise_scale + signal_pos temporal alignment)
 **Статус**: ✅ Production Ready (все критические исправления применены)
