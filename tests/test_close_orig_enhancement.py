@@ -66,20 +66,21 @@ class TestCloseOrigPreservation:
         ), "close should be shifted by 1 period"
 
     def test_close_orig_not_created_when_disabled(self):
-        """Test that close_orig is NOT created when preserve_close_orig=False (default)."""
+        """Test that close_orig is NOT created when preserve_close_orig=False (explicit)."""
         df = pd.DataFrame({
             'timestamp': [1000, 2000, 3000],
             'close': [100.0, 101.0, 102.0],
         })
 
-        # Default behavior (preserve_close_orig=False)
-        pipe = FeaturePipeline()
+        # Explicit disable (preserve_close_orig=False)
+        # NOTE (2025-11-25): Default changed to True for TradingEnv reward calculation
+        pipe = FeaturePipeline(preserve_close_orig=False)
         pipe.fit({'test': df})
         df_transformed = pipe.transform_df(df.copy())
 
-        # close_orig should NOT exist (default behavior)
+        # close_orig should NOT exist when explicitly disabled
         assert 'close_orig' not in df_transformed.columns, \
-            "close_orig should NOT be created by default (preserve_close_orig=False)"
+            "close_orig should NOT be created when preserve_close_orig=False"
 
     def test_close_orig_preserved_across_multiple_transforms(self):
         """Test that close_orig prevents repeated shifting when strict_idempotency=False."""

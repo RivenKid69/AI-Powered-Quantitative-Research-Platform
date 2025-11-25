@@ -377,7 +377,17 @@ class TradingEnv(gym.Env):
                     self.df[_indicator] = self.df[_indicator].shift(1)
 
         elif "close" in self.df.columns:
-            # Already shifted, use as is
+            # FIX (2025-11-25): Warn if data is shifted but close_orig is missing
+            # This indicates legacy data or misconfigured FeaturePipeline
+            # Without close_orig, first bar reward will be 0 (NaN price → 0.0)
+            if "_close_shifted" in self.df.columns:
+                logging.warning(
+                    "TradingEnv: Data has '_close_shifted' marker but no 'close_orig' column. "
+                    "First bar reward will be 0 due to NaN in shifted close[0]. "
+                    "Use FeaturePipeline with preserve_close_orig=True (default since 2025-11-25) "
+                    "to fix this issue."
+                )
+            # Already shifted, use as is (may have NaN at position 0)
             self._close_actual = self.df["close"].copy()
         else:
             self._close_actual = pd.Series(dtype="float64")

@@ -180,7 +180,7 @@ class FeaturePipeline:
         enable_winsorization: bool = True,  # FIX (MEDIUM #3): Winsorization enabled by default
         winsorize_percentiles: Tuple[float, float] = (1.0, 99.0),
         strict_idempotency: bool = True,  # FIX (2025-11-21): Fail on repeated transform_df()
-        preserve_close_orig: bool = False,  # ENHANCEMENT (2025-11-25): Optional close_orig preservation
+        preserve_close_orig: bool = True,  # FIX (2025-11-25): REQUIRED for TradingEnv reward calculation
     ):
         """Container for feature normalization statistics.
 
@@ -204,13 +204,17 @@ class FeaturePipeline:
             (return already-transformed DataFrame unchanged).
             Default: True (strict mode for data integrity)
         preserve_close_orig:
-            If True, create 'close_orig' column with unshifted close prices before
-            shifting features. This is useful for post-training analysis and comparison.
-            Default: False (not needed for standard ML pipeline)
+            If True (default), create 'close_orig' column with unshifted close prices
+            before shifting features.
+            Default: True (REQUIRED for correct reward calculation in TradingEnv)
 
-            NOTE: Online inference (live trading) does NOT need close_orig because
-            current prices come directly from market data feeds, not from transformed
-            features. This option is primarily for offline analysis and debugging.
+            CRITICAL: This MUST be True for training/backtest to ensure TradingEnv
+            has access to original (unshifted) close prices for reward calculation.
+            Without close_orig, the first bar of each episode will have reward=0
+            because shifted close[0] = NaN → _last_reward_price = 0.0.
+
+            Set to False ONLY if you're certain close_orig is not needed (e.g.,
+            pure feature analysis without TradingEnv).
         """
 
         # stats: {col: {"mean": float, "std": float, "is_constant": bool, "winsorize_bounds": tuple}}
