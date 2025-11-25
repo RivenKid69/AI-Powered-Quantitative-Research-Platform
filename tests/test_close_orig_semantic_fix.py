@@ -436,8 +436,10 @@ class TestBackwardCompatibility:
         try:
             pipe = FeaturePipeline.load(temp_path)
 
-            # Should default to False
-            assert pipe.preserve_close_orig is False
+            # FIX (2025-11-25): Changed default from False to True to match constructor
+            # Legacy artifacts now default to True for correct TradingEnv reward calculation
+            assert pipe.preserve_close_orig is True, \
+                "Legacy artifacts should default to True (fixed 2025-11-25)"
 
             # Should work without errors
             df = pd.DataFrame({
@@ -447,6 +449,10 @@ class TestBackwardCompatibility:
 
             transformed = pipe.transform_df(df.copy())
             assert 'close_z' in transformed.columns
+
+            # With new default, close_orig should now be created
+            assert 'close_orig' in transformed.columns, \
+                "Legacy artifacts with new default should create close_orig"
 
         finally:
             os.unlink(temp_path)

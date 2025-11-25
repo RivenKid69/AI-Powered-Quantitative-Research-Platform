@@ -637,13 +637,17 @@ class FeaturePipeline:
             metadata = payload.get("metadata", {})
             # Load configuration flags if available
             config = payload.get("config", {})
+            # FIX (2025-11-25): Changed preserve_close_orig default from False to True
+            # to match constructor default. Legacy artifacts without this config key
+            # will now correctly enable close_orig preservation by default.
+            # This fixes first-bar reward=0 bug when loading old preproc_pipeline.json.
             return cls(
                 stats=stats,
                 metadata=metadata,
                 enable_winsorization=config.get("enable_winsorization", True),
                 winsorize_percentiles=tuple(config.get("winsorize_percentiles", [1.0, 99.0])),
                 strict_idempotency=config.get("strict_idempotency", True),
-                preserve_close_orig=config.get("preserve_close_orig", False),
+                preserve_close_orig=config.get("preserve_close_orig", True),
             )
         else:
             # Backwards compatibility for legacy artifacts containing only stats.

@@ -776,6 +776,9 @@ class TradingEnv(gym.Env):
         if hasattr(self, '_action_queue'):
             self._action_queue.clear()
 
+        # Reset fallback logging counter per episode (added 2025-11-25)
+        self._reward_price_fallback_count = 0
+
         self._signal_long_only = bool(getattr(self, "_signal_long_only_default", False))
         self._reward_signal_only = bool(getattr(self, "_reward_signal_only_default", True))
         self._apply_signal_only_overrides()
@@ -814,7 +817,31 @@ class TradingEnv(gym.Env):
         if candidate is None or not math.isfinite(candidate) or candidate <= 0.0:
             prev_price = getattr(self, "_last_reward_price", 0.0)
             if math.isfinite(prev_price) and prev_price > 0.0:
+                # FIX (2025-11-25): Log warning for fallback to previous price
+                # This helps debugging data issues that cause invalid prices
+                # Only log for first occurrence per episode to avoid spam
+                fallback_count = getattr(self, "_reward_price_fallback_count", 0)
+                if fallback_count < 3:  # Log first 3 occurrences per episode
+                    logger.warning(
+                        "TradingEnv._resolve_reward_price: Invalid candidate at row %d "
+                        "(candidate=%s), falling back to prev_price=%.6f. "
+                        "Check data for NaN/missing close prices.",
+                        row_idx,
+                        candidate,
+                        prev_price,
+                    )
+                    self._reward_price_fallback_count = fallback_count + 1
                 return float(prev_price)
+            # FIX (2025-11-25): Log error for zero return (no valid fallback)
+            # This is a critical data issue that causes reward=0
+            logger.error(
+                "TradingEnv._resolve_reward_price: No valid price at row %d "
+                "(candidate=%s, prev_price=%s). Returning 0.0, which causes reward=0. "
+                "Re-process data with FeaturePipeline(preserve_close_orig=True).",
+                row_idx,
+                candidate,
+                prev_price,
+            )
             return 0.0
         return float(candidate)
 
@@ -1483,6 +1510,36 @@ class TradingEnv(gym.Env):
             mid = float(row.get(price_key, row.get("price", 0.0)))
             if price_key == "close" and hasattr(self, "_close_actual") and len(self._close_actual) > row_idx:
                 mid = float(self._close_actual.iloc[row_idx])
+
+        # FIX (2025-11-25): Handle NaN mid price from shifted close without close_orig
+        # This occurs when legacy data has _close_shifted marker but no close_orig column,
+        # causing _close_actual[0] = NaN after shift.
+        # Fallback priority: open price → last_mtm_price → log warning
+        if not math.isfinite(mid) or mid <= 0.0:
+            fallback_mid = None
+            # Try open price (never shifted)
+            if "open" in row.index:
+                fallback_mid = self._safe_float(row.get("open"))
+            # Fallback to last known price
+            if (fallback_mid is None or not math.isfinite(fallback_mid) or fallback_mid <= 0.0):
+                fallback_mid = getattr(self, "last_mtm_price", None)
+            if fallback_mid is not None and math.isfinite(fallback_mid) and fallback_mid > 0.0:
+                logger.warning(
+                    "TradingEnv: mid price is NaN/invalid at row %d. Using fallback=%.6f. "
+                    "This likely indicates legacy data without close_orig. "
+                    "Re-process data with FeaturePipeline(preserve_close_orig=True).",
+                    row_idx,
+                    fallback_mid,
+                )
+                mid = float(fallback_mid)
+            else:
+                # Critical: no valid fallback available
+                logger.error(
+                    "TradingEnv: mid price is NaN/invalid at row %d and no fallback available. "
+                    "Execution simulation will receive invalid prices. "
+                    "Re-process data with FeaturePipeline(preserve_close_orig=True).",
+                    row_idx,
+                )
 
         vol_factor = float(row.get("atr_pct", 0.0))
         liquidity = float(row.get("liq_roll", 0.0))
