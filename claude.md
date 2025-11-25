@@ -105,6 +105,7 @@ python -m services.universe --output data/universe/symbols.json
 |---------|---------|---------|
 | step() возвращает obs с той же row что reset() | Observation строился из current row, не next | ✅ Фикс 2025-11-25: obs из next_row (Gymnasium семантика) |
 | CLOSE_TO_OPEN + SIGNAL_ONLY: look-ahead bias | signal_pos обновлялся немедленно, игнорируя delay | ✅ Фикс 2025-11-25: использует executed_signal_pos |
+| info["signal_pos_next"] показывает intent, не actual | В CLOSE_TO_OPEN + signal_only показывал agent_signal_pos | ✅ Фикс 2025-11-25: показывает next_signal_pos + новое поле signal_pos_requested |
 | LSTM первый step на zeros | reset() возвращал np.zeros() | ✅ Фикс 2025-11-25: reset() строит obs из row 0 |
 | reward=0 при старте эпизода | NaN close в первых rows → _last_reward_price=0 | ✅ Фикс 2025-11-25: fallback на open/scan rows |
 | Long-only: позиция всегда ≥50% | Wrapper наследовал [0,1] action_space | ✅ Фикс 2025-11-25: wrapper ставит [-1,1], policy использует tanh |
@@ -235,18 +236,24 @@ elif "close" in self.df.columns and "_close_shifted" not in self.df.columns:
 
 ---
 
-### 7. Signal Position Redundant Assignment (trading_patchnew.py:1872, 1960-1961)
+### 7. info["signal_pos_next"] vs info["signal_pos_requested"] (trading_patchnew.py:2194-2204)
 
 ```python
-# Строка 1872:
-self._last_signal_position = float(next_signal_pos)
-
-# Строки 1960-1961 (signal-only branch):
 if self._reward_signal_only:
-    self._last_signal_position = float(agent_signal_pos)
+    info["signal_pos_next"] = float(next_signal_pos)      # ACTUAL position after step
+    info["signal_pos_requested"] = float(agent_signal_pos)  # Agent's INTENTION
+else:
+    info["signal_pos_next"] = float(next_signal_pos)
+    info["signal_pos_requested"] = float(agent_signal_pos)
 ```
 
-**Почему это НЕ баг**: В signal-only режиме `next_signal_pos = agent_signal_pos` (строка 1555). Присваивание дублируется, но значения **идентичны**. Это code smell (избыточность), но не влияет на корректность.
+**Почему это корректно** (исправлено 2025-11-25):
+1. В CLOSE_TO_OPEN режиме: `next_signal_pos ≠ agent_signal_pos` из-за 1-bar delay
+2. `signal_pos_next` показывает **фактическую** позицию после шага (используется для reward)
+3. `signal_pos_requested` показывает **намерение** агента (для debugging/анализа)
+4. **До фикса**: `signal_pos_next = agent_signal_pos` → вводило в заблуждение при отладке
+
+**Тесты**: `tests/test_signal_pos_next_close_to_open_consistency.py` (8 тестов)
 
 ---
 
@@ -380,6 +387,7 @@ else:
 |------|-------------|---------|
 | **2025-11-25** | step() observation from NEXT row (Gymnasium) | Duplicate obs: reset() и step()#1 возвращали одну row |
 | **2025-11-25** | CLOSE_TO_OPEN + SIGNAL_ONLY timing | Look-ahead bias: signal_pos игнорировал 1-bar delay |
+| **2025-11-25** | info["signal_pos_next"] consistency | Показывал intent вместо actual; добавлен signal_pos_requested |
 | **2025-11-25** | reset() returns actual observation (Issue #1) | LSTM получал zeros на первом step эпизода |
 | **2025-11-25** | Improved _last_reward_price init (Issue #3) | reward=0 если данные начинались с NaN |
 | **2025-11-25** | Removed redundant signal_position update (Issue #2) | Code smell (не влияло на функционал) |

@@ -2166,14 +2166,42 @@ class TradingEnv(gym.Env):
         # Impact: Code smell only - values were identical, no bug.
         # Solution: Removed redundant assignment, kept only info dict updates.
         # Reference: tests/test_trading_env_reset_observation_fixes.py::TestRedundantSignalPositionRemoved
+        #
+        # FIX (2025-11-25): info["signal_pos_next"] consistency in CLOSE_TO_OPEN mode
+        # ═══════════════════════════════════════════════════════════════════════════
+        # PROBLEM:
+        #   In CLOSE_TO_OPEN + signal_only mode, next_signal_pos = executed_signal_pos
+        #   (from delayed proto), but info["signal_pos_next"] showed agent_signal_pos
+        #   (agent's intention, NOT what actually gets used).
+        #
+        #   Example:
+        #     - Step 0: Agent wants 100% position (agent_signal_pos = 1.0)
+        #     - In CLOSE_TO_OPEN: next_signal_pos = executed_signal_pos = 0.0 (delayed HOLD)
+        #     - OLD: info["signal_pos_next"] = 1.0 (misleading!)
+        #     - Actual _last_signal_position = 0.0
+        #
+        # IMPACT:
+        #   - Training: NOT affected (reward uses prev_signal_pos correctly)
+        #   - Analysis/Debugging: MISLEADING - info shows intention, not reality
+        #   - Live: NOT affected (signal_only not used in live)
+        #
+        # FIX:
+        #   info["signal_pos_next"] now shows next_signal_pos (actual position)
+        #   info["signal_pos_requested"] added for agent's intention (debugging)
+        #
+        # Tests: tests/test_signal_pos_next_close_to_open_consistency.py
+        # ═══════════════════════════════════════════════════════════════════════════
         if self._reward_signal_only:
             info["signal_position_prev"] = float(prev_signal_pos)
             info["signal_pos"] = float(prev_signal_pos)
-            info["signal_pos_next"] = float(agent_signal_pos)
+            info["signal_pos_next"] = float(next_signal_pos)
+            # Agent's intention (for debugging); differs from signal_pos_next in CLOSE_TO_OPEN
+            info["signal_pos_requested"] = float(agent_signal_pos)
         else:
             info["signal_position_prev"] = float(prev_signal_pos)
             info["signal_pos"] = float(next_signal_pos)
             info["signal_pos_next"] = float(next_signal_pos)
+            info["signal_pos_requested"] = float(agent_signal_pos)
         info["ratio_raw"] = float(ratio_price)
         info["ratio_clipped"] = float(ratio_clipped)
         info["log_return"] = float(log_return_clipped)
