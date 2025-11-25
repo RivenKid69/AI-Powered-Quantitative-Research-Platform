@@ -788,11 +788,85 @@ class TradingEnv(gym.Env):
             setattr(self._mediator, "_latest_log_ret_prev", 0.0)
         except Exception:
             pass
+        # FIX (2025-11-25 Issue #3): Improved initial price resolution
+        # Problem: If data starts with NaN close prices, _last_reward_price = 0.0
+        # and subsequent steps can't fallback to previous price (0.0 fails the >0 check).
+        # This causes reward=0 for several steps until valid price appears.
+        # Solution: Try multiple fallbacks in order:
+        #   1. close_orig/close from row 0
+        #   2. open price from row 0 (never shifted, always valid if present)
+        #   3. Scan first 10 rows for any valid close price
+        # Reference: tests/test_trading_env_reset_observation_fixes.py
         first_price = 0.0
         if len(self.df) > 0:
-            first_price = float(self._resolve_reward_price(0))
+            row_0 = self.df.iloc[0]
+            first_price = float(self._resolve_reward_price(0, row_0))
+            # If close_orig/close failed, try open price (never shifted)
+            if not (math.isfinite(first_price) and first_price > 0.0):
+                if "open" in row_0.index:
+                    candidate = self._safe_float(row_0.get("open"))
+                    if candidate is not None and math.isfinite(candidate) and candidate > 0.0:
+                        first_price = float(candidate)
+                        logger.info(
+                            "TradingEnv._init_state: Using open price %.6f as initial reward price "
+                            "(close was invalid). This indicates data quality issues at row 0.",
+                            first_price,
+                        )
+            # If still invalid, scan first few rows for valid price
+            if not (math.isfinite(first_price) and first_price > 0.0):
+                for scan_idx in range(1, min(10, len(self.df))):
+                    scan_row = self.df.iloc[scan_idx]
+                    scan_price = float(self._resolve_reward_price(scan_idx, scan_row))
+                    if math.isfinite(scan_price) and scan_price > 0.0:
+                        first_price = float(scan_price)
+                        logger.warning(
+                            "TradingEnv._init_state: First %d rows had invalid prices. "
+                            "Using price %.6f from row %d. Check data pipeline.",
+                            scan_idx, first_price, scan_idx,
+                        )
+                        break
         self._last_reward_price = first_price if math.isfinite(first_price) and first_price > 0.0 else 0.0
+
+        # FIX (2025-11-25 Issue #1): Build actual observation from row 0 instead of zeros
+        # Problem: reset() returned np.zeros(...), violating Gymnasium semantics.
+        # Impact:
+        #   - LSTM receives zeros as first input (meaningless hidden state update)
+        #   - Policy makes first decision based on zeros (no market information)
+        #   - First step's observation differs drastically from reset observation
+        # Solution: Call _mediator._build_observation() with row 0 data at reset time.
+        # Fallback: If observation builder fails, return zeros with warning.
+        # Reference: tests/test_trading_env_reset_observation_fixes.py
         obs = np.zeros(self.observation_space.shape, dtype=np.float32)
+        if len(self.df) > 0:
+            try:
+                row_0 = self.df.iloc[0]
+                mark_price = self._last_reward_price
+                if not (math.isfinite(mark_price) and mark_price > 0.0):
+                    # Fallback to any available price column
+                    for key in ("close", "price", "open"):
+                        if key in row_0.index:
+                            val = self._safe_float(row_0.get(key))
+                            if val is not None and math.isfinite(val) and val > 0.0:
+                                mark_price = float(val)
+                                break
+                if not (math.isfinite(mark_price) and mark_price > 0.0):
+                    mark_price = 1.0  # Safe default to avoid div-by-zero
+                # Set context for mediator to use correct row index
+                try:
+                    setattr(self._mediator, "_context_row_idx", 0)
+                except Exception:
+                    pass
+                obs = self._mediator._build_observation(
+                    row=row_0, state=self.state, mark_price=mark_price
+                )
+            except Exception as e:
+                logger.warning(
+                    "TradingEnv._init_state: Failed to build initial observation: %s. "
+                    "Falling back to zeros. This may affect LSTM training quality.",
+                    e,
+                )
+                obs = np.zeros(self.observation_space.shape, dtype=np.float32)
+
         info: dict[str, Any] = {}
         self._attach_bar_interval_info(info)
         return obs, info
@@ -2024,12 +2098,16 @@ class TradingEnv(gym.Env):
         info["reward_robust_clip_fraction"] = float(
             0.0 if self._reward_signal_only else self.reward_robust_clip_fraction
         )
+        # FIX (2025-11-25 Issue #2): Removed redundant _last_signal_position assignment
+        # Problem: In signal_only mode, _last_signal_position was set twice:
+        #   1. Line ~2007: self._last_signal_position = float(next_signal_pos)
+        #   2. Here (REMOVED): self._last_signal_position = float(agent_signal_pos)
+        # Analysis: In signal_only mode, next_signal_pos == agent_signal_pos (line 1628-1629),
+        # making the second assignment redundant (same value, no functional impact).
+        # Impact: Code smell only - values were identical, no bug.
+        # Solution: Removed redundant assignment, kept only info dict updates.
+        # Reference: tests/test_trading_env_reset_observation_fixes.py::TestRedundantSignalPositionRemoved
         if self._reward_signal_only:
-            self._last_signal_position = float(agent_signal_pos)
-            try:
-                setattr(self._mediator, "_last_signal_position", float(agent_signal_pos))
-            except Exception:
-                pass
             info["signal_position_prev"] = float(prev_signal_pos)
             info["signal_pos"] = float(prev_signal_pos)
             info["signal_pos_next"] = float(agent_signal_pos)

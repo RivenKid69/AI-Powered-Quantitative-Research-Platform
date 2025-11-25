@@ -103,7 +103,9 @@ python -m services.universe --output data/universe/symbols.json
 
 | Симптом | Причина | Решение |
 |---------|---------|---------|
-| Long-only: позиция всегда ≥50% | Wrapper наследовал [0,1] action_space | Фикс 2025-11-25: wrapper ставит [-1,1], policy использует tanh |
+| LSTM первый step на zeros | reset() возвращал np.zeros() | ✅ Фикс 2025-11-25: reset() строит obs из row 0 |
+| reward=0 при старте эпизода | NaN close в первых rows → _last_reward_price=0 | ✅ Фикс 2025-11-25: fallback на open/scan rows |
+| Long-only: позиция всегда ≥50% | Wrapper наследовал [0,1] action_space | ✅ Фикс 2025-11-25: wrapper ставит [-1,1], policy использует tanh |
 | Long-only: entropy collapse | Policy не может выразить exit | Переобучить с новым wrapper (tanh вместо sigmoid) |
 | PBT deadlock (workers crash) | ready_percentage слишком высокий | `min_ready_members=2`, `ready_check_max_wait=10` |
 | Non-monotonic quantiles | NN predictions без sorting | `critic.enforce_monotonicity=true` |
@@ -125,6 +127,7 @@ python -m services.universe --output data/universe/symbols.json
 | "Look-ahead bias в индикаторах?" | ✅ **Исправлено 2025-11-23**. Все фичи сдвинуты. |
 | "VGS недооценивает variance в N раз?" | ⚠️ **By design**. Var[mean(g)] валиден, работает в production. |
 | "-10.0 bankruptcy penalty слишком резкий?" | ✅ **Стандартная практика RL**. Potential shaping даёт smooth gradient. |
+| "_last_signal_position двойное присваивание?" | ⚠️ **Удалено 2025-11-25**. Было избыточно, но не баг (значения идентичны). |
 
 ---
 
@@ -320,6 +323,9 @@ else:
 
 | Дата | Исправление | Влияние |
 |------|-------------|---------|
+| **2025-11-25** | reset() returns actual observation (Issue #1) | LSTM получал zeros на первом step эпизода |
+| **2025-11-25** | Improved _last_reward_price init (Issue #3) | reward=0 если данные начинались с NaN |
+| **2025-11-25** | Removed redundant signal_position update (Issue #2) | Code smell (не влияло на функционал) |
 | **2025-11-25** | LongOnlyActionWrapper action space | Минимальная позиция была 50% вместо 0%! |
 | **2025-11-25** | Policy adaptive activation (tanh/sigmoid) | Policy теперь адаптируется к action_space |
 | **2025-11-25** | close_orig semantic conflict | Data leakage в pipeline |
@@ -583,6 +589,7 @@ pytest tests/test_pbt*.py -v           # PBT
 | Indicators | `test_indicator*.py`, `test_rsi_cci*.py` |
 | Action Space | `test_critical_action_space_fixes.py`, `test_long_only_action_space_fix.py` (26+21 тестов) |
 | LSTM | `test_lstm_episode_boundary_reset.py` |
+| Reset Observation | `test_trading_env_reset_observation_fixes.py` (9 тестов) |
 
 ---
 
@@ -669,5 +676,5 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-11-25
-**Версия документации**: 3.3 (LongOnlyActionWrapper action space fix + policy adaptive activation)
+**Версия документации**: 3.4 (reset observation + reward price init fixes)
 **Статус**: ✅ Production Ready (все критические исправления применены)
