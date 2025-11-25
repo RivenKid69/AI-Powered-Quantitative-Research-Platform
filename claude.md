@@ -123,6 +123,139 @@ python -m services.universe --output data/universe/symbols.json
 
 ---
 
+## 🔬 НЕ БАГИ: Корректные паттерны кода (НЕ "ИСПРАВЛЯТЬ"!)
+
+> **ВАЖНО**: Следующие паттерны кода ВЫГЛЯДЯТ как ошибки при статическом анализе, но являются **корректными и намеренными**. НЕ пытайтесь их "исправить"!
+
+### 1. Episode Starts Off-by-One (distributional_ppo.py:8314, 8347)
+
+```python
+# Строка 8314: добавляем _last_episode_starts в буфер
+rollout_buffer.add(..., self._last_episode_starts, ...)
+
+# Строка 8347: обновляем ПОСЛЕ добавления
+self._last_episode_starts = dones
+```
+
+**Почему это НЕ баг**: Это стандартный паттерн Stable-Baselines3. `_last_episode_starts` хранит `dones` от **предыдущего** шага. При вычислении GAE (строка 280) используется `episode_starts[step+1]` — это означает "был ли шаг step терминальным". Сдвиг на 1 **намеренный** и семантически корректный.
+
+**Референс**: SB3 `OnPolicyAlgorithm.collect_rollouts()`, PPO paper (Schulman et al., 2017)
+
+---
+
+### 2. VGS применяется ПЕРЕД grad clipping (distributional_ppo.py:11664-11676)
+
+```python
+# Строка 11664: VGS масштабирует градиенты
+vgs_scaling_factor = self._variance_gradient_scaler.scale_gradients()
+
+# Строка 11676: Потом clipping
+total_grad_norm = torch.nn.utils.clip_grad_norm_(...)
+```
+
+**Почему это НЕ баг**: VGS **уменьшает** градиенты (scaling_factor < 1.0, см. variance_gradient_scaler.py:446). Порядок корректен:
+1. VGS снижает variance высокошумных градиентов
+2. clip_grad_norm защищает от оставшихся выбросов
+
+**Референс**: variance_gradient_scaler.py docstring, Adam optimizer design
+
+---
+
+### 3. CVaR Interpolation Weight = 0.5 (distributional_ppo.py:3726-3728)
+
+```python
+tau_i_prev = (alpha_idx - 0.5) / num_quantiles  # центр предыдущего интервала
+tau_i = (alpha_idx + 0.5) / num_quantiles        # центр текущего интервала
+interval_start = alpha_idx / num_quantiles       # граница между ними
+weight_start = (interval_start - tau_i_prev) / (tau_i - tau_i_prev)  # = 0.5
+```
+
+**Почему это НЕ баг**: `interval_start` (граница квантильного интервала) находится **ровно посередине** между центрами соседних интервалов `tau_i_prev` и `tau_i`. Вес 0.5 — это математически корректная линейная интерполяция.
+
+**Математика**: `weight = (α_idx/N - (α_idx-0.5)/N) / ((α_idx+0.5)/N - (α_idx-0.5)/N) = 0.5/N / (1/N) = 0.5`
+
+---
+
+### 4. LSTM Init State Index 0 (distributional_ppo.py:2217)
+
+```python
+state_tensor[:, env_idx, ...] = init_tensor[:, 0, ...].detach().to(...)
+```
+
+**Почему это НЕ баг**: `recurrent_initial_state` инициализируется **нулями** для всех environments (custom_policy_patch1.py:492). Все init states идентичны, поэтому `init_tensor[:, 0, ...]` безопасен.
+
+**Референс**: custom_policy_patch1.py:491-503 — `torch.zeros(self.lstm_hidden_state_shape, ...)`
+
+---
+
+### 5. Twin Critics Loss Averaging БЕЗ VF Clipping (distributional_ppo.py:11073)
+
+```python
+# Когда VF clipping ВЫКЛЮЧЕН:
+critic_loss_unclipped_per_sample = (loss_critic_1 + loss_critic_2) / 2.0
+```
+
+**Почему это НЕ баг**: Без VF clipping нет необходимости в `max(clipped, unclipped)`. Простое усреднение losses двух critics корректно. Когда VF clipping **включён**, используется правильная логика (строки 11168-11170):
+```python
+loss_c1_final = torch.max(loss_c1_unclipped, loss_c1_clipped)
+loss_c2_final = torch.max(loss_c2_unclipped, loss_c2_clipped)
+critic_loss = torch.mean((loss_c1_final + loss_c2_final) / 2.0)
+```
+
+---
+
+### 6. close_orig vs _close_shifted маркеры (features_pipeline.py, trading_patchnew.py)
+
+```python
+# features_pipeline.py:329-331 — пропускает shift если close_orig есть
+if "close_orig" in frame.columns:
+    shifted_frames.append(frame)
+    continue
+
+# trading_patchnew.py:305-307 — проверяет close_orig ПЕРВЫМ
+if "close_orig" in self.df.columns:
+    self._close_actual = self.df["close_orig"].copy()
+elif "close" in self.df.columns and "_close_shifted" not in self.df.columns:
+    # Shift применяется только здесь
+```
+
+**Почему это НЕ баг**: Проверка `close_orig` идёт **раньше** проверки `_close_shifted`. Если данные пришли с `close_orig` (уже сдвинуты), shift НЕ применяется повторно. Два маркера имеют разную семантику:
+- `close_orig` — оригинальная цена ДО shift (для анализа)
+- `_close_shifted` — флаг что shift уже применён
+
+---
+
+### 7. Signal Position Redundant Assignment (trading_patchnew.py:1872, 1960-1961)
+
+```python
+# Строка 1872:
+self._last_signal_position = float(next_signal_pos)
+
+# Строки 1960-1961 (signal-only branch):
+if self._reward_signal_only:
+    self._last_signal_position = float(agent_signal_pos)
+```
+
+**Почему это НЕ баг**: В signal-only режиме `next_signal_pos = agent_signal_pos` (строка 1555). Присваивание дублируется, но значения **идентичны**. Это code smell (избыточность), но не влияет на корректность.
+
+---
+
+### 8. Advantage Normalization с ddof=1 (distributional_ppo.py:8442)
+
+```python
+adv_std = float(np.std(advantages_flat, ddof=1))
+# ...
+normalized_advantages = (adv - adv_mean) / (adv_std + EPSILON)
+```
+
+**Почему это НЕ баг**:
+1. `ddof=1` для несмещённой оценки дисперсии (Bessel's correction)
+2. Если `n_samples == 1`, `std` будет `NaN`
+3. Код защищён проверкой на строках 8444-8445: `if not np.isfinite(adv_std): skip`
+4. `EPSILON = 1e-8` защищает от деления на ноль
+
+---
+
 ## 📊 СТАТУС ПРОЕКТА (2025-11-25)
 
 ### ✅ Production Ready
@@ -499,5 +632,5 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-11-25
-**Версия документации**: 3.0
+**Версия документации**: 3.1 (добавлена секция "НЕ БАГИ")
 **Статус**: ✅ Production Ready (все критические исправления применены)
