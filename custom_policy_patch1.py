@@ -488,6 +488,14 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
             assert tuple(param.shape) == (self.action_dim,), \
                 f"bad log_std shape {tuple(param.shape)} != ({self.action_dim},)"
 
+            # CRITICAL FIX (2025-11-25): Detect action space bounds and use appropriate activation
+            # - action_space = [0, 1]: use sigmoid (outputs [0, 1])
+            # - action_space = [-1, 1]: use tanh (outputs [-1, 1])
+            # This is essential for LongOnlyActionWrapper which sets action_space = [-1, 1]
+            # and maps policy outputs to [0, 1] for the underlying env.
+            action_low = float(self.action_space.low.flat[0])
+            self._use_tanh_activation = action_low < 0.0
+
         def _zeros_for(module: Optional[nn.Module]) -> Tuple[torch.Tensor, ...]:
             zeros = torch.zeros(self.lstm_hidden_state_shape, device=self.device)
             if isinstance(module, nn.GRU):
@@ -1280,12 +1288,53 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
 
     def _score_to_raw(self, scores: torch.Tensor) -> torch.Tensor:
         # Fallback для evaluate(): безопасный logit только когда нет raw
-        clipped = torch.clamp(scores, self._score_clip_eps, 1.0 - self._score_clip_eps)
-        return torch.log(clipped) - torch.log1p(-clipped)
+        if getattr(self, "_use_tanh_activation", False):
+            # Inverse tanh: atanh(x) = 0.5 * log((1+x)/(1-x))
+            eps = 1e-6
+            clipped = torch.clamp(scores, -1.0 + eps, 1.0 - eps)
+            return 0.5 * (torch.log1p(clipped) - torch.log1p(-clipped))
+        else:
+            # Inverse sigmoid (logit)
+            clipped = torch.clamp(scores, self._score_clip_eps, 1.0 - self._score_clip_eps)
+            return torch.log(clipped) - torch.log1p(-clipped)
+
+    def _apply_action_activation(self, raw: torch.Tensor) -> torch.Tensor:
+        """Apply activation function based on action space bounds.
+
+        CRITICAL FIX (2025-11-25):
+        - action_space = [0, 1]: use sigmoid -> [0, 1]
+        - action_space = [-1, 1]: use tanh -> [-1, 1]
+
+        This ensures correct behavior with LongOnlyActionWrapper which expects
+        policy outputs in [-1, 1] and maps them to [0, 1].
+        """
+        if getattr(self, "_use_tanh_activation", False):
+            return torch.tanh(raw)
+        else:
+            return torch.sigmoid(raw)
+
+    def _log_activation_jacobian(self, raw: torch.Tensor) -> torch.Tensor:
+        """Compute log of activation function's Jacobian for log_prob correction.
+
+        For sigmoid: log(sigma'(x)) = log(sigma(x)) + log(1-sigma(x)) = -softplus(-x) - softplus(x)
+        For tanh: log(tanh'(x)) = log(1 - tanh^2(x)) = log(sech^2(x))
+        """
+        if getattr(self, "_use_tanh_activation", False):
+            # tanh'(x) = 1 - tanh^2(x) = sech^2(x)
+            # log(sech^2(x)) = -2 * log(cosh(x)) = -2 * (softplus(2x) - x - log(2))
+            # More numerically stable: log(1 - tanh^2(x))
+            tanh_x = torch.tanh(raw)
+            # Clamp to avoid log(0)
+            one_minus_tanh_sq = torch.clamp(1.0 - tanh_x * tanh_x, min=1e-8)
+            return torch.log(one_minus_tanh_sq)
+        else:
+            # Sigmoid jacobian: log σ'(x) = -softplus(-x) - softplus(x)
+            return -(F.softplus(-raw) + F.softplus(raw))
 
     def _log_sigmoid_jacobian_from_raw(self, raw: torch.Tensor) -> torch.Tensor:
-        # log σ'(x) = log σ(x) + log(1-σ(x)) = -softplus(-x) - softplus(x)
-        return -(F.softplus(-raw) + F.softplus(raw))
+        # DEPRECATED: Use _log_activation_jacobian instead
+        # Kept for backwards compatibility
+        return self._log_activation_jacobian(raw)
 
     def _clamp_by_z(
         self,
@@ -1357,7 +1406,8 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
         for _ in range(samples):
             raw_sample = rsample_fn()
             raw_sample = self._clamp_by_z(distribution, raw_sample, zmax=8.0)
-            scores_sample = torch.sigmoid(raw_sample)
+            # CRITICAL FIX (2025-11-25): Use adaptive activation
+            scores_sample = self._apply_action_activation(raw_sample)
             lp_sample = self._weighted_log_prob(distribution, scores_sample, raw_sample)
             entropy_accum = lp_sample if entropy_accum is None else entropy_accum + lp_sample
 
@@ -1518,7 +1568,10 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
         distribution = self._get_action_dist_from_latent(latent_pi)
         raw_actions = distribution.get_actions(deterministic=deterministic)
         raw_stable = self._clamp_by_z(distribution, raw_actions, zmax=8.0)
-        scores = torch.sigmoid(raw_stable)
+        # CRITICAL FIX (2025-11-25): Use adaptive activation based on action_space
+        # - [0, 1] action_space: sigmoid
+        # - [-1, 1] action_space: tanh (for LongOnlyActionWrapper)
+        scores = self._apply_action_activation(raw_stable)
         if not torch.isfinite(scores).all():
             raise RuntimeError("Policy produced non-finite score action")
         log_prob = self._weighted_log_prob(distribution, scores, raw_stable)
@@ -1532,7 +1585,7 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
         episode_starts: torch.Tensor,
         deterministic: bool = False,
     ) -> Tuple[torch.Tensor, RNNStates]:
-        """Route predictions through ``forward`` to obtain sigmoid-clipped scores."""
+        """Route predictions through ``forward`` to obtain action-space-appropriate scores."""
         actions, _, _, new_states = self.forward(
             observation, lstm_states, episode_starts, deterministic=deterministic
         )

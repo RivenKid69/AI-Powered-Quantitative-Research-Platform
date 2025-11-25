@@ -36,15 +36,30 @@ def test_score_wrapper_rejects_non_finite_actions():
         env.action([float("inf")])
 
 
-def test_long_only_wrapper_clamps_payloads():
+def test_long_only_wrapper_maps_payloads():
+    """Test that LongOnlyActionWrapper maps [-1, 1] to [0, 1].
+
+    CRITICAL FIX (2025-11-25): The wrapper now MAPS values, not CLAMPS them.
+    Mapping formula: output = (input + 1) / 2
+
+    This allows agents to express full range of positions:
+    - -1.0 -> 0.0 (full exit)
+    - 0.0 -> 0.5 (50% position)
+    - 1.0 -> 1.0 (full position)
+    """
     env = LongOnlyActionWrapper(_DummyScoreEnv())
 
-    assert env.action(-0.25) == pytest.approx(0.0)
+    # Test mapping: -0.25 -> (-0.25 + 1) / 2 = 0.375
+    assert env.action(-0.25) == pytest.approx(0.375)
 
+    # Test array mapping and output bounds
     array_action = env.action(np.array([-1.0, 0.25, 2.0], dtype=np.float32))
     assert np.all(array_action >= 0.0)
     assert np.all(array_action <= 1.0)
+    # -1.0 -> 0.0, 0.25 -> 0.625, 2.0 -> 1.5 -> clipped to 1.0
+    np.testing.assert_allclose(array_action, [0.0, 0.625, 1.0], atol=1e-6)
 
+    # Test ActionProto mapping: -0.7 -> (-0.7 + 1) / 2 = 0.15
     proto_action = env.action(ActionProto(ActionType.MARKET, volume_frac=-0.7))
     assert isinstance(proto_action, ActionProto)
-    assert proto_action.volume_frac == pytest.approx(0.0)
+    assert proto_action.volume_frac == pytest.approx(0.15)

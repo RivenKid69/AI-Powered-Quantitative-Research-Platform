@@ -69,13 +69,16 @@ python -m services.universe --output data/universe/symbols.json
    - ✅ `next_units = volume_frac * max_position`
    - ❌ `next_units = current_units + volume_frac * max_position` (удвоение!)
 
-2. **Action space bounds: [-1, 1] ВЕЗДЕ**
-   - ✅ `np.clip(action, -1.0, 1.0)`
-   - ❌ `np.clip(action, 0.0, 1.0)` (потеря short/reduction)
+2. **Action space bounds: [-1, 1] для policy с LongOnlyActionWrapper**
+   - ✅ `LongOnlyActionWrapper.action_space = Box(-1, 1)` — wrapper сам устанавливает!
+   - ✅ Policy использует `tanh` когда `action_space.low < 0`
+   - ❌ Wrapper НЕ должен наследовать `action_space` от env (было [0,1] → баг!)
 
-3. **LongOnlyActionWrapper: mapping, НЕ clipping**
-   - ✅ `mapped = (action + 1.0) / 2.0`
+3. **LongOnlyActionWrapper: mapping [-1,1] → [0,1], НЕ clipping**
+   - ✅ `mapped = (action + 1.0) / 2.0` — policy выдаёт [-1,1], wrapper маппит в [0,1]
+   - ✅ `-1.0 → 0.0` (exit), `0.0 → 0.5` (50%), `+1.0 → 1.0` (100%)
    - ❌ `clipped = max(0, action)` (теряет reduction сигналы)
+   - ❌ Если wrapper наследует [0,1] от env: sigmoid [0,1] → mapping → [0.5,1.0] **минимум 50%!**
 
 4. **LSTM States ДОЛЖНЫ сбрасываться на episode boundaries!**
    - ✅ `self._last_lstm_states = self._reset_lstm_states_for_done_envs(...)`
@@ -100,6 +103,8 @@ python -m services.universe --output data/universe/symbols.json
 
 | Симптом | Причина | Решение |
 |---------|---------|---------|
+| Long-only: позиция всегда ≥50% | Wrapper наследовал [0,1] action_space | Фикс 2025-11-25: wrapper ставит [-1,1], policy использует tanh |
+| Long-only: entropy collapse | Policy не может выразить exit | Переобучить с новым wrapper (tanh вместо sigmoid) |
 | PBT deadlock (workers crash) | ready_percentage слишком высокий | `min_ready_members=2`, `ready_check_max_wait=10` |
 | Non-monotonic quantiles | NN predictions без sorting | `critic.enforce_monotonicity=true` |
 | Value loss не снижается | LSTM states не сбрасываются | Проверьте `_reset_lstm_states_for_done_envs` |
@@ -256,6 +261,30 @@ normalized_advantages = (adv - adv_mean) / (adv_std + EPSILON)
 
 ---
 
+### 9. Policy Adaptive Activation (custom_policy_patch1.py:491-497, 1301-1314)
+
+```python
+# __init__: определяем тип активации по action_space
+action_low = float(self.action_space.low.flat[0])
+self._use_tanh_activation = action_low < 0.0
+
+# _apply_action_activation: выбираем sigmoid или tanh
+if getattr(self, "_use_tanh_activation", False):
+    return torch.tanh(raw)
+else:
+    return torch.sigmoid(raw)
+```
+
+**Почему это НЕ баг**: Это **КРИТИЧЕСКИЙ FIX** (2025-11-25):
+1. `LongOnlyActionWrapper` устанавливает `action_space = [-1, 1]`
+2. Policy детектирует это и использует `tanh` (выход [-1, 1])
+3. Wrapper маппит [-1, 1] → [0, 1] для TradingEnv
+4. БЕЗ этого фикса: sigmoid [0,1] → mapping → [0.5, 1.0] — **минимум 50% позиции!**
+
+**Тесты**: `tests/test_long_only_action_space_fix.py` (26 тестов)
+
+---
+
 ## 📊 СТАТУС ПРОЕКТА (2025-11-25)
 
 ### ✅ Production Ready
@@ -264,6 +293,7 @@ normalized_advantages = (adv - adv_mean) / (adv_std + EPSILON)
 
 | Компонент | Статус | Тесты |
 |-----------|--------|-------|
+| LongOnlyActionWrapper | ✅ Production | 26/26 (NEW) |
 | AdaptiveUPGD Optimizer | ✅ Production | 119/121 |
 | Twin Critics + VF Clipping | ✅ Production | 49/50 |
 | VGS v3.1 | ✅ Production | 7/7 |
@@ -275,6 +305,7 @@ normalized_advantages = (adv - adv_mean) / (adv_std + EPSILON)
 ### ⚠️ Требуется действие
 
 **Переобучите модели**, если они обучены **до 2025-11-25**:
+- **LongOnlyActionWrapper action space fix (2025-11-25)** — минимальная позиция была 50%!
 - Data leakage fix (2025-11-23) + close_orig fix (2025-11-25)
 - RSI/CCI initialization fixes (2025-11-24)
 - Twin Critics GAE fix (2025-11-21)
@@ -289,6 +320,8 @@ normalized_advantages = (adv - adv_mean) / (adv_std + EPSILON)
 
 | Дата | Исправление | Влияние |
 |------|-------------|---------|
+| **2025-11-25** | LongOnlyActionWrapper action space | Минимальная позиция была 50% вместо 0%! |
+| **2025-11-25** | Policy adaptive activation (tanh/sigmoid) | Policy теперь адаптируется к action_space |
 | **2025-11-25** | close_orig semantic conflict | Data leakage в pipeline |
 | **2025-11-24** | Twin Critics loss aggregation | 25% underestimation |
 | **2025-11-24** | RSI/CCI initialization | 5-20x error first 150 bars |
@@ -548,7 +581,7 @@ pytest tests/test_pbt*.py -v           # PBT
 | VGS | `test_vgs*.py` (7 тестов) |
 | Data Leakage | `test_data_leakage*.py`, `test_close_orig*.py` |
 | Indicators | `test_indicator*.py`, `test_rsi_cci*.py` |
-| Action Space | `test_critical_action_space_fixes.py` |
+| Action Space | `test_critical_action_space_fixes.py`, `test_long_only_action_space_fix.py` (26+21 тестов) |
 | LSTM | `test_lstm_episode_boundary_reset.py` |
 
 ---
@@ -600,6 +633,7 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 - [ ] VGS enabled, warmup настроен
 - [ ] Twin Critics enabled
 - [ ] `gamma` синхронизирован (reward = model)
+- [ ] **Long-only**: wrapper устанавливает [-1,1], policy использует tanh
 - [ ] Model trained after 2025-11-25
 
 ### Тестирование
@@ -635,5 +669,5 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-11-25
-**Версия документации**: 3.2 (обновлены ссылки после архивации отчётов)
+**Версия документации**: 3.3 (LongOnlyActionWrapper action space fix + policy adaptive activation)
 **Статус**: ✅ Production Ready (все критические исправления применены)

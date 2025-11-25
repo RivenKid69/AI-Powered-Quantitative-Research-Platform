@@ -15,6 +15,11 @@ SCORE_LOW: float = 0.0
 SCORE_HIGH: float = 1.0
 SCORE_SHAPE: tuple[int, ...] = (1,)
 
+# Long-only wrapper exposes [-1, 1] action space to policy
+# Policy outputs [-1, 1] and wrapper maps to [0, 1] for env
+LONG_ONLY_LOW: float = -1.0
+LONG_ONLY_HIGH: float = 1.0
+
 
 class ScoreActionWrapper(ActionWrapper):
     """Project all outgoing actions to the ``[0, 1]`` score interval."""
@@ -46,20 +51,33 @@ class LongOnlyActionWrapper(ActionWrapper):
     """
     Transform actions to enforce long-only constraint.
 
-    CRITICAL FIX (2025-11-21):
-    - Maps policy outputs from [-1, 1] to [0, 1] for long-only trading
-    - Preserves position reduction signals (negative → reduce to zero)
-    - -1.0 → 0.0 (full exit), 0.0 → 0.5 (50% long), +1.0 → 1.0 (100% long)
+    CRITICAL FIX (2025-11-21, updated 2025-11-25):
+    - Exposes action_space = [-1, 1] to policy
+    - Policy outputs [-1, 1] using tanh activation
+    - Wrapper maps [-1, 1] to [0, 1] for underlying env
+    - -1.0 -> 0.0 (full exit), 0.0 -> 0.5 (50% long), +1.0 -> 1.0 (100% long)
 
     Rationale:
     - Long-only prevents SHORT positions, not position reductions
     - Policy needs to express "reduce position" via negative outputs
     - Linear mapping preserves information: a' = (a + 1) / 2
+
+    IMPORTANT: This wrapper MUST set its own action_space = [-1, 1], not inherit
+    from the underlying env. Otherwise the policy will use sigmoid (outputting [0, 1])
+    and the mapping will be incorrect: [0, 1] -> [0.5, 1.0] instead of [-1, 1] -> [0, 1].
     """
 
     def __init__(self, env: Any) -> None:
         super().__init__(env)
-        self.action_space = getattr(env, "action_space", None)
+        # CRITICAL: Set action_space to [-1, 1] so policy uses tanh, not sigmoid
+        # The underlying env expects [0, 1], but we expose [-1, 1] to the policy
+        # and map in the action() method: [-1, 1] -> [0, 1]
+        self.action_space = spaces.Box(
+            low=LONG_ONLY_LOW,
+            high=LONG_ONLY_HIGH,
+            shape=SCORE_SHAPE,
+            dtype=np.float32,
+        )
         self.observation_space = getattr(env, "observation_space", None)
 
     @staticmethod
