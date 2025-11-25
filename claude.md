@@ -113,7 +113,7 @@ python -m services.universe --output data/universe/symbols.json
 
 ## ✅ FAQ: Закрытые вопросы (НЕ ПЕРЕОТКРЫВАТЬ!)
 
-Эти вопросы были тщательно проанализированы. Подробности: [CRITICAL_ANALYSIS_THREE_PROBLEMS_2025_11_24.md](CRITICAL_ANALYSIS_THREE_PROBLEMS_2025_11_24.md)
+Эти вопросы были тщательно проанализированы. Подробности: [docs/archive/reports_2025_11_24/conceptual_analysis/CRITICAL_ANALYSIS_THREE_PROBLEMS_2025_11_24.md](docs/archive/reports_2025_11_24/conceptual_analysis/CRITICAL_ANALYSIS_THREE_PROBLEMS_2025_11_24.md)
 
 | Вопрос | Ответ |
 |--------|-------|
@@ -285,23 +285,25 @@ normalized_advantages = (adv - adv_mean) / (adv_std + EPSILON)
 
 ## 📜 История критических исправлений
 
-| Дата | Исправление | Влияние | Отчёт |
-|------|-------------|---------|-------|
-| **2025-11-25** | close_orig semantic conflict | Data leakage в pipeline | [CLOSE_ORIG_SEMANTIC_FIX_REPORT_2025_11_25.md](CLOSE_ORIG_SEMANTIC_FIX_REPORT_2025_11_25.md) |
-| **2025-11-24** | Twin Critics loss aggregation | 25% underestimation | [CRITICAL_ANALYSIS_REPORT_2025_11_24.md](CRITICAL_ANALYSIS_REPORT_2025_11_24.md) |
-| **2025-11-24** | RSI/CCI initialization | 5-20x error first 150 bars | [INDICATOR_INITIALIZATION_FIXES_SUMMARY.md](INDICATOR_INITIALIZATION_FIXES_SUMMARY.md) |
-| **2025-11-23** | Data leakage (all features) | Look-ahead bias | [DATA_LEAKAGE_FIX_REPORT_2025_11_23.md](DATA_LEAKAGE_FIX_REPORT_2025_11_23.md) |
-| **2025-11-23** | VGS v3.1 E[g²] computation | 10,000x underestimation | [VGS_E_G_SQUARED_BUG_REPORT.md](VGS_E_G_SQUARED_BUG_REPORT.md) |
-| **2025-11-23** | SA-PPO epsilon + KL | Schedule + 10x faster | [SA_PPO_BUG_FIXES_REPORT_2025_11_23.md](SA_PPO_BUG_FIXES_REPORT_2025_11_23.md) |
-| **2025-11-23** | GAE overflow protection | Float32 overflow | [GAE_OVERFLOW_PROTECTION_FIX_REPORT.md](GAE_OVERFLOW_PROTECTION_FIX_REPORT.md) |
-| **2025-11-22** | PBT deadlock prevention | Indefinite wait | [BUG_FIXES_REPORT_2025_11_22.md](BUG_FIXES_REPORT_2025_11_22.md) |
-| **2025-11-22** | Twin Critics VF Clipping | Independent critic updates | [TWIN_CRITICS_VF_CLIPPING_VERIFICATION_REPORT.md](TWIN_CRITICS_VF_CLIPPING_VERIFICATION_REPORT.md) |
-| **2025-11-21** | Twin Critics GAE | min(Q1,Q2) not applied | [TWIN_CRITICS_GAE_FIX_REPORT.md](TWIN_CRITICS_GAE_FIX_REPORT.md) |
-| **2025-11-21** | LSTM state reset | Temporal leakage 5-15% | [CRITICAL_LSTM_RESET_FIX_REPORT.md](CRITICAL_LSTM_RESET_FIX_REPORT.md) |
-| **2025-11-21** | UPGD negative utility | Inverted weight protection | [UPGD_NEGATIVE_UTILITY_FIX_REPORT.md](UPGD_NEGATIVE_UTILITY_FIX_REPORT.md) |
-| **2025-11-21** | Action space (3 bugs) | Position doubling | [CRITICAL_FIXES_COMPLETE_REPORT.md](CRITICAL_FIXES_COMPLETE_REPORT.md) |
-| **2025-11-20** | Numerical stability (5 bugs) | Gradient explosions | [CRITICAL_FIXES_5_REPORT.md](CRITICAL_FIXES_5_REPORT.md) |
-| **2025-11-20** | Feature engineering (3 bugs) | Volatility bias 1-5% | [CRITICAL_FIXES_REPORT.md](CRITICAL_FIXES_REPORT.md) |
+> **Примечание**: Все отчёты перемещены в `docs/archive/`. Путь: `docs/archive/reports_2025_11_25_cleanup/root_reports/`
+
+| Дата | Исправление | Влияние |
+|------|-------------|---------|
+| **2025-11-25** | close_orig semantic conflict | Data leakage в pipeline |
+| **2025-11-24** | Twin Critics loss aggregation | 25% underestimation |
+| **2025-11-24** | RSI/CCI initialization | 5-20x error first 150 bars |
+| **2025-11-23** | Data leakage (all features) | Look-ahead bias |
+| **2025-11-23** | VGS v3.1 E[g²] computation | 10,000x underestimation |
+| **2025-11-23** | SA-PPO epsilon + KL | Schedule + 10x faster |
+| **2025-11-23** | GAE overflow protection | Float32 overflow |
+| **2025-11-22** | PBT deadlock prevention | Indefinite wait |
+| **2025-11-22** | Twin Critics VF Clipping | Independent critic updates |
+| **2025-11-21** | Twin Critics GAE | min(Q1,Q2) not applied |
+| **2025-11-21** | LSTM state reset | Temporal leakage 5-15% |
+| **2025-11-21** | UPGD negative utility | Inverted weight protection |
+| **2025-11-21** | Action space (3 bugs) | Position doubling |
+| **2025-11-20** | Numerical stability (5 bugs) | Gradient explosions |
+| **2025-11-20** | Feature engineering (3 bugs) | Volatility bias 1-5% |
 
 ---
 
@@ -568,9 +570,10 @@ pytest tests/test_pbt*.py -v           # PBT
 
 ### Отчёты об исправлениях
 
-Все отчёты в корневой директории (см. таблицу "История критических исправлений").
-
-Архив: [docs/archive/verification_2025_11/](docs/archive/verification_2025_11/)
+**Все отчёты перенесены в архив:**
+- Основной архив: `docs/archive/reports_2025_11_25_cleanup/`
+- Критические исправления: `docs/archive/reports_2025_11_25_cleanup/root_reports/`
+- Верификация: `docs/archive/verification_2025_11/`
 
 ---
 
@@ -632,5 +635,5 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-11-25
-**Версия документации**: 3.1 (добавлена секция "НЕ БАГИ")
+**Версия документации**: 3.2 (обновлены ссылки после архивации отчётов)
 **Статус**: ✅ Production Ready (все критические исправления применены)
