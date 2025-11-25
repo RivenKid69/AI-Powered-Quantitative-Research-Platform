@@ -89,7 +89,7 @@ class QuantileValueHead(nn.Module):
         input_dim: int,
         num_quantiles: int,
         huber_kappa: float,
-        enforce_monotonicity: bool = False,  # FIX (BUG #3): Optional monotonicity enforcement
+        enforce_monotonicity: bool = False,  # Optional: sort quantiles to enforce Q(τ_i) ≤ Q(τ_j)
     ) -> None:
         super().__init__()
         if num_quantiles <= 0:
@@ -98,7 +98,7 @@ class QuantileValueHead(nn.Module):
         self.huber_kappa = float(huber_kappa)
         if not math.isfinite(self.huber_kappa) or self.huber_kappa <= 0.0:
             raise ValueError("'huber_kappa' must be a positive finite value")
-        self.enforce_monotonicity = enforce_monotonicity  # FIX (BUG #3)
+        self.enforce_monotonicity = enforce_monotonicity
         self.linear = nn.Linear(input_dim, self.num_quantiles)
 
         # Compute quantile levels (taus) using MIDPOINT FORMULA: tau_i = (i + 0.5) / N
@@ -114,7 +114,7 @@ class QuantileValueHead(nn.Module):
     def forward(self, latent: torch.Tensor) -> torch.Tensor:
         """Forward pass with optional monotonicity enforcement.
 
-        FIX (BUG #3): If enforce_monotonicity=True, applies torch.sort() to ensure
+        If enforce_monotonicity=True, applies torch.sort() to ensure
         Q(tau_i) <= Q(tau_j) for tau_i < tau_j. This is differentiable and supports
         backward pass through autograd.
 
@@ -126,7 +126,7 @@ class QuantileValueHead(nn.Module):
         """
         quantiles = self.linear(latent)
 
-        # FIX (BUG #3): Optional monotonicity enforcement via sorting
+        # Optional monotonicity enforcement via sorting
         # torch.sort() is differentiable - gradients flow through sorted indices
         if self.enforce_monotonicity:
             quantiles = torch.sort(quantiles, dim=1)[0]  # [0] = values, [1] = indices
@@ -371,7 +371,7 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
             self.quantile_huber_kappa = _coerce_arch_float(
                 critic_cfg.get("huber_kappa"), 1.0, "critic.huber_kappa"
             )
-            # FIX (BUG #3): Optional monotonicity enforcement for quantile predictions
+            # Optional monotonicity enforcement for quantile predictions
             # Default is False to preserve existing behavior and rely on quantile regression loss
             # Set to True for explicit sorting (may help early in training or with high noise)
             self.enforce_quantile_monotonicity = _coerce_arch_bool(
@@ -407,12 +407,12 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
 
         self.optimizer_scheduler_fn = optimizer_scheduler_fn
 
-        # BUGFIX Bug #2: Store optimizer_class and optimizer_kwargs BEFORE super().__init__()
+        # Store optimizer_class and optimizer_kwargs BEFORE super().__init__()
         # because they may be modified by base class. We'll use these in _setup_custom_optimizer().
         self._pending_optimizer_class = optimizer_class
         self._pending_optimizer_kwargs = dict(optimizer_kwargs) if optimizer_kwargs else {}
 
-        # BUGFIX Bug #2: Temporarily remove 'lr' from optimizer_kwargs to avoid conflict
+        # Temporarily remove 'lr' from optimizer_kwargs to avoid conflict
         # with lr_schedule in base class __init__. The 'lr' will be restored and used
         # in _setup_custom_optimizer().
         temp_lr_for_init = None
@@ -674,7 +674,7 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
         Twin Critics: When use_twin_critics=True, creates a second independent
         value network to reduce overestimation bias (similar to TD3/SAC approach).
         """
-        # BUGFIX Bug #2: Temporarily remove 'lr' from optimizer_kwargs to avoid conflict
+        # Temporarily remove 'lr' from optimizer_kwargs to avoid conflict
         # with lr_schedule in base class _build(). The lr will be applied later in
         # _setup_custom_optimizer().
         temp_lr = None
@@ -688,7 +688,7 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
             self.optimizer_kwargs['lr'] = temp_lr
 
         if self._use_quantile_value_head:
-            # FIX (BUG #3): Pass enforce_monotonicity parameter to QuantileValueHead
+            # Pass enforce_monotonicity parameter to QuantileValueHead
             self.quantile_head = QuantileValueHead(
                 self.lstm_output_dim,
                 self.num_quantiles,
@@ -704,7 +704,7 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
 
             # Twin Critics: Create second quantile head with identical architecture
             if self._use_twin_critics:
-                # FIX (BUG #3): Pass enforce_monotonicity parameter to second head
+                # Pass enforce_monotonicity parameter to second head
                 self.quantile_head_2 = QuantileValueHead(
                     self.lstm_output_dim,
                     self.num_quantiles,
@@ -777,7 +777,7 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
         if hasattr(self, "unconstrained_log_std"):
             params.append(self.unconstrained_log_std)
 
-        # BUGFIX Bug #2: Use _pending_optimizer_kwargs which contains the original
+        # Use _pending_optimizer_kwargs which contains the original
         # user-provided values (including 'lr' if specified), not self.optimizer_kwargs
         # which may have been filtered by the base class.
         optimizer_kwargs = getattr(self, '_pending_optimizer_kwargs', self.optimizer_kwargs) or {}

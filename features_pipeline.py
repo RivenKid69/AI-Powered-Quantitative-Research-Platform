@@ -51,7 +51,7 @@ TARGET_COLUMNS = {
 
 
 # ==============================================================================
-# FIX (CRITICAL): Data Leakage Prevention - Feature Column Identification
+# Data Leakage Prevention - Feature Column Identification
 # ==============================================================================
 
 def _columns_to_shift(df: pd.DataFrame) -> List[str]:
@@ -107,7 +107,7 @@ def _columns_to_shift(df: pd.DataFrame) -> List[str]:
 
 
 # ==============================================================================
-# FIX (MEDIUM #3): Outlier Detection Utilities
+# Outlier Detection Utilities
 # ==============================================================================
 
 def winsorize_array(data: np.ndarray, lower_percentile: float = 1.0, upper_percentile: float = 99.0) -> np.ndarray:
@@ -158,7 +158,7 @@ def _is_numeric(s: pd.Series) -> bool:
 
 def _columns_to_scale(df: pd.DataFrame) -> List[str]:
     # Key columns which are numeric but shouldn't be z-scored directly:
-    # FIX (2025-11-25): Added _close_shifted marker column to exclusion set
+    # _close_shifted is a marker column for shift detection, not a feature
     exclude = {"timestamp", "_close_shifted"}  # 'symbol' non-numeric already excluded
     cols: List[str] = []
     for c in df.columns:
@@ -177,10 +177,10 @@ class FeaturePipeline:
         self,
         stats: Optional[Dict[str, Dict[str, float]]] = None,
         metadata: Optional[Dict[str, object]] = None,
-        enable_winsorization: bool = True,  # FIX (MEDIUM #3): Winsorization enabled by default
+        enable_winsorization: bool = True,  # Winsorization mitigates outliers from flash crashes
         winsorize_percentiles: Tuple[float, float] = (1.0, 99.0),
-        strict_idempotency: bool = True,  # FIX (2025-11-21): Fail on repeated transform_df()
-        preserve_close_orig: bool = True,  # FIX (2025-11-25): REQUIRED for TradingEnv reward calculation
+        strict_idempotency: bool = True,  # Fail on repeated transform_df() to prevent double-shift
+        preserve_close_orig: bool = True,  # REQUIRED for TradingEnv reward calculation
     ):
         """Container for feature normalization statistics.
 
@@ -224,9 +224,6 @@ class FeaturePipeline:
         self.winsorize_percentiles = winsorize_percentiles
         self.strict_idempotency = strict_idempotency
         self.preserve_close_orig = preserve_close_orig
-
-        # FIX (2025-11-21): Removed _close_shifted_in_fit flag - always shift in transform_df()
-        # Previous logic was inverted and caused look-ahead bias
 
     def reset(self) -> None:
         """Drop previously computed statistics.
@@ -309,7 +306,7 @@ class FeaturePipeline:
         if not frames:
             raise ValueError("No rows available to fit FeaturePipeline after applying training filters.")
 
-        # FIX (CRITICAL): Shift ALL feature columns to prevent data leakage
+        # Shift ALL feature columns to prevent data leakage (look-ahead bias)
         # Per-symbol shift to prevent cross-symbol contamination
         # Each frame corresponds to one symbol, so we shift each independently
         #
@@ -345,7 +342,7 @@ class FeaturePipeline:
                 for col in cols_to_shift:
                     frame_copy[col] = frame_copy[col].shift(1)
 
-                # FIX (2025-11-25): Add column-based marker for TradingEnv compatibility
+                # Add column-based marker for TradingEnv compatibility
                 # This marker tells TradingEnv that data is already shifted
                 frame_copy["_close_shifted"] = True
 
@@ -354,27 +351,27 @@ class FeaturePipeline:
         big = pd.concat(shifted_frames, axis=0, ignore_index=True)
         cols = _columns_to_scale(big)
         stats = {}
-        all_nan_columns = []  # FIX (2025-11-21): Track all-NaN columns for warning
+        all_nan_columns = []  # Track all-NaN columns for warning
 
         for c in cols:
             v = big[c].astype(float).to_numpy()
 
-            # FIX (2025-11-21): Detect all-NaN columns BEFORE winsorization
+            # Detect all-NaN columns BEFORE winsorization
             # If column is entirely NaN, np.nanpercentile returns NaN bounds
             # which leads to silent NaN → 0.0 conversion (semantic ambiguity)
             is_all_nan = v.size > 0 and np.isnan(v).all()
 
-            # FIX (MEDIUM #3): Apply winsorization to mitigate outliers
+            # Apply winsorization to mitigate outliers
             # This prevents flash crashes, fat-finger errors, and data anomalies
             # from contaminating normalization statistics (mean, std)
-            # FIX (2025-11-21): Store winsorization bounds for consistent application in transform
+            # Store winsorization bounds for consistent application in transform
             winsorize_bounds = None
             if self.enable_winsorization and not is_all_nan:
                 # Only compute bounds if column has at least one non-NaN value
                 lower_bound = np.nanpercentile(v, self.winsorize_percentiles[0])
                 upper_bound = np.nanpercentile(v, self.winsorize_percentiles[1])
 
-                # FIX (2025-11-21): Validate bounds are finite
+                # Validate bounds are finite
                 # If bounds are NaN (edge case: very few non-NaN values), skip winsorization
                 if np.isfinite(lower_bound) and np.isfinite(upper_bound):
                     v_clean = np.clip(v, lower_bound, upper_bound)
@@ -395,7 +392,7 @@ class FeaturePipeline:
             # Reference: Pedregosa et al. (2011), "Scikit-learn: Machine Learning in Python"
             s = float(np.nanstd(v_clean, ddof=0))
 
-            # FIX (MEDIUM #4): Store zero variance indicator for proper handling
+            # Store zero variance indicator for proper handling
             # When s == 0 (constant feature), we mark it explicitly so transform can return zeros
             # instead of applying (value - mean) / 1.0 which may not be zero for NaN values
             is_constant = (not np.isfinite(s)) or (s == 0.0)
@@ -406,7 +403,7 @@ class FeaturePipeline:
 
             stats[c] = {"mean": m, "std": s, "is_constant": is_constant}
 
-            # FIX (2025-11-21): Mark all-NaN columns explicitly
+            # Mark all-NaN columns explicitly
             # This prevents silent NaN → 0.0 conversion and provides clear semantics
             if is_all_nan:
                 stats[c]["is_all_nan"] = True
@@ -414,10 +411,10 @@ class FeaturePipeline:
                 # Do NOT store winsorize_bounds for all-NaN columns
                 # This signals to transform_df() to skip winsorization
             elif winsorize_bounds is not None:
-                # FIX (2025-11-21): Store winsorization bounds for train/inference consistency
+                # Store winsorization bounds for train/inference consistency
                 stats[c]["winsorize_bounds"] = winsorize_bounds
 
-        # FIX (2025-11-21): Warn about all-NaN columns
+        # Warn about all-NaN columns
         # These columns cannot provide useful information for training
         # and should be investigated for data quality issues
         if all_nan_columns:
@@ -484,7 +481,7 @@ class FeaturePipeline:
         if not self.stats:
             raise ValueError("FeaturePipeline is empty; call fit() or load().")
 
-        # FIX (2025-11-21): Detect repeated transform_df() application
+        # Detect repeated transform_df() application
         # Check for marker in DataFrame attrs (metadata introduced in pandas 1.0)
         # This prevents silent data corruption from double-shifting
         if hasattr(df, 'attrs') and df.attrs.get('_feature_pipeline_transformed', False):
@@ -516,7 +513,7 @@ class FeaturePipeline:
 
         out = df.copy()
 
-        # FIX (CRITICAL): Shift ALL feature columns to prevent data leakage
+        # Shift ALL feature columns to prevent data leakage (look-ahead bias)
         # This must match the shifting logic in fit() for consistency
         #
         # Rationale:
@@ -556,7 +553,7 @@ class FeaturePipeline:
                     for col in cols_to_shift:
                         out[col] = out[col].shift(1)
 
-                # FIX (2025-11-25): Add column-based marker for TradingEnv compatibility
+                # Add column-based marker for TradingEnv compatibility
                 # TradingEnv checks for "_close_shifted" column, not attrs
                 # This prevents double-shifting when data flows: features_pipeline → TradingEnv
                 out["_close_shifted"] = True
@@ -567,7 +564,7 @@ class FeaturePipeline:
                 continue
             v = out[c].astype(float).to_numpy()
 
-            # FIX (2025-11-21): Handle all-NaN columns explicitly
+            # Handle all-NaN columns explicitly
             # If column was all-NaN during training, preserve NaN semantics
             # (do NOT convert to zeros, as zeros have different meaning)
             if ms.get("is_all_nan", False):
@@ -578,7 +575,7 @@ class FeaturePipeline:
                 out[c + add_suffix] = z
                 continue  # Skip winsorization and standardization
 
-            # FIX (2025-11-21): Apply winsorization bounds from training for consistency
+            # Apply winsorization bounds from training for consistency
             # This ensures train/inference distribution match and prevents OOD z-scores
             #
             # Best practice references:
@@ -589,7 +586,7 @@ class FeaturePipeline:
                 lower, upper = ms["winsorize_bounds"]
                 v = np.clip(v, lower, upper)
 
-            # FIX (MEDIUM #4): Handle constant features explicitly
+            # Handle constant features explicitly
             # For zero-variance features, return zeros instead of (value - mean) / 1.0
             # This prevents NaN propagation and ensures semantic correctness
             if ms.get("is_constant", False):
@@ -599,7 +596,7 @@ class FeaturePipeline:
                 z = (v - ms["mean"]) / ms["std"]
             out[c + add_suffix] = z
 
-        # FIX (2025-11-21): Mark DataFrame as transformed to detect repeated applications
+        # Mark DataFrame as transformed to detect repeated applications
         # Use DataFrame.attrs (metadata dict introduced in pandas 1.0)
         # This marker survives copy() operations and helps prevent silent data corruption
         if hasattr(out, 'attrs'):
@@ -617,8 +614,7 @@ class FeaturePipeline:
 
     def save(self, path: str) -> None:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        # FIX (2025-11-21): Save configuration flags for reproducibility
-        # ENHANCEMENT (2025-11-25): Added preserve_close_orig flag
+        # Save configuration flags for reproducibility
         payload = {
             "stats": self.stats,
             "metadata": self.metadata,
@@ -639,8 +635,7 @@ class FeaturePipeline:
         if isinstance(payload, dict) and "stats" in payload:
             stats = payload.get("stats", {})
             metadata = payload.get("metadata", {})
-            # FIX (2025-11-21): Load configuration flags if available
-            # ENHANCEMENT (2025-11-25): Added preserve_close_orig flag
+            # Load configuration flags if available
             config = payload.get("config", {})
             return cls(
                 stats=stats,

@@ -99,7 +99,7 @@ class StateAdversarialPPO:
         self._update_count = 0
         self._adversarial_enabled = False
 
-        # Compute max_updates for epsilon schedule (FIX: БАГ #1)
+        # Compute max_updates for epsilon schedule
         self._max_updates = self._compute_max_updates()
 
         # Statistics
@@ -168,7 +168,7 @@ class StateAdversarialPPO:
     def _compute_max_updates(self) -> int:
         """Compute maximum updates for epsilon schedule.
 
-        FIX: БАГ #1 - Replace hardcoded max_updates = 1000 with computed value
+        Dynamically computes max_updates from model configuration.
 
         Priority:
         1. config.max_updates (explicit override)
@@ -349,7 +349,7 @@ class StateAdversarialPPO:
             dist_adv = self.model.policy.get_distribution(states_adv_perturbed)
 
             # Compute KL divergence: KL(clean || adversarial)
-            # FIX: БАГ #2 - Use analytical KL divergence when available
+            # Use analytical KL divergence when available (exact for Gaussian)
             try:
                 # Analytical KL divergence (exact for Gaussian distributions)
                 kl_div = torch.distributions.kl_divergence(dist_clean, dist_adv).mean()
@@ -379,7 +379,7 @@ class StateAdversarialPPO:
             "sa_ppo/entropy_loss": entropy_loss.item(),
             "sa_ppo/entropy": -entropy_loss.item(),  # Actual entropy value (positive)
             "sa_ppo/robust_kl_penalty": robust_kl_penalty if isinstance(robust_kl_penalty, float) else robust_kl_penalty.item(),
-            "sa_ppo/kl_method": kl_method,  # FIX: БАГ #2 - Log KL computation method
+            "sa_ppo/kl_method": kl_method,  # Log KL computation method (analytical/monte_carlo)
             "sa_ppo/num_adversarial": num_adversarial,
             "sa_ppo/num_clean": num_clean,
         })
@@ -449,7 +449,7 @@ class StateAdversarialPPO:
     def _get_current_epsilon(self) -> float:
         """Get current epsilon value based on schedule.
 
-        FIX: БАГ #1 - Use computed max_updates instead of hardcoded 1000
+        Uses dynamically computed max_updates for proper epsilon annealing.
         """
         if not self.config.adaptive_epsilon:
             return self.config.perturbation.epsilon
@@ -570,7 +570,7 @@ class StateAdversarialPPO:
     ) -> Tuple[float, Dict[str, float]]:
         """Compute robust KL regularization between clean and adversarial policies.
 
-        FIX: БАГ #2 - Use analytical KL divergence when available
+        Uses analytical KL divergence when available (exact for Gaussian).
 
         Args:
             states_clean: Clean state observations [batch_size, ...]

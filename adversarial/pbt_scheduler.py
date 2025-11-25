@@ -191,7 +191,7 @@ class PBTScheduler:
         self.population: List[PopulationMember] = []
         self._exploitation_count = 0
         self._exploration_count = 0
-        self._failed_ready_checks = 0  # FIX (BUG #2): Track consecutive failed ready checks
+        self._failed_ready_checks = 0  # Track consecutive failed ready checks for deadlock prevention
 
         # Set random seed
         if seed is not None:
@@ -283,7 +283,7 @@ class PBTScheduler:
             - 'copy': Optimizer state is INCLUDED in new_model_parameters
                      (caller should load optimizer state from checkpoint)
         """
-        # FIX (BUG #2): Improved ready check with fallback mechanism to prevent deadlock
+        # Ready check with fallback mechanism to prevent deadlock
         # Check if enough population members are ready
         ready_count = sum(1 for m in self.population if m.performance is not None)
         required_count = int(self.config.population_size * self.config.ready_percentage)
@@ -489,7 +489,7 @@ class PBTScheduler:
             "pbt/max_performance": np.max(performances) if performances else 0.0,
             "pbt/exploitation_count": self._exploitation_count,
             "pbt/exploration_count": self._exploration_count,
-            "pbt/failed_ready_checks": self._failed_ready_checks,  # FIX (BUG #2): Track deadlock risk
+            "pbt/failed_ready_checks": self._failed_ready_checks,  # Track deadlock risk
         }
 
     def _should_exploit(self, member: PopulationMember) -> bool:

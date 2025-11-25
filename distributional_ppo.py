@@ -365,7 +365,7 @@ def safe_explained_variance(
         var_res = var_res_num / denom
         if not math.isfinite(var_res) or var_res < 0.0:
             return float("nan")
-        # BUG FIX #6: Add epsilon to prevent numerical instability when var_y is very small
+        # Add epsilon to prevent numerical instability when var_y is very small
         # var_y > 0 is checked above, but very small positive values (e.g., 1e-100) can cause overflow
         eps = 1e-12  # Standard epsilon for variance ratios
         ratio = var_res / (var_y + eps)
@@ -386,8 +386,8 @@ def safe_explained_variance(
     var_res = float(np.var(y_true64 - y_pred64, ddof=1))
     if not math.isfinite(var_res):
         return float("nan")
-    # BUG FIX #6: Add epsilon to prevent numerical instability when var_y is very small
-    # (Same fix as weighted case above)
+    # Add epsilon to prevent numerical instability when var_y is very small
+    # (Same approach as weighted case above)
     eps = 1e-12  # Standard epsilon for variance ratios
     ratio = var_res / (var_y + eps)
     if not math.isfinite(ratio):
@@ -4222,7 +4222,7 @@ class DistributionalPPO(RecurrentPPO):
         else:
             tail_count = max(int(math.ceil(alpha * rewards_winsor.numel())), 1)
 
-            # CRITICAL FIX (BUG #10): Validate sufficient tail samples for stable CVaR estimation
+            # Validate sufficient tail samples for stable CVaR estimation
             # CVaR estimation requires sufficient samples in the tail for low variance
             # When tail_count < 10, CVaR reduces to mean of very few samples (high variance)
             # When tail_count = 1, CVaR = minimum value (extremely unstable)
@@ -6630,7 +6630,7 @@ class DistributionalPPO(RecurrentPPO):
         self._value_scale_latest_ret_abs_p95 = 0.0
         self._value_scale_frozen = False
 
-        # BUGFIX Bug #2: Inject optimizer_class and optimizer_kwargs into policy_kwargs
+        # Inject optimizer_class and optimizer_kwargs into policy_kwargs
         # so they reach CustomActorCriticPolicy.__init__()
         policy_kwargs_dict = kwargs_local.get("policy_kwargs", {})
         if not isinstance(policy_kwargs_dict, dict):
@@ -6806,10 +6806,10 @@ class DistributionalPPO(RecurrentPPO):
             self.logger.record("config/optimizer_lr_max", float(self._optimizer_lr_max))
         self.logger.record("config/scheduler_min_lr", float(self._scheduler_min_lr))
 
-        # BUGFIX Bug #2: Check if user provided custom lr in optimizer_kwargs
+        # Check if user provided custom lr in optimizer_kwargs
         base_logger = getattr(self, "_logger", None)
 
-        # FIX Bug #8: Save configuration for _setup_dependent_components()
+        # Save configuration for _setup_dependent_components()
         self._loss_head_weights_config = loss_head_weights
         self._vgs_enabled = bool(variance_gradient_scaling)
         self._vgs_beta = float(vgs_beta)
@@ -7972,13 +7972,9 @@ class DistributionalPPO(RecurrentPPO):
             return None
 
         def _evaluate_time_limit_value(env_index: int, terminal_obs: Any) -> Optional[float]:
-            # CRITICAL FIX (BUG #8): Use fresh LSTM states for terminal observation
-            # Previously, we used self._last_lstm_states which correspond to self._last_obs,
-            # NOT to terminal_obs. This created a mismatch: evaluating terminal_obs with
-            # LSTM states from a different observation.
-            #
-            # Solution: Run a forward pass on terminal_obs to get correct LSTM states
-            # for this specific observation. This ensures temporal consistency.
+            # Use fresh LSTM states for terminal observation evaluation
+            # Must run a forward pass on terminal_obs to get correct LSTM states
+            # for this specific observation, ensuring temporal consistency.
             #
             # Reference: Mnih et al. (2016), "Asynchronous Methods for Deep RL"
             # Bootstrap values must use states corresponding to the bootstrapped observation.
@@ -8830,7 +8826,7 @@ class DistributionalPPO(RecurrentPPO):
             finite_costs_mask = np.isfinite(reward_costs_np)
             if np.any(finite_costs_mask):
                 finite_costs = reward_costs_np[finite_costs_mask]
-                # CRITICAL FIX (BUG #11): Validate non-empty array before computing statistics
+                # Validate non-empty array before computing statistics
                 # Edge case: If ALL costs are infinite/NaN, finite_costs_mask filters everything
                 # Calling median/mean on empty array → ValueError: zero-size array
                 # This prevents rare but critical runtime crash in extreme market conditions
@@ -10027,7 +10023,7 @@ class DistributionalPPO(RecurrentPPO):
                                     float(log_ratio_abs_max)
                                 )
                         else:
-                            # BUGFIX #6: Log ratio contains NaN or Inf - CRITICAL ERROR
+                            # Log ratio contains NaN or Inf - CRITICAL ERROR
                             # This indicates severe numerical instability in policy or value network.
                             # NaN/Inf in log_ratio will propagate to:
                             # - ratio = exp(log_ratio) → NaN/Inf
@@ -10613,7 +10609,7 @@ class DistributionalPPO(RecurrentPPO):
                             if latent_vf is None:
                                 raise RuntimeError("Twin Critics enabled but latent_vf not cached")
 
-                            # BUGFIX Bug #1: Select latent_vf using valid_indices to match targets_norm_for_loss
+                            # Select latent_vf using valid_indices to match targets_norm_for_loss
                             if valid_indices is not None:
                                 latent_vf_selected = latent_vf[valid_indices]
                             else:
@@ -10946,11 +10942,11 @@ class DistributionalPPO(RecurrentPPO):
                                     quantiles_norm_clipped_for_loss = quantiles_norm_clipped[valid_indices]
                                 else:
                                     quantiles_norm_clipped_for_loss = quantiles_norm_clipped
-                                # BUG FIX #1.1: EV should use UNCLIPPED predictions to measure model's true capability
+                                # EV uses UNCLIPPED predictions to measure model's true capability
                                 # Using clipped predictions artificially inflates EV metric
                                 # quantiles_for_loss = unclipped model outputs (line 10468-10470)
                                 quantiles_for_ev = quantiles_for_loss
-                                # CRITICAL FIX V2: Correct PPO VF clipping implementation
+                                # PPO VF clipping implementation (Schulman et al., 2017)
                                 # PPO paper requires: L_VF = mean(max(L_unclipped, L_clipped))
                                 # where max is element-wise over batch, NOT max of two scalars!
                                 # This ensures proper gradient flow on per-sample basis.
@@ -11055,7 +11051,7 @@ class DistributionalPPO(RecurrentPPO):
                             if latent_vf is None:
                                 raise RuntimeError("Twin Critics enabled but latent_vf not cached")
 
-                            # BUGFIX Bug #1: Select latent_vf using valid_indices to match target_distribution_selected
+                            # Select latent_vf using valid_indices to match target_distribution_selected
                             if valid_indices is not None:
                                 latent_vf_selected = latent_vf[valid_indices]
                             else:
@@ -11500,7 +11496,7 @@ class DistributionalPPO(RecurrentPPO):
                             )
                             bucket_value_mse_value += float(mse_tensor.item()) * weight
 
-                            # BUG FIX #1.2: EV should use UNCLIPPED predictions to measure model's true capability
+                            # EV uses UNCLIPPED predictions to measure model's true capability
                             # Using clipped predictions artificially inflates EV metric
                             # mean_values_norm_selected = unclipped model outputs (line 11338-11344)
                             value_pred_norm_for_ev = (
