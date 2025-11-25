@@ -103,6 +103,8 @@ python -m services.universe --output data/universe/symbols.json
 
 | Симптом | Причина | Решение |
 |---------|---------|---------|
+| step() возвращает obs с той же row что reset() | Observation строился из current row, не next | ✅ Фикс 2025-11-25: obs из next_row (Gymnasium семантика) |
+| CLOSE_TO_OPEN + SIGNAL_ONLY: look-ahead bias | signal_pos обновлялся немедленно, игнорируя delay | ✅ Фикс 2025-11-25: использует executed_signal_pos |
 | LSTM первый step на zeros | reset() возвращал np.zeros() | ✅ Фикс 2025-11-25: reset() строит obs из row 0 |
 | reward=0 при старте эпизода | NaN close в первых rows → _last_reward_price=0 | ✅ Фикс 2025-11-25: fallback на open/scan rows |
 | Long-only: позиция всегда ≥50% | Wrapper наследовал [0,1] action_space | ✅ Фикс 2025-11-25: wrapper ставит [-1,1], policy использует tanh |
@@ -288,6 +290,55 @@ else:
 
 ---
 
+### 10. step() Observation from NEXT Row (trading_patchnew.py:1007-1037, mediator.py:1724-1739)
+
+```python
+# Вычисляем индекс СЛЕДУЮЩЕЙ строки для observation
+obs_row_idx = min(next_idx, len(self.df) - 1)
+next_row = self.df.iloc[obs_row_idx]
+obs = self._mediator._build_observation(row=next_row, state=state, mark_price=next_mark_price)
+```
+
+**Почему это КОРРЕКТНО** (исправлено 2025-11-25):
+1. **Gymnasium семантика**: `step(a)` возвращает `(s_{t+1}, r_t, ...)` — observation **после** действия
+2. До фикса: reset() и step()#1 возвращали obs из одной строки (row[0]) — дубликат!
+3. После фикса: reset() → row[0], step()#1 → row[1], step()#2 → row[2]
+4. Terminal case: при next_idx >= len(df), используется последняя доступная строка
+
+**Влияние бага на training**:
+- Sample efficiency: ~1% loss (1 бесполезный transition на эпизод)
+- LSTM: первые два hidden state обновления от идентичного входа
+- Первый step reward: всегда 0 (log(price[0]/price[0])=0)
+
+**Тесты**: `tests/test_step_observation_next_row.py` (6 тестов)
+
+---
+
+### 11. CLOSE_TO_OPEN + SIGNAL_ONLY Delayed Position (trading_patchnew.py:1725-1756)
+
+```python
+if self.decision_mode == DecisionTiming.CLOSE_TO_OPEN:
+    # Всегда уважаем 1-bar delay для signal position
+    next_signal_pos = executed_signal_pos  # от delayed proto
+else:
+    next_signal_pos = agent_signal_pos if self._reward_signal_only else executed_signal_pos
+```
+
+**Почему это КОРРЕКТНО** (исправлено 2025-11-25):
+1. **CLOSE_TO_OPEN семантика**: действие агента исполняется на **следующем** баре
+2. До фикса: в SIGNAL_ONLY позиция обновлялась мгновенно → look-ahead bias
+3. После фикса: даже в SIGNAL_ONLY режиме позиция задерживается на 1 бар
+4. Reward = log(price_change) × position → позиция должна соответствовать реальному timing'у
+
+**Влияние бага на training**:
+- Training Sharpe: inflated на ~10-30% vs reality
+- Look-ahead bias: reward за позицию, которой ещё нет
+- Training/Live gap: увеличен из-за нереалистичных rewards
+
+**Тесты**: `tests/test_close_to_open_signal_only_timing.py` (5 тестов)
+
+---
+
 ## 📊 СТАТУС ПРОЕКТА (2025-11-25)
 
 ### ✅ Production Ready
@@ -296,7 +347,9 @@ else:
 
 | Компонент | Статус | Тесты |
 |-----------|--------|-------|
-| LongOnlyActionWrapper | ✅ Production | 26/26 (NEW) |
+| Step Observation Timing | ✅ Production | 6/6 (NEW) |
+| CLOSE_TO_OPEN Timing | ✅ Production | 5/5 (NEW) |
+| LongOnlyActionWrapper | ✅ Production | 26/26 |
 | AdaptiveUPGD Optimizer | ✅ Production | 119/121 |
 | Twin Critics + VF Clipping | ✅ Production | 49/50 |
 | VGS v3.1 | ✅ Production | 7/7 |
@@ -308,6 +361,8 @@ else:
 ### ⚠️ Требуется действие
 
 **Переобучите модели**, если они обучены **до 2025-11-25**:
+- **step() observation timing fix (2025-11-25)** — obs был из той же row что reset!
+- **CLOSE_TO_OPEN + SIGNAL_ONLY fix (2025-11-25)** — look-ahead bias в signal position
 - **LongOnlyActionWrapper action space fix (2025-11-25)** — минимальная позиция была 50%!
 - Data leakage fix (2025-11-23) + close_orig fix (2025-11-25)
 - RSI/CCI initialization fixes (2025-11-24)
@@ -323,6 +378,8 @@ else:
 
 | Дата | Исправление | Влияние |
 |------|-------------|---------|
+| **2025-11-25** | step() observation from NEXT row (Gymnasium) | Duplicate obs: reset() и step()#1 возвращали одну row |
+| **2025-11-25** | CLOSE_TO_OPEN + SIGNAL_ONLY timing | Look-ahead bias: signal_pos игнорировал 1-bar delay |
 | **2025-11-25** | reset() returns actual observation (Issue #1) | LSTM получал zeros на первом step эпизода |
 | **2025-11-25** | Improved _last_reward_price init (Issue #3) | reward=0 если данные начинались с NaN |
 | **2025-11-25** | Removed redundant signal_position update (Issue #2) | Code smell (не влияло на функционал) |
@@ -676,5 +733,5 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-11-25
-**Версия документации**: 3.4 (reset observation + reward price init fixes)
+**Версия документации**: 3.5 (step observation timing + CLOSE_TO_OPEN signal fixes)
 **Статус**: ✅ Production Ready (все критические исправления применены)

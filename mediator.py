@@ -1721,7 +1721,26 @@ class Mediator:
         info["new_order_ids"] = new_order_ids
         info["events"] = events
 
-        obs = self._build_observation(row=row, state=state, mark_price=mark_price)
+        # FIX (2025-11-25): Build observation from NEXT row (Gymnasium semantics)
+        # ═══════════════════════════════════════════════════════════════════════
+        # PROBLEM: step() returned observation from SAME row as action was based on.
+        # FIX: Use next_idx for observation, capped at len(df)-1 for terminal states.
+        # SEMANTICS: step(a) → (s_{t+1}, r_t, ...) where s_{t+1} is NEXT state
+        # See trading_patchnew.py:1007-1037 for full documentation.
+        # Tests: tests/test_step_observation_next_row.py (6 tests)
+        # ═══════════════════════════════════════════════════════════════════════
+        obs_row_idx = min(next_idx, len(df) - 1) if df is not None and len(df) > 0 else 0
+        next_row = df.iloc[obs_row_idx] if df is not None and len(df) > obs_row_idx else row
+        next_mark_price = mark_price
+        resolve_reward_price = getattr(env, "_resolve_reward_price", None)
+        if callable(resolve_reward_price):
+            try:
+                candidate = float(resolve_reward_price(obs_row_idx, next_row))
+                if math.isfinite(candidate) and candidate > 0.0:
+                    next_mark_price = candidate
+            except Exception:
+                pass
+        obs = self._build_observation(row=next_row, state=state, mark_price=next_mark_price)
 
         info.setdefault(
             "log_ret_prev",
