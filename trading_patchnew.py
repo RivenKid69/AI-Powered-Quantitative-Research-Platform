@@ -798,6 +798,12 @@ class TradingEnv(gym.Env):
         #   3. Scan first 10 rows for any valid close price
         # Reference: tests/test_trading_env_reset_observation_fixes.py
         first_price = 0.0
+        # FIX (2025-11-25): Early warning for empty DataFrame
+        if len(self.df) == 0:
+            logger.error(
+                "TradingEnv._init_state: DataFrame is empty! Environment will return zeros "
+                "on reset and terminate immediately on first step. Check data loading."
+            )
         if len(self.df) > 0:
             row_0 = self.df.iloc[0]
             first_price = float(self._resolve_reward_price(0, row_0))
@@ -1058,6 +1064,24 @@ class TradingEnv(gym.Env):
             getattr(self._mediator, "_last_signal_position", prev_signal)
         )
         info["signal_pos_next"] = float(signal_pos)
+        # ═══════════════════════════════════════════════════════════════════════
+        # ВАЖНО (НЕ БАГ - BY DESIGN): В signal_only режиме terminated всегда False
+        # ═══════════════════════════════════════════════════════════════════════
+        # is_bankrupt устанавливается ТОЛЬКО в mediator.step() при реальном execution.
+        # В signal_only режиме НЕТ реального capital at risk:
+        #   - Нет реальных позиций → нет реальных убытков
+        #   - Банкротство не имеет смысла без реального капитала
+        #   - Эпизоды заканчиваются через truncation (max_steps)
+        #
+        # Это КОРРЕКТНОЕ поведение для signal-based training:
+        #   - Агент учится генерировать сигналы, не торгуя
+        #   - Reward = log(price_change) × signal_position
+        #   - Нет риска банкротства → terminated = False
+        #
+        # Не пытайтесь добавить "виртуальное банкротство" - это усложнит
+        # семантику без реальной пользы.
+        # Reference: CLAUDE.md → FAQ → "signal_only terminated всегда False?"
+        # ═══════════════════════════════════════════════════════════════════════
         terminated = bool(getattr(state, "is_bankrupt", False))
         return obs, 0.0, terminated, truncated, info
 
@@ -1595,6 +1619,29 @@ class TradingEnv(gym.Env):
         row_idx = self.state.step_idx
         if self.decision_mode == DecisionTiming.INTRA_HOUR_WITH_LATENCY:
             row_idx = max(0, row_idx - self.latency_steps)
+        # FIX (2025-11-25): Protection from empty DataFrame
+        # Edge case: if df is empty or row_idx is out of bounds, terminate episode immediately
+        # This can happen with corrupted data loading or invalid configuration.
+        if len(self.df) == 0:
+            logger.error(
+                "TradingEnv.step: DataFrame is empty! Cannot execute step. "
+                "Returning terminal state with zero reward. "
+                "Check data loading configuration."
+            )
+            return (
+                np.zeros(self.observation_space.shape, dtype=np.float32),
+                0.0,
+                True,  # terminated
+                False,  # truncated
+                {"error": "empty_dataframe", "step_idx": row_idx},
+            )
+        if row_idx >= len(self.df):
+            logger.warning(
+                "TradingEnv.step: row_idx=%d >= len(df)=%d. Clamping to last row.",
+                row_idx,
+                len(self.df),
+            )
+            row_idx = len(self.df) - 1
         row = self.df.iloc[row_idx]
         self._episode_length += 1
         self._assert_feature_timestamps(row)
@@ -1754,12 +1801,37 @@ class TradingEnv(gym.Env):
             next_signal_pos = (
                 agent_signal_pos if self._reward_signal_only else executed_signal_pos
             )
+        # FIX (2025-11-26): Set signal_pos for observation to NEW position (next_signal_pos)
+        # ═══════════════════════════════════════════════════════════════════════
+        # PROBLEM:
+        #   Observation was built with prev_signal_pos_for_reward (position at time t),
+        #   but market data in observation comes from next_row (time t+1).
+        #   This violated Gymnasium semantics: step() should return s_{t+1} (state AFTER action).
+        #
+        # GYMNASIUM SEMANTICS (https://gymnasium.farama.org/api/env/):
+        #   step(action) → (observation, reward, terminated, truncated, info)
+        #   observation = state AFTER taking action (s_{t+1}, not s_t)
+        #
+        # IMPACT OF BUG:
+        #   - Temporal inconsistency: market data at t+1, position at t
+        #   - MDP violation: agent couldn't see result of its action in observation
+        #   - LSTM confusion: hidden state updated with misaligned input
+        #
+        # FIX:
+        #   Set _mediator._last_signal_position = next_signal_pos (position AFTER step)
+        #   This aligns with the market data from next_row.
+        #
+        # NOTE: Reward calculation still correctly uses prev_signal_pos_for_reward
+        #       because reward = log(price_change) × position_held_during_change
+        #
+        # Tests: tests/test_signal_pos_observation_consistency.py
+        # ═══════════════════════════════════════════════════════════════════════
         if self._reward_signal_only:
             try:
                 setattr(
                     self._mediator,
                     "_last_signal_position",
-                    float(prev_signal_pos_for_reward),
+                    float(next_signal_pos),  # FIX: was prev_signal_pos_for_reward
                 )
             except Exception:
                 pass
@@ -1965,6 +2037,24 @@ class TradingEnv(gym.Env):
             else:
                 # Limit ratio to prevent log explosion (e.g., ±10 std)
                 ratio_clipped = np.clip(ratio, 1e-10, 1e10)
+                # ═══════════════════════════════════════════════════════════════
+                # ВАЖНО (НЕ БАГИ - BY DESIGN): Первые 2 step'а в CLOSE_TO_OPEN
+                # ═══════════════════════════════════════════════════════════════
+                # В CLOSE_TO_OPEN режиме reward = log(price_ratio) × prev_signal_pos
+                #
+                # Шаг #1: prev_signal_pos = 0 (initial) → reward = 0
+                # Шаг #2: prev_signal_pos = 0 (delayed HOLD from reset) → reward = 0
+                # Шаг #3+: prev_signal_pos = executed_action → reward ≠ 0
+                #
+                # Это КОРРЕКТНАЯ семантика delayed execution:
+                # - Reward отражает позицию, которая РЕАЛЬНО была во время движения цены
+                # - В CLOSE_TO_OPEN действие исполняется на следующем баре (1-bar delay)
+                # - Первый шаг: агент ещё не имел позиции → reward за 0% = 0
+                # - Второй шаг: позиция = HOLD(0.0) из reset() → reward за 0% = 0
+                #
+                # Это НЕ баг - это физика delayed execution. Не пытайтесь "исправить"!
+                # Reference: CLAUDE.md → FAQ → "Первые 2 steps в CLOSE_TO_OPEN reward=0?"
+                # ═══════════════════════════════════════════════════════════════
                 reward_raw_fraction = math.log(ratio_clipped) * prev_signal_pos
 
         atr_fraction = self._safe_float(row.get("_reward_clip_atr_fraction", 0.0))

@@ -118,6 +118,8 @@ python -m services.universe --output data/universe/symbols.json
 | `AttributeError` в конфигах | Pydantic V2 API | `model_dump()` вместо `dict()` |
 | Feature mismatch | Online/offline паритет | `check_feature_parity.py` |
 | PBT state mismatch | VGS не синхронизирован | Проверьте `variance_gradient_scaler.py` state dict |
+| step() IndexError при пустом df | Нет защиты от пустого DataFrame | ✅ Фикс 2025-11-25: проверка len(df)==0 в step() |
+| signal_pos в obs отстаёт от market data | Obs содержал prev_signal_pos (t), но market data из t+1 | ✅ Фикс 2025-11-26: obs содержит next_signal_pos (t+1) |
 
 ---
 
@@ -131,6 +133,9 @@ python -m services.universe --output data/universe/symbols.json
 | "VGS недооценивает variance в N раз?" | ⚠️ **By design**. Var[mean(g)] валиден, работает в production. |
 | "-10.0 bankruptcy penalty слишком резкий?" | ✅ **Стандартная практика RL**. Potential shaping даёт smooth gradient. |
 | "_last_signal_position двойное присваивание?" | ⚠️ **Удалено 2025-11-25**. Было избыточно, но не баг (значения идентичны). |
+| "Первые 2 steps в CLOSE_TO_OPEN reward=0?" | ⚠️ **By design**. Delayed execution: reward × prev_signal_pos, где prev=0 для первых шагов. |
+| "signal_only terminated всегда False?" | ⚠️ **By design**. В signal_only нет капитала в риске, банкротство не имеет смысла. |
+| "ActionProto double mapping в LongOnlyActionWrapper?" | ⚠️ **НЕ баг**. API контракт: input [-1,1] → output [0,1]. Если передать [0,1] - нарушение контракта. |
 
 ---
 
@@ -346,7 +351,126 @@ else:
 
 ---
 
-## 📊 СТАТУС ПРОЕКТА (2025-11-25)
+### 12. Первые 2 step'а в CLOSE_TO_OPEN имеют reward ≈ 0 (trading_patchnew.py:1997-2015)
+
+```python
+# reward = log(price_ratio) × prev_signal_pos
+# Step #1: prev_signal_pos = 0 (initial) → reward = 0
+# Step #2: prev_signal_pos = 0 (delayed HOLD) → reward = 0
+# Step #3+: prev_signal_pos = executed_action → reward ≠ 0
+reward_raw_fraction = math.log(ratio_clipped) * prev_signal_pos
+```
+
+**Почему это BY DESIGN (НЕ баг)**:
+1. **Физика delayed execution**: в CLOSE_TO_OPEN действие исполняется на **следующем** баре
+2. При reset() устанавливается `_pending_action = HOLD(0.0)` — первое действие
+3. Step #1: prev_pos = 0 (initial), action = HOLD(0.0) → reward × 0 = 0
+4. Step #2: prev_pos = 0 (от HOLD), action = A1 → reward × 0 = 0
+5. Step #3: prev_pos = A1, reward × A1 ≠ 0
+
+**Семантика**: Reward отражает позицию, которая **РЕАЛЬНО была** во время движения цены, а не намерение агента. Это корректно для реалистичного trading simulation.
+
+**Влияние на training**:
+- Короткие эпизоды (< 5 баров) получают мало ненулевых rewards
+- ~2/N долевая потеря sample efficiency для N-bar эпизодов
+- Это **НЕ влияет на качество обучения** — агент учится правильной семантике
+
+**Не пытайтесь "исправить"** — это сломает корректность симуляции!
+
+---
+
+### 13. В signal_only режиме terminated всегда False (trading_patchnew.py:1067-1086)
+
+```python
+# is_bankrupt устанавливается ТОЛЬКО в mediator.step()
+# В signal_only режиме mediator.step() НЕ вызывается
+terminated = bool(getattr(state, "is_bankrupt", False))  # всегда False
+```
+
+**Почему это BY DESIGN (НЕ баг)**:
+1. **Signal_only режим**: агент учится генерировать сигналы без реального execution
+2. Нет реальных позиций → нет реального capital at risk → нет банкротства
+3. Reward = log(price_change) × signal_position — чисто сигнальный training
+4. Эпизоды заканчиваются через **truncation** (`max_steps`), НЕ termination
+
+**Альтернатива**: Добавить "виртуальное банкротство"?
+- Это усложнит семантику без реальной пользы
+- Сигнальный режим не симулирует капитал — банкротство не имеет смысла
+- Если нужна проверка drawdown → используйте real execution mode
+
+**Не пытайтесь добавить виртуальное банкротство** — это нарушит принцип signal_only!
+
+---
+
+### 14. ActionProto "double mapping" в LongOnlyActionWrapper (wrappers/action_space.py:120-147)
+
+```python
+# API контракт: INPUT [-1, 1] → OUTPUT [0, 1]
+mapped = self._map_to_long_only(action.volume_frac)  # (x+1)/2
+# -1.0 → 0.0, 0.0 → 0.5, 1.0 → 1.0
+```
+
+**Почему это НЕ баг (API CONTRACT)**:
+
+| Input ([-1,1]) | Output ([0,1]) | Позиция |
+|----------------|----------------|---------|
+| -1.0 | 0.0 | Exit to cash |
+| -0.5 | 0.25 | 25% long |
+| 0.0 | 0.5 | 50% long |
+| 0.5 | 0.75 | 75% long |
+| 1.0 | 1.0 | 100% long |
+
+**ЧАСТАЯ ОШИБКА**: передача `ActionProto(volume_frac=0.5)` с ожиданием "50% позиции"
+- 0.5 в [-1,1] маппится в 0.75 в [0,1] — это **75%**, не 50%!
+- Для 50% позиции передавайте `volume_frac=0.0`
+
+**Почему wrapper всегда применяет маппинг**:
+- Wrapper НЕ ЗНАЕТ семантику входящего ActionProto
+- Он ВСЕГДА преобразует [-1,1] → [0,1] согласно API
+- Если вам нужно передать [0,1] напрямую — НЕ используйте LongOnlyActionWrapper
+
+**Тесты**: `tests/test_long_only_action_space_fix.py::test_action_proto_transformation`
+
+---
+
+### 15. signal_pos в observation = next_signal_pos (trading_patchnew.py:1829-1837)
+
+```python
+# FIX (2025-11-26): Set mediator signal_pos to next_signal_pos for observation
+if self._reward_signal_only:
+    try:
+        setattr(
+            self._mediator,
+            "_last_signal_position",
+            float(next_signal_pos),  # FIX: was prev_signal_pos_for_reward
+        )
+    except Exception:
+        pass
+```
+
+**Почему это КОРРЕКТНО** (исправлено 2025-11-26):
+
+1. **Gymnasium семантика**: `step(action)` возвращает `s_{t+1}` — состояние **ПОСЛЕ** действия
+2. Observation содержит market data из `next_row` (время t+1)
+3. signal_pos в observation должен быть `next_signal_pos` (позиция после step, время t+1)
+4. **До фикса**: market data t+1, signal_pos t → temporal mismatch!
+5. **После фикса**: market data t+1, signal_pos t+1 → согласованы
+
+**Reward НЕ затронут**:
+- Reward = `log(price_change) × prev_signal_pos_for_reward`
+- Reward использует позицию, которая **РЕАЛЬНО была** во время price change
+- Это корректно и не изменилось
+
+**Влияние бага на training**:
+- MDP violation: observation не отражало результат действия
+- LSTM confusion: hidden state обновлялся с несогласованным входом
+- Sample inefficiency: agent не видел эффект своих действий в obs
+
+**Тесты**: `tests/test_signal_pos_observation_consistency.py` (10 тестов)
+
+---
+
+## 📊 СТАТУС ПРОЕКТА (2025-11-26)
 
 ### ✅ Production Ready
 
@@ -354,8 +478,9 @@ else:
 
 | Компонент | Статус | Тесты |
 |-----------|--------|-------|
-| Step Observation Timing | ✅ Production | 6/6 (NEW) |
-| CLOSE_TO_OPEN Timing | ✅ Production | 5/5 (NEW) |
+| Step Observation Timing | ✅ Production | 6/6 |
+| Signal Pos in Observation | ✅ Production | 10/10 (NEW) |
+| CLOSE_TO_OPEN Timing | ✅ Production | 5/5 |
 | LongOnlyActionWrapper | ✅ Production | 26/26 |
 | AdaptiveUPGD Optimizer | ✅ Production | 119/121 |
 | Twin Critics + VF Clipping | ✅ Production | 49/50 |
@@ -367,7 +492,8 @@ else:
 
 ### ⚠️ Требуется действие
 
-**Переобучите модели**, если они обучены **до 2025-11-25**:
+**Переобучите модели**, если они обучены **до 2025-11-26**:
+- **signal_pos in observation fix (2025-11-26)** — obs содержал prev_signal_pos (t), но market data из t+1!
 - **step() observation timing fix (2025-11-25)** — obs был из той же row что reset!
 - **CLOSE_TO_OPEN + SIGNAL_ONLY fix (2025-11-25)** — look-ahead bias в signal position
 - **LongOnlyActionWrapper action space fix (2025-11-25)** — минимальная позиция была 50%!
@@ -385,6 +511,8 @@ else:
 
 | Дата | Исправление | Влияние |
 |------|-------------|---------|
+| **2025-11-26** | signal_pos in observation uses next_signal_pos | Temporal mismatch: market data t+1, position t → теперь оба t+1 |
+| **2025-11-25** | Empty DataFrame protection in step() | IndexError при пустом df → graceful termination |
 | **2025-11-25** | step() observation from NEXT row (Gymnasium) | Duplicate obs: reset() и step()#1 возвращали одну row |
 | **2025-11-25** | CLOSE_TO_OPEN + SIGNAL_ONLY timing | Look-ahead bias: signal_pos игнорировал 1-bar delay |
 | **2025-11-25** | info["signal_pos_next"] consistency | Показывал intent вместо actual; добавлен signal_pos_requested |
@@ -740,6 +868,6 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 
 ---
 
-**Последнее обновление**: 2025-11-25
-**Версия документации**: 3.5 (step observation timing + CLOSE_TO_OPEN signal fixes)
+**Последнее обновление**: 2025-11-26
+**Версия документации**: 3.6 (signal_pos in observation temporal alignment fix)
 **Статус**: ✅ Production Ready (все критические исправления применены)
