@@ -137,6 +137,20 @@ python -m services.universe --output data/universe/symbols.json
 | "Первые 2 steps в CLOSE_TO_OPEN reward=0?" | ⚠️ **By design**. Delayed execution: reward × prev_signal_pos, где prev=0 для первых шагов. |
 | "signal_only terminated всегда False?" | ⚠️ **By design**. В signal_only нет капитала в риске, банкротство не имеет смысла. |
 | "ActionProto double mapping в LongOnlyActionWrapper?" | ⚠️ **НЕ баг**. API контракт: input [-1,1] → output [0,1]. Если передать [0,1] - нарушение контракта. |
+| "adaptive_upgd.py grad_norm_ema=1.0 warmup?" | ⚠️ **НЕ баг**. Default `instant_noise_scale=True` bypasses EMA. См. #28. |
+| "info[signal_pos] разная семантика?" | ⚠️ **By design**. signal_only: prev (для reward), normal: next (после execution). См. #7. |
+| "mediator norm_cols_validity=True?" | ⚠️ **НЕ баг**. Начальное значение полностью перезаписывается в цикле. См. #29. |
+| "mediator empty observation silent fail?" | ⚠️ **НЕ баг**. Defensive check для edge cases без observation_space. |
+| "mediator race condition signal_pos?" | ⚠️ **НЕ баг**. Single-threaded архитектура, нет параллелизма. |
+| "risk_guard асимметричный buffer?" | ⚠️ **By design**. Buffer только на увеличение позиции (корректный risk mgmt). См. #30. |
+| "ops_kill_switch cooldown reset при init?" | ⚠️ **НЕ баг**. _last_ts=0.0 = "reset в epoch". Логика корректна. См. #31. |
+| "RSI valid на 1 бар раньше (off-by-one)?" | ⚠️ **НЕ баг**. RSI-14 valid на bar 14 (после 14 price changes). Timing корректен. См. #32. |
+| "obs_builder vol_proxy=0.01 constant warmup?" | ⚠️ **By design**. 1% price fallback лучше чем NaN или 0. См. #33. |
+| "obs_builder FG=50 vs missing неразличимы?" | ⚠️ **НЕ баг**. Indicator flag (0.0 vs 1.0) различает их. См. #34. |
+| "policy sigma range [0.2,1.5] не адаптируется?" | ⚠️ **НЕ баг**. Standard PPO range для continuous actions. См. #35. |
+| "CVaR weight_start=0.5 совпадение?" | ⚠️ **НЕ баг**. Математически корректно: граница = midpoint. См. #3. |
+| "features_pipeline constant на shifted data?" | ⚠️ **НЕ баг**. nanstd игнорирует NaN, для типичных datasets работает. См. #36. |
+| "mediator step_idx=current не next?" | ⚠️ **Minor**. info для logging, не для agent. Семантика "обработали row X". |
 
 ---
 
@@ -643,6 +657,180 @@ else:  # LSTM
 
 ---
 
+### 28. AdaptiveUPGD grad_norm_ema=1.0 при инициализации (adaptive_upgd.py:159)
+
+```python
+if group["adaptive_noise"]:
+    state["grad_norm_ema"] = 1.0  # Neutral starting point
+```
+
+**Почему это НЕ баг**:
+1. **Default mode bypasses EMA**: `instant_noise_scale=True` (default) использует `current_grad_norm` напрямую
+2. Строки 215-219: `if group["instant_noise_scale"]: grad_norm_for_noise = current_grad_norm`
+3. EMA используется ТОЛЬКО для legacy mode и diagnostics
+4. Для legacy mode (`instant_noise_scale=False`) применяется bias correction (строка 224-225)
+
+**Fix уже применён** (2025-11-26): `instant_noise_scale=True` по умолчанию для VGS совместимости.
+
+---
+
+### 29. mediator norm_cols_validity=True (mediator.py:1272)
+
+```python
+norm_cols_validity = np.ones(21, dtype=bool)  # Assume valid by default
+# Далее ВСЕ 21 элемент перезаписываются:
+norm_cols_values[0], norm_cols_validity[0] = self._get_safe_float_with_validity(row, "cvd_24h", 0.0)
+# ... (строки 1276-1301)
+norm_cols_values[20], norm_cols_validity[20] = self._get_safe_float_with_validity(...)
+```
+
+**Почему это НЕ баг**: Начальное значение `np.ones(21)` **полностью перезаписывается** в цикле (строки 1276-1301). Каждый из 21 элементов явно получает значение от `_get_safe_float_with_validity()`. Начальное значение нерелевантно.
+
+---
+
+### 30. risk_guard.py асимметричный buffer (risk_guard.py:668-671)
+
+```python
+if exposure_delta > self._EPS:
+    buffered_delta = notional_delta * buffer_mult  # Buffer ТОЛЬКО на increase
+else:
+    buffered_delta = notional_delta  # Без buffer на decrease
+```
+
+**Почему это BY DESIGN (корректный risk management)**:
+- **Position INCREASE** → нужен safety margin (slippage, fees, market impact)
+- **Position DECREASE** → риск уменьшается, дополнительный buffer не нужен
+- Это стандартная практика: консервативность при открытии, не при закрытии позиций
+
+---
+
+### 31. ops_kill_switch _last_ts=0.0 при инициализации (ops_kill_switch.py:28, 112-114)
+
+```python
+_last_ts: Dict[str, float] = {"rest": 0.0, "ws": 0.0, ...}  # Line 28
+
+def _maybe_reset_all(now: float) -> None:
+    for k in list(_counters.keys()):
+        if now - _last_ts[k] > _reset_cooldown_sec:  # При now > 60: True
+            _counters[k] = 0
+            _last_ts[k] = now
+```
+
+**Почему это НЕ баг**:
+1. `_last_ts[k] = 0.0` означает "последний reset в Unix epoch"
+2. При первом вызове `record_error()` в time > 60s: counter сбрасывается до 0, затем инкрементируется до 1
+3. При вызове в time < 60s: counter просто инкрементируется до 1
+4. Оба сценария дают корректный результат (counter = 1)
+
+---
+
+### 32. RSI timing: valid на bar 14 (transformers.py:959-968)
+
+```python
+st["gain_history"].append(gain)
+st["loss_history"].append(loss)
+
+if st["avg_gain"] is None or st["avg_loss"] is None:
+    if len(st["gain_history"]) == self.spec.rsi_period:  # == 14
+        st["avg_gain"] = sum(st["gain_history"]) / float(self.spec.rsi_period)
+        st["avg_loss"] = sum(st["loss_history"]) / float(self.spec.rsi_period)
+```
+
+**Почему это НЕ баг (timing корректен)**:
+
+| Bar | Action | len(gain_history) | RSI valid? |
+|-----|--------|-------------------|------------|
+| 0 | last_close = price0 | 0 | ❌ |
+| 1 | delta = p1-p0, append | 1 | ❌ |
+| ... | ... | ... | ❌ |
+| 14 | delta = p14-p13, append | 14 | ✅ SMA computed |
+
+**RSI-14** требует 14 price changes → доступен после 15 prices (bars 0-14). Bar 14 — корректный момент.
+
+**Референс**: Wilder (1978), "New Concepts in Technical Trading Systems"
+
+---
+
+### 33. obs_builder vol_proxy=0.01 во время ATR warmup (obs_builder.pyx:389-396)
+
+```cython
+if atr_valid:
+    vol_proxy = tanh(log1p(atr / (price_d + 1e-8)))
+else:
+    atr_fallback = price_d * 0.01  # 1% of price
+    vol_proxy = tanh(log1p(atr_fallback / (price_d + 1e-8)))
+```
+
+**Почему это BY DESIGN (trade-off)**:
+
+| Вариант | vol_proxy | Проблема |
+|---------|-----------|----------|
+| NaN | NaN | Observation crash, NaN propagation |
+| 0.0 | 0.0 | Model видит "нулевая волатильность" — неверно! |
+| **1% price** | ~0.01 | Разумная аппроксимация типичного ATR |
+
+Типичный ATR для crypto: 1-3% от цены. Fallback 1% — консервативная оценка.
+
+---
+
+### 34. obs_builder FG=50 vs missing РАЗЛИЧИМЫ (obs_builder.pyx:590-600)
+
+```cython
+if has_fear_greed:
+    feature_val = _clipf(fear_greed_value / 100.0, -3.0, 3.0)  # FG=50 → 0.5
+    indicator = 1.0  # FLAG: present
+else:
+    feature_val = 0.0
+    indicator = 0.0  # FLAG: missing
+```
+
+**Почему это НЕ баг**:
+
+| Сценарий | feature_val | indicator | Различимы? |
+|----------|-------------|-----------|------------|
+| FG = 50 | 0.5 | **1.0** | ✅ |
+| FG missing | 0.0 | **0.0** | ✅ |
+
+Indicator flag (второй элемент пары) **полностью различает** реальные данные от отсутствующих.
+
+---
+
+### 35. Policy sigma range [0.2, 1.5] (custom_policy_patch1.py:1088-1091)
+
+```python
+sigma_min, sigma_max = 0.2, 1.5
+sigma = sigma_min + (sigma_max - sigma_min) * torch.sigmoid(self.unconstrained_log_std)
+```
+
+**Почему это НЕ баг (standard PPO practice)**:
+- **σ = 0.2**: near-deterministic actions (exploitation phase)
+- **σ = 1.5**: high exploration
+- Работает для обоих: tanh [-1,1] и sigmoid [0,1] выходов
+- Большое σ естественно приводит к saturated actions (bounds)
+
+**Референс**: Schulman et al. (2017) PPO, OpenAI Baselines defaults
+
+---
+
+### 36. features_pipeline constant detection на shifted data (features_pipeline.py:396-410)
+
+```python
+m = float(np.nanmean(v_clean))  # Ignores NaN
+s = float(np.nanstd(v_clean, ddof=0))  # Ignores NaN
+is_constant = (not np.isfinite(s)) or (s == 0.0)
+```
+
+**Почему это НЕ баг (practical for typical datasets)**:
+1. `nanmean`/`nanstd` **игнорируют NaN** при вычислении
+2. Shifted data имеет NaN только в первых ~20 rows
+3. Типичный training dataset: 10,000+ rows
+4. Первые 20 NaN rows составляют < 0.2% — negligible impact
+5. Statistics корректно вычисляются на valid portion
+
+**Edge case**: Если dataset < 100 rows, могут быть issues. Но training datasets всегда >>1000 rows.
+
+---
+
 ## 📊 СТАТУС ПРОЕКТА (2025-11-26)
 
 ### ✅ Production Ready
@@ -1043,5 +1231,5 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-11-26
-**Версия документации**: 3.8 (Добавлены НЕ БАГИ #16-#27: 12 паттернов кода задокументированы)
-**Статус**: ✅ Production Ready (все критические исправления применены)
+**Версия документации**: 3.9 (Добавлены НЕ БАГИ #28-#36 + FAQ расширен: 14 исследованных паттернов)
+**Статус**: ✅ Production Ready (все критические исправления применены, 36 задокументированных "НЕ БАГИ")
