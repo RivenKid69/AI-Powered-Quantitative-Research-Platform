@@ -83,12 +83,22 @@ try:  # pragma: no cover - import shim for script vs package usage
         WinRateStats,
         extract_episode_win_payload,
     )
+    from trading_metrics import (
+        TradingMetricsAccumulator,
+        TradingMetrics,
+        extract_trading_metrics_payload,
+    )
     from variance_gradient_scaler import VarianceGradientScaler
 except ImportError:  # pragma: no cover - fallback when imported as package module
     from .winrate_stats import (  # type: ignore[import-not-found]
         WinRateAccumulator,
         WinRateStats,
         extract_episode_win_payload,
+    )
+    from .trading_metrics import (  # type: ignore[import-not-found]
+        TradingMetricsAccumulator,
+        TradingMetrics,
+        extract_trading_metrics_payload,
     )
     from .variance_gradient_scaler import VarianceGradientScaler  # type: ignore[import-not-found]
 
@@ -8008,6 +8018,12 @@ class DistributionalPPO(RecurrentPPO):
         winrate_tracker = WinRateAccumulator(
             confidence_level=float(getattr(self, "_winrate_confidence_level", 0.95))
         )
+        # Trading metrics accumulator for Sharpe/Sortino/MaxDD/Calmar
+        trading_metrics_tracker = TradingMetricsAccumulator(
+            bars_per_year=float(getattr(self, "_bars_per_year", 365.25 * 6)),  # Default: 4h bars
+            risk_free_rate=float(getattr(self, "_risk_free_rate", 0.0)),
+        )
+        equity_buffer = np.full((buffer_size, n_envs), np.nan, dtype=np.float32)
 
         def _select_value_states(env_index: int) -> Optional[Tuple[torch.Tensor, ...]]:
             states = self._clone_states_to_device(self._last_lstm_states, self.device)
@@ -8248,6 +8264,7 @@ class DistributionalPPO(RecurrentPPO):
             reward_costs_step = np.full(n_envs, np.nan, dtype=np.float32)
             clip_bound_step = np.full(n_envs, np.nan, dtype=np.float32)
             clip_hard_cap_step = np.full(n_envs, np.nan, dtype=np.float32)
+            equity_step = np.full(n_envs, np.nan, dtype=np.float32)
             for env_idx, info in enumerate(infos):
                 group_key_candidate = self._ev_group_key_from_info(env_idx, info)  # FIX
                 if not group_key_candidate:  # FIX
@@ -8305,6 +8322,15 @@ class DistributionalPPO(RecurrentPPO):
                     win_flag, win_length = extract_episode_win_payload(info)
                     if win_flag is not None and win_length is not None:
                         winrate_tracker.add_episode(win_flag, win_length)
+                    # Extract equity for trading metrics
+                    equity_candidate = info.get("equity")
+                    if equity_candidate is not None:
+                        try:
+                            equity_value = float(equity_candidate)
+                            if math.isfinite(equity_value) and equity_value > 0:
+                                equity_step[env_idx] = equity_value
+                        except (TypeError, ValueError):
+                            pass
                 if (
                     self._reward_robust_clip_fraction is not None
                     and math.isfinite(self._reward_robust_clip_fraction)
@@ -8331,6 +8357,7 @@ class DistributionalPPO(RecurrentPPO):
             reward_costs_buffer[step_pos] = reward_costs_step
             clip_bound_buffer[step_pos] = clip_bound_step
             clip_cap_buffer[step_pos] = clip_hard_cap_step
+            equity_buffer[step_pos] = equity_step
 
             # Prepare distributional data for VF clipping
             value_quantiles_for_buffer = None
@@ -8629,6 +8656,33 @@ class DistributionalPPO(RecurrentPPO):
             self.logger.record(
                 "rollout/steps_to_win_max", float(winrate_stats.steps_to_win_max)
             )
+
+        # Trading metrics: Sharpe, Sortino, Max Drawdown, Calmar
+        # Add all collected returns and equities to the accumulator
+        trading_metrics_tracker.add_batch(
+            returns=reward_raw_buffer[:buffer_size],
+            equities=equity_buffer[:buffer_size],
+            dones=rollout_buffer.episode_starts[:buffer_size] if hasattr(rollout_buffer, 'episode_starts') else None,
+        )
+        trading_stats = trading_metrics_tracker.summary()
+        if trading_stats is not None:
+            self._last_rollout_trading_stats = trading_stats
+            # Primary risk-adjusted metrics
+            self.logger.record("rollout/sharpe_ratio", float(trading_stats.sharpe_ratio))
+            self.logger.record("rollout/sortino_ratio", float(trading_stats.sortino_ratio))
+            self.logger.record("rollout/max_drawdown", float(trading_stats.max_drawdown))
+            self.logger.record("rollout/calmar_ratio", float(trading_stats.calmar_ratio))
+            # Additional win/loss statistics
+            self.logger.record("rollout/profit_factor", float(trading_stats.profit_factor))
+            self.logger.record("rollout/avg_win", float(trading_stats.avg_win))
+            self.logger.record("rollout/avg_loss", float(trading_stats.avg_loss))
+            # Return statistics
+            self.logger.record("rollout/mean_return", float(trading_stats.mean_return))
+            self.logger.record("rollout/std_return", float(trading_stats.std_return))
+            self.logger.record("rollout/total_return", float(trading_stats.total_return))
+            # Drawdown details
+            self.logger.record("rollout/max_drawdown_duration", float(trading_stats.max_drawdown_duration))
+            self.logger.record("rollout/current_drawdown", float(trading_stats.current_drawdown))
 
         return True
 
