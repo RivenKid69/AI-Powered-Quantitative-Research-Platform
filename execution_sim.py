@@ -8742,6 +8742,64 @@ class ExecutionSimulator:
         return val
 
     @staticmethod
+    def _compute_price_tolerance(
+        price1: Optional[float],
+        price2: Optional[float] = None,
+        *,
+        rel_tol: float = 1e-9,
+        abs_tol: float = 1e-12,
+    ) -> float:
+        """Compute appropriate tolerance for price comparisons.
+
+        For high-value assets (e.g., BTC at $100,000), a fixed absolute tolerance
+        of 1e-12 is smaller than floating-point precision (machine epsilon ~2.2e-11).
+        This can cause legitimate limit order fills to be rejected.
+
+        This function computes a tolerance that accounts for price magnitude:
+            tolerance = max(rel_tol * max_price, abs_tol)
+
+        Args:
+            price1: First price value (required)
+            price2: Second price value (optional)
+            rel_tol: Relative tolerance (default 1e-9, ~0.0000001%)
+            abs_tol: Absolute tolerance floor (default 1e-12)
+
+        Returns:
+            Computed tolerance appropriate for the price scale
+
+        Example:
+            For BTC at $100,000:
+            - Old: tolerance = 1e-12 (smaller than machine epsilon!)
+            - New: tolerance = 1e-9 * 100000 = 1e-4 = $0.0001
+
+        Reference:
+            IEEE 754 double precision: ~15-16 significant digits
+            Machine epsilon: ~2.22e-16
+            At price $100,000: epsilon * price ~ 2.2e-11
+        """
+        max_price = 0.0
+        if price1 is not None:
+            try:
+                p1 = abs(float(price1))
+                if math.isfinite(p1):
+                    max_price = max(max_price, p1)
+            except (TypeError, ValueError):
+                pass
+        if price2 is not None:
+            try:
+                p2 = abs(float(price2))
+                if math.isfinite(p2):
+                    max_price = max(max_price, p2)
+            except (TypeError, ValueError):
+                pass
+
+        # Compute relative tolerance, floored by abs_tol
+        computed = rel_tol * max_price
+        if not math.isfinite(computed) or computed < abs_tol:
+            return abs_tol
+        return computed
+
+    @staticmethod
     def _snap_qty_with_tolerance(value: float, step: float, tolerance: float) -> float:
         if step <= 0.0:
             return float(value)
@@ -9272,7 +9330,6 @@ class ExecutionSimulator:
     ) -> None:
         symbol = str(self.symbol or "").upper()
         order_label = str(order_type or "UNKNOWN")
-        tolerance = 1e-12
         try:
             price_quantized = float(getattr(result, "price", raw_price))
         except (TypeError, ValueError):
@@ -9282,16 +9339,20 @@ class ExecutionSimulator:
         except (TypeError, ValueError):
             qty_quantized = float(raw_qty)
 
+        # FIX (2025-11-26): Use relative tolerance for price deviation metrics
+        price_tolerance = self._compute_price_tolerance(raw_price, price_quantized)
         if math.isfinite(raw_price) and math.isfinite(price_quantized):
-            if abs(price_quantized - raw_price) > tolerance:
+            if abs(price_quantized - raw_price) > price_tolerance:
                 try:
                     _QUANTIZED_PRICE_COUNTER.labels(
                         symbol=symbol, order_type=order_label
                     ).inc()
                 except Exception:
                     pass
+        # For quantity: use fixed tolerance since qty values are typically small
+        qty_tolerance = 1e-12
         if math.isfinite(raw_qty) and math.isfinite(qty_quantized):
-            if abs(qty_quantized - raw_qty) > tolerance:
+            if abs(qty_quantized - raw_qty) > qty_tolerance:
                 try:
                     _QUANTIZED_QTY_COUNTER.labels(
                         symbol=symbol, order_type=order_label
@@ -11408,7 +11469,13 @@ class ExecutionSimulator:
                 limit_price_value = float(price_q)
                 exec_qty = qty_q
                 intrabar_fill_price = self._finite_float(limit_intrabar_price)
-                tolerance = 1e-12
+                # FIX (2025-11-26): Use relative tolerance for price comparisons.
+                # For high-value assets (BTC at $100,000), fixed 1e-12 tolerance
+                # is smaller than machine epsilon (~2.2e-11), causing missed fills.
+                # See: _compute_price_tolerance docstring for details.
+                tolerance = self._compute_price_tolerance(
+                    limit_price_value, intrabar_fill_price
+                )
                 best_bid = self._finite_float(self._last_bid)
                 best_ask = self._finite_float(self._last_ask)
                 if best_bid is None and best_ask is None:

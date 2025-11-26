@@ -128,6 +128,7 @@ python -m services.universe --output data/universe/symbols.json
 | Twin Critics categorical VF clipping no effect | `_project_distribution` was identity stub | ✅ Фикс 2025-11-26: uses `_project_categorical_distribution` |
 | Yang-Zhang volatility inflated ~11% for n=10 | RS component used (n-1) instead of n | ✅ Фикс 2025-11-26: RS now uses n per original formula |
 | `_project_categorical_distribution` shape error | 1D atoms not expanded to batch_size | ✅ Фикс 2025-11-26: proper batch expansion |
+| Limit order fills missed for high-price assets | Fixed tolerance 1e-12 < machine epsilon at $100k | ✅ Фикс 2025-11-26: `_compute_price_tolerance` с relative tolerance |
 
 ---
 
@@ -1098,6 +1099,70 @@ winsorize_percentiles: Tuple[float, float] = (1.0, 99.0)
 
 ---
 
+### 51. Slippage Model Uses Mid-Price (execution_sim.py:5901-5910)
+
+```python
+cost_fraction = float(expected_bps) / 1e4
+if side_key == "BUY":
+    candidate = mid_val * (1.0 + cost_fraction)
+```
+
+**Почему это НЕ проблема (already has market impact model)**:
+1. Slippage module уже включает **market impact term**: `k * sqrt(participation_ratio)` (impl_slippage.py:2342)
+2. Это стиль **Almgren-Chriss** square-root impact model
+3. `participation_ratio = order_notional / ADV` учитывает размер ордера
+4. Mid-price — только reference point; фактический slippage включает:
+   - Half spread (`half_spread`)
+   - Market impact (`k_effective * sqrt(participation_ratio)`)
+   - Volatility adjustments
+   - Tail shock для extreme conditions
+5. Для полного LOB simulation нужен external LOB — это documented design choice
+
+**Референс**: Almgren & Chriss (2001), impl_slippage.py:2290-2354
+
+---
+
+### 52. Latency Clamping Warnings Configurable (execution_sim.py:7110-7126)
+
+```python
+if ratio > 1.0 and self._intrabar_log_warnings:  # Configurable!
+    logger.warning("intrabar latency %.0f ms exceeds timeframe %.0f ms ...")
+    # Throttled to avoid log spam
+if ratio > 1.0:
+    ratio = 1.0  # Clamped to end of bar
+```
+
+**Почему это НЕ "silent" clamping**:
+1. Warning **IS** logged when `_intrabar_log_warnings=True`
+2. Default `False` для performance (production не нуждается в verbose logging)
+3. Throttling предотвращает log spam
+4. Configurable через `execution.intrabar.log_warnings: true`
+5. Clamping at 100% — корректное поведение (исполнение в конце бара)
+
+**Референс**: execution_sim.py:2555, 2598-2604
+
+---
+
+### 53. No LOB Depth Tracking (execution_sim.py:11414-11424, docstring)
+
+```python
+# Из docstring модуля (execution_sim.py:14-16):
+# 3) Работать как с внешним LOB (если он передан), так и без него (простая модель):
+#    - Для LIMIT без LOB исполняем только если есть abs_price
+```
+
+**Почему это BY DESIGN (not a bug)**:
+1. **Documented design choice**: модуль работает с/без external LOB
+2. Full LOB simulation = significant computational overhead
+3. Queue position tracking добавит complexity без proportional benefit
+4. Для backtesting стратегий простая модель достаточна
+5. Production с крупными объёмами: используйте external LOB adapter
+6. Market impact через `participation_ratio` уже покрывает основной эффект
+
+**Референс**: execution_sim.py:4-23 (module docstring), standard backtesting practice
+
+---
+
 ## 📊 СТАТУС ПРОЕКТА (2025-11-26)
 
 ### ✅ Production Ready
@@ -1154,6 +1219,7 @@ winsorize_percentiles: Tuple[float, float] = (1.0, 99.0)
 | **2025-11-26** | Fear & Greed detection fix | FG=50 (neutral) correctly detected as valid data, not missing |
 | **2025-11-26** | AdaptiveUPGD instant_noise_scale fix | VGS + UPGD noise 212x amplification → 1.0x (constant ratio) |
 | **2025-11-26** | signal_pos in observation uses next_signal_pos | Temporal mismatch: market data t+1, position t → теперь оба t+1 |
+| **2025-11-26** | Limit order tolerance fix | Fixed 1e-12 < machine epsilon at $100k → relative tolerance |
 | **2025-11-25** | Empty DataFrame protection in step() | IndexError при пустом df → graceful termination |
 | **2025-11-25** | step() observation from NEXT row (Gymnasium) | Duplicate obs: reset() и step()#1 возвращали одну row |
 | **2025-11-25** | CLOSE_TO_OPEN + SIGNAL_ONLY timing | Look-ahead bias: signal_pos игнорировал 1-bar delay |
@@ -1511,5 +1577,5 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-11-26
-**Версия документации**: 4.4 (Twin Critics categorical VF clipping fix + Yang-Zhang RS denominator fix)
-**Статус**: ✅ Production Ready (все критические исправления применены, 50 задокументированных "НЕ БАГИ")
+**Версия документации**: 4.5 (Limit order tolerance fix + 3 new NOT BUGS documented)
+**Статус**: ✅ Production Ready (все критические исправления применены, 53 задокументированных "НЕ БАГИ")
