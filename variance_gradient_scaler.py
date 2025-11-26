@@ -101,6 +101,11 @@ class VarianceGradientScaler:
         warmup_steps: int = 100,
         track_per_param: bool = False,
         logger: Optional[Any] = None,
+        # FIX (2025-11-27): Add min_scaling_factor and variance_cap to prevent
+        # overly aggressive gradient scaling that blocks learning.
+        # See tests/test_vgs_training_interaction.py for analysis.
+        min_scaling_factor: float = 0.1,
+        variance_cap: Optional[float] = 50.0,
     ) -> None:
         if beta <= 0.0 or beta >= 1.0:
             raise ValueError(f"beta must be in (0, 1), got {beta}")
@@ -110,6 +115,11 @@ class VarianceGradientScaler:
             raise ValueError(f"eps must be positive, got {eps}")
         if warmup_steps < 0:
             raise ValueError(f"warmup_steps must be non-negative, got {warmup_steps}")
+        # FIX: Validate new parameters
+        if min_scaling_factor <= 0.0 or min_scaling_factor > 1.0:
+            raise ValueError(f"min_scaling_factor must be in (0, 1], got {min_scaling_factor}")
+        if variance_cap is not None and variance_cap <= 0.0:
+            raise ValueError(f"variance_cap must be positive when set, got {variance_cap}")
 
         self.enabled = bool(enabled)
         self.beta = float(beta)
@@ -118,6 +128,9 @@ class VarianceGradientScaler:
         self.warmup_steps = int(warmup_steps)
         self.track_per_param = True  # DEPRECATED - now always True
         self._logger = logger
+        # FIX (2025-11-27): New parameters to prevent overly aggressive scaling
+        self.min_scaling_factor = float(min_scaling_factor)
+        self.variance_cap = float(variance_cap) if variance_cap is not None else None
 
         # Step counter
         self._step_count: int = 0
@@ -415,23 +428,44 @@ class VarianceGradientScaler:
         """
         Compute gradient scaling factor based on normalized variance.
 
-        Scaling factor: 1 / (1 + alpha * normalized_var)
+        Scaling factor: 1 / (1 + alpha * capped_var)
 
         This reduces gradients when variance is high, improving stability.
         During warmup, returns 1.0 (no scaling).
 
+        FIX (2025-11-27): Added variance_cap and min_scaling_factor to prevent
+        overly aggressive gradient scaling that blocks learning:
+        - variance_cap (default 50.0): Caps normalized variance to prevent extreme scaling
+        - min_scaling_factor (default 0.1): Ensures at least 10% of gradients pass through
+
+        With default alpha=0.1 and variance=100:
+        - OLD: scale = 1/(1+0.1*100) = 0.0909 (91% gradient reduction!)
+        - NEW: scale = max(1/(1+0.1*min(100,50)), 0.1) = 0.167 (83% reduction)
+
+        This fix addresses training quality issues where EV~0, Twin Critics loss grows,
+        and gradient norms collapse. See tests/test_vgs_training_interaction.py.
+
         Returns:
-            Scaling factor in range (0, 1]
+            Scaling factor in range [min_scaling_factor, 1]
         """
         if not self.enabled or self._step_count < self.warmup_steps:
             return 1.0
 
         normalized_var = self.get_normalized_variance()
-        scaling_factor = 1.0 / (1.0 + self.alpha * normalized_var)
 
-        # FIXED: Ensure scaling factor is in valid range and not too small
-        # Prevent gradients from becoming zero
-        scaling_factor = max(scaling_factor, 1e-4)
+        # FIX (2025-11-27): Cap variance to prevent extreme scaling
+        # This provides smoother behavior at extreme variances
+        if self.variance_cap is not None:
+            capped_var = min(normalized_var, self.variance_cap)
+        else:
+            capped_var = normalized_var
+
+        scaling_factor = 1.0 / (1.0 + self.alpha * capped_var)
+
+        # FIX (2025-11-27): Use configurable minimum scaling factor
+        # Old: max(scale, 1e-4) - too aggressive, blocks learning
+        # New: max(scale, min_scaling_factor) - ensures minimum gradient flow
+        scaling_factor = max(scaling_factor, self.min_scaling_factor)
         scaling_factor = min(scaling_factor, 1.0)
 
         return float(scaling_factor)
@@ -579,6 +613,9 @@ class VarianceGradientScaler:
             "eps": self.eps,
             "warmup_steps": self.warmup_steps,
             "step_count": self._step_count,
+            # FIX (2025-11-27): New parameters to prevent overly aggressive scaling
+            "min_scaling_factor": self.min_scaling_factor,
+            "variance_cap": self.variance_cap,
 
             # v3.1 FIXED: Per-parameter stochastic variance statistics
             # Stores E[μ] and E[s] for computing Var[g] = E[s] - E[μ]²
@@ -594,7 +631,7 @@ class VarianceGradientScaler:
             "grad_max_ema": self._grad_max_ema,
 
             # Version marker for migration
-            "vgs_version": "3.1",  # UPDATED to 3.1 (critical fix!)
+            "vgs_version": "3.2",  # v3.2: Added min_scaling_factor and variance_cap
         }
 
         return state
@@ -613,11 +650,15 @@ class VarianceGradientScaler:
         self.eps = state_dict.get("eps", self.eps)
         self.warmup_steps = state_dict.get("warmup_steps", self.warmup_steps)
         self._step_count = state_dict.get("step_count", 0)
+        # FIX (2025-11-27): Load new parameters with backward-compatible defaults
+        self.min_scaling_factor = state_dict.get("min_scaling_factor", 0.1)
+        self.variance_cap = state_dict.get("variance_cap", 50.0)
 
         # Check version
         vgs_version = state_dict.get("vgs_version", "1.0")
 
-        if vgs_version != "3.1":
+        # v3.2 is compatible with v3.1 (same statistics format, just adds new parameters)
+        if vgs_version not in ("3.1", "3.2"):
             # OLD FORMAT (v1.x-v3.0 with INCORRECT E[(E[g])²] instead of E[g²])
             import warnings
             warnings.warn(
@@ -687,6 +728,8 @@ class VarianceGradientScaler:
             f"alpha={self.alpha}, "
             f"eps={self.eps}, "
             f"warmup_steps={self.warmup_steps}, "
+            f"min_scaling_factor={self.min_scaling_factor}, "
+            f"variance_cap={self.variance_cap}, "
             f"step_count={self._step_count}, "
-            f"version=3.1)"  # v3.1: FIXED E[g²] computation (mean of squares!)
+            f"version=3.2)"  # v3.2: Added min_scaling_factor and variance_cap
         )
