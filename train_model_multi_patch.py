@@ -1794,7 +1794,7 @@ def sortino_ratio(
         Annualized Sortino ratio, or 0.0 if insufficient data
     """
     # FIX (2025-11-21): Protect against small samples where ddof=1 produces NaN
-    # Same logic as sharpe_ratio: N < 3 → return 0.0
+    # Same logic as sharpe_ratio: N < 3 -> return 0.0
     if len(returns) < 3:
         return 0.0
 
@@ -1812,14 +1812,14 @@ def sortino_ratio(
         return np.mean(returns - risk_free_rate) / std * ann
 
     if downside_count < 20:
-        # Недостаточно downside наблюдений → fallback на Sharpe
+        # Недостаточно downside наблюдений -> fallback на Sharpe
         std = np.std(returns, ddof=1)
         # FIX (2025-11-21): Add np.isfinite check
         if not np.isfinite(std) or std < 1e-9:
             return 0.0
         return np.mean(returns - risk_free_rate) / std * ann
 
-    # Достаточно downside наблюдений → используем downside deviation
+    # Достаточно downside наблюдений -> используем downside deviation
     downside_std = np.sqrt(np.mean(downside**2))
 
     # Check for NaN or Inf that could result from numerical issues
@@ -1860,10 +1860,10 @@ def objective(trial: optuna.Trial,
 
     # Log warning if test data is provided (it will be ignored during HPO)
     if test_data_by_token:
-        logger.warning(
-            f"Test data provided to HPO objective function but will NOT be used "
-            f"for hyperparameter optimization (correct behavior). Test data should "
-            f"only be used for final evaluation after HPO is complete."
+        print(
+            "[WARN] Test data provided to HPO objective function but will NOT be used "
+            "for hyperparameter optimization (correct behavior). Test data should "
+            "only be used for final evaluation after HPO is complete."
         )
 
     def _extract_bins_vol_from_cfg(cfg, default=EXPECTED_VOLUME_BINS):
@@ -2899,7 +2899,7 @@ def objective(trial: optuna.Trial,
         if scheduler_min_lr_value < optimizer_lr_min_value:
             scheduler_min_lr_value = optimizer_lr_min_value
 
-    optimizer_lr_max_value = float("inf")
+    optimizer_lr_max_value = None  # None means no upper limit (inf)
     if (
         optimizer_lr_max_cfg is not None
         and math.isfinite(optimizer_lr_max_cfg)
@@ -2907,7 +2907,7 @@ def objective(trial: optuna.Trial,
     ):
         optimizer_lr_max_value = float(optimizer_lr_max_cfg)
 
-    if math.isfinite(optimizer_lr_max_value) and optimizer_lr_max_value < optimizer_lr_min_value:
+    if optimizer_lr_max_value is not None and optimizer_lr_max_value < optimizer_lr_min_value:
         optimizer_lr_max_value = optimizer_lr_min_value
 
     params = {
@@ -3719,6 +3719,7 @@ def objective(trial: optuna.Trial,
                 optimizer=optimizer,
                 max_lr=params["learning_rate"] * 3,
                 total_steps=total_optimizer_steps,
+                cycle_momentum=False,  # Disable for optimizers without momentum (e.g., AdaptiveUPGD)
             )
 
         # Оборачиваем ее в словарь для передачи в policy_kwargs
@@ -4208,7 +4209,7 @@ def objective(trial: optuna.Trial,
     
     trial.set_user_attr("final_return", 0.0) # Устанавливаем в 0, т.к. корректный расчет усложнен
 
-    print(f"\n[✅ Trial {trial.number}] COMPLETE. Final Weighted Score: {objective_score:.4f}")
+    print(f"\n[[OK] Trial {trial.number}] COMPLETE. Final Weighted Score: {objective_score:.4f}")
     print(f"   Components -> Main Sortino: {main_sortino:.4f}, Choppy: {choppy_score:.4f}, Trend: {trend_score:.4f}\n")
 
     return objective_score
@@ -4253,7 +4254,7 @@ def _log_features_statistics_per_symbol(
 
         # Guard against empty feature set
         if total_features == 0:
-            logger.warning(f"  ⚠️  Символ {symbol}: нет признаков после исключения служебных колонок")
+            logger.warning(f"  [WARN]  Символ {symbol}: нет признаков после исключения служебных колонок")
             logger.warning(f"      Служебные колонки исключены: {service_cols}")
             logger.warning(f"      Все колонки датафрейма: {set(train_df.columns)}")
             continue
@@ -4625,14 +4626,14 @@ def main():
     print(f"\nДиапазон данных по символам:")
     for symbol, stats in sorted(data_stats.items()):
         print(f"  {symbol:12s}: {stats['rows']:6d} строк | "
-              f"{stats['min_date']} → {stats['max_date']} ({stats['days']:.1f} дней)")
+              f"{stats['min_date']} -> {stats['max_date']} ({stats['days']:.1f} дней)")
 
-    print(f"\n{'─'*80}")
+    print(f"\n{'-'*80}")
     print(f"ОБЩИЙ ДИАПАЗОН ДАННЫХ:")
     print(f"  От: {pd.to_datetime(global_min_ts, unit='s', utc=True).strftime('%Y-%m-%d %H:%M:%S')} (ts: {global_min_ts})")
     print(f"  До: {pd.to_datetime(global_max_ts, unit='s', utc=True).strftime('%Y-%m-%d %H:%M:%S')} (ts: {global_max_ts})")
     print(f"  Период: {(global_max_ts - global_min_ts) / 86400:.1f} дней")
-    print(f"{'─'*80}\n")
+    print(f"{'-'*80}\n")
 
     # Validate that we have sufficient training data
     if total_rows < 100:
@@ -4688,11 +4689,11 @@ def main():
         print(f"{'='*80}")
 
         if config_issues:
-            print("\n⚠️  Обнаружены проблемы с конфигурацией:")
+            print("\n[WARN]  Обнаружены проблемы с конфигурацией:")
             for issue in config_issues:
-                print(f"   • {issue}")
+                print(f"   - {issue}")
         elif not val_start_cfg:
-            print("\n💡 Валидационный split не задан в конфиге")
+            print("\n[INFO] Валидационный split не задан в конфиге")
 
         print("\nИспользую автоматический split: 70% train / 15% val / 15% test\n")
 
@@ -4716,18 +4717,18 @@ def main():
         cfg.data.test_start_ts = auto_test_start
         cfg.data.test_end_ts = auto_test_end
 
-        print(f"TRAIN: {pd.to_datetime(auto_train_start, unit='s', utc=True).strftime('%Y-%m-%d')} → "
+        print(f"TRAIN: {pd.to_datetime(auto_train_start, unit='s', utc=True).strftime('%Y-%m-%d')} -> "
               f"{pd.to_datetime(auto_train_end, unit='s', utc=True).strftime('%Y-%m-%d')} "
               f"({(auto_train_end - auto_train_start) / 86400:.1f} дней, 70%)")
-        print(f"VAL:   {pd.to_datetime(auto_val_start, unit='s', utc=True).strftime('%Y-%m-%d')} → "
+        print(f"VAL:   {pd.to_datetime(auto_val_start, unit='s', utc=True).strftime('%Y-%m-%d')} -> "
               f"{pd.to_datetime(auto_val_end, unit='s', utc=True).strftime('%Y-%m-%d')} "
               f"({(auto_val_end - auto_val_start) / 86400:.1f} дней, 15%)")
-        print(f"TEST:  {pd.to_datetime(auto_test_start, unit='s', utc=True).strftime('%Y-%m-%d')} → "
+        print(f"TEST:  {pd.to_datetime(auto_test_start, unit='s', utc=True).strftime('%Y-%m-%d')} -> "
               f"{pd.to_datetime(auto_test_end, unit='s', utc=True).strftime('%Y-%m-%d')} "
               f"({(auto_test_end - auto_test_start) / 86400:.1f} дней, 15%)")
         print(f"{'='*80}\n")
     else:
-        print(f"✅ Используется конфигурация split из config файла\n")
+        print(f"[OK] Используется конфигурация split из config файла\n")
 
     split_version, time_splits = _load_time_splits(cfg.data)
     if split_version:
@@ -4778,6 +4779,12 @@ def main():
         # Sidecar metadata helper may not be available in all environments.
         pass
     all_dfs_with_roles = pipe.transform_dict(dfs_with_roles, add_suffix="_z")
+    # Drop rows with NaN in key columns (caused by shift in feature pipeline)
+    key_cols = ['open', 'high', 'low', 'close', 'quote_asset_volume']
+    for sym in all_dfs_with_roles:
+        cols_to_check = [c for c in key_cols if c in all_dfs_with_roles[sym].columns]
+        if cols_to_check:
+            all_dfs_with_roles[sym] = all_dfs_with_roles[sym].dropna(subset=cols_to_check).reset_index(drop=True)
     print(f"Feature pipeline fitted and saved to {PREPROC_PATH}. Standardized columns *_z added.")
     print("To run inference over processed data, execute: python infer_signals.py")
 
@@ -4843,7 +4850,7 @@ def main():
             _validator.validate(_df, frequency=None)
         except Exception as e:
             raise RuntimeError(f"Data validation failed for asset '{_key}': {e}")
-    print("✓ Data validation passed for all assets.")
+    print("[OK] Data validation passed for all assets.")
 
     def _extract_phase(phase: str) -> dict[str, pd.DataFrame]:
         out: dict[str, pd.DataFrame] = {}
@@ -4905,7 +4912,7 @@ def main():
 
     # Выводим наглядную таблицу
     print("РАСПРЕДЕЛЕНИЕ ПО ФАЗАМ:")
-    print(f"{'─'*80}")
+    print(f"{'-'*80}")
     for phase in ["train", "val", "test"]:
         stats = split_stats[phase]
         rows = stats["rows"]
@@ -4921,18 +4928,18 @@ def main():
 
         print(f"{phase_label}: {rows:6d} строк ({pct:5.1f}%) | {stats['symbols']} символов")
         if stats["start"] and stats["end"]:
-            print(f"         {_fmt_ts(stats['start'])} → {_fmt_ts(stats['end'])}")
+            print(f"         {_fmt_ts(stats['start'])} -> {_fmt_ts(stats['end'])}")
         print()
 
-    print(f"{'─'*80}")
+    print(f"{'-'*80}")
     print(f"ИТОГО:   {total_assigned_rows:6d} строк (100.0%)")
     print(f"{'='*80}\n")
 
     # Детальная статистика по каждому символу
     print("РАСПРЕДЕЛЕНИЕ ПО СИМВОЛАМ:")
-    print(f"{'─'*80}")
+    print(f"{'-'*80}")
     print(f"{'Символ':12s} | {'Train':>8s} | {'Val':>8s} | {'Test':>8s} | {'Всего':>8s}")
-    print(f"{'─'*80}")
+    print(f"{'-'*80}")
 
     all_symbols = set()
     for stats in split_stats.values():
@@ -4946,10 +4953,10 @@ def main():
 
         print(f"{symbol:12s} | {train_rows:8d} | {val_rows:8d} | {test_rows:8d} | {total:8d}")
 
-    print(f"{'─'*80}\n")
+    print(f"{'-'*80}\n")
 
     if inferred_test_any and not time_splits.get("test"):
-        print("💡 Test split был автоматически создан из оставшихся строк\n")
+        print("[INFO] Test split был автоматически создан из оставшихся строк\n")
 
     # Note: Per-asset normalization stats (norm_stats.json) were previously calculated here
     # but were never used by the RL environment. The actual normalization happens via
@@ -5035,7 +5042,7 @@ def main():
 
             ensemble_meta.append({"ensemble_index": model_idx, "trial_number": trial.number, "value": trial.value, "params": trial.params})
         else:
-            print(f"⚠️ WARNING: Could not find model for trial {trial.number}. Skipping.")
+            print(f"[WARN] WARNING: Could not find model for trial {trial.number}. Skipping.")
 
     # Note: norm_stats.json copy removed - it was never used by the RL environment.
     # Normalization happens via deterministic tanh() in obs_builder.pyx.
@@ -5043,7 +5050,7 @@ def main():
 
     with open(ensemble_dir / "ensemble_meta.json", "w") as f:
         json.dump(ensemble_meta, f, indent=4)
-    print(f"\n✅ Ensemble of {len(ensemble_meta)} models saved to '{ensemble_dir}'. HPO complete.")
+    print(f"\n[OK] Ensemble of {len(ensemble_meta)} models saved to '{ensemble_dir}'. HPO complete.")
 
     # --- Final evaluation of the best model on test set (AFTER HPO completion) ---
     # NOTE: This is the ONLY place where test data should be used.
@@ -5067,13 +5074,13 @@ def main():
         final_eval_mode = "test" if test_data_by_token else "val"
 
         if test_data_by_token:
-            print(f"✓ Using test set for final independent evaluation ({len(test_data_by_token)} symbols)")
+            print(f"[OK] Using test set for final independent evaluation ({len(test_data_by_token)} symbols)")
         else:
             print(f"⚠ Test set not available - using validation set for final evaluation ({len(val_data_by_token)} symbols)")
             print("  (This is acceptable but test set is recommended for unbiased assessment)")
 
         if not final_eval_data:
-            print("⚠️ Skipping final validation: evaluation split is empty.")
+            print("[WARN] Skipping final validation: evaluation split is empty.")
         else:
             def _make_env_val(symbol: str, df: pd.DataFrame):
                 params = best_trial.params
@@ -5188,7 +5195,7 @@ def main():
             )
     else:
         print(
-            "⚠️ Could not find best model or normalization stats for validation evaluation."
+            "[WARN] Could not find best model or normalization stats for validation evaluation."
         )
 
 def _configure_start_method() -> None:

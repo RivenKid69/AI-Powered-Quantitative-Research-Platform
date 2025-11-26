@@ -673,16 +673,26 @@ class TradingEnv(gym.Env):
                     "Cannot determine N_FEATURES from lob_state_cython.N_FEATURES"
                 ) from exc
         else:
-            # Фолбэк: посчитать через obs_builder при наличии layout
+            # Fallback 1: try obs_builder (Cython)
             try:
                 import obs_builder as _ob
-                from feature_config import FEATURES_LAYOUT as _OBS_LAYOUT  # если в проекте иначе — подставь актуальное имя
+                from feature_config import FEATURES_LAYOUT as _OBS_LAYOUT
                 N_FEATURES = int(_ob.compute_n_features(_OBS_LAYOUT))
-            except Exception as _e:
-                raise ImportError(
-                    "Cannot determine N_FEATURES: build Cython (lob_state_cython) "
-                    "or expose OBS_LAYOUT for obs_builder.compute_n_features(layout)."
-                ) from _e
+            except Exception:
+                # Fallback 2: use feature_config.N_FEATURES directly (pure Python)
+                try:
+                    import feature_config as _fc
+                    if hasattr(_fc, 'N_FEATURES') and _fc.N_FEATURES > 0:
+                        N_FEATURES = int(_fc.N_FEATURES)
+                    else:
+                        # Ensure layout is built
+                        _fc.make_layout({})
+                        N_FEATURES = int(_fc.N_FEATURES)
+                except Exception as _e:
+                    raise ImportError(
+                        "Cannot determine N_FEATURES: build Cython (lob_state_cython or obs_builder) "
+                        "or check feature_config.N_FEATURES."
+                    ) from _e
         # --- end patch ---
 
         self.observation_space = spaces.Box(
