@@ -1196,6 +1196,8 @@ class Mediator:
         ma5 = self._get_safe_float(row, "sma_1200", float('nan'))
         # NOTE: For 4h timeframe using sma_5040 (21 bars = 84h ≈ 3.5 days, weekly trend)
         # config_4h_timeframe.py specifies SMA_LOOKBACKS = [5, 21, 50] bars → [1200, 5040, 12000] minutes
+        # HISTORICAL NAMING: Variable named "ma20" for feature schema compatibility (see feature_config.py).
+        # Actual value is 21-bar SMA. Renaming would break feature parity and trained models.
         ma20 = self._get_safe_float(row, "sma_5040", float('nan'))
         rsi14 = self._get_safe_float(row, "rsi", 50.0)
 

@@ -2123,6 +2123,9 @@ class TradingEnv(gym.Env):
                 ratio_price = 1.0
             log_return_price = math.log(ratio_price)
             log_return_clipped = float(log_return_price)
+            # NOTE: In signal_only mode, ratio is sanitized (NaN/invalid → 1.0) but NOT bounds-clipped.
+            # Variable named "ratio_clipped" for API consistency with non-signal_only path which does clip.
+            # Signal-only doesn't simulate extreme price moves, so bounds clipping is unnecessary.
             ratio_clipped = float(ratio_price)
             atr_fraction_logged = float(atr_fraction)
             clip_logged_fraction = 0.0
