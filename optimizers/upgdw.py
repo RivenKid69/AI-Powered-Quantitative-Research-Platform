@@ -102,18 +102,23 @@ class UPGDW(torch.optim.Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
-        # First pass: compute utilities, moments, and find global maximum
+        # First pass: compute utilities, moments, and find global min/max
         # ═══════════════════════════════════════════════════════════════════════════
-        # НЕ БАГ: ИНИЦИАЛИЗАЦИЯ -inf ДЛЯ global_max_util
+        # FIX (2025-11-26): Added global_min_util for proper min-max normalization
         # ═══════════════════════════════════════════════════════════════════════════
-        # Если global_max_util остаётся -inf, это означает что ВСЕ параметры имели
-        # grad=None в первом проходе. Но тогда они ТАКЖЕ будут пропущены во втором
-        # проходе (if p.grad is None: continue), поэтому деление на -inf не произойдёт.
+        # PROBLEM: Original code only tracked global_max_util. When all utilities
+        # were negative (common at training start), dividing by negative max
+        # INVERTED the protection logic:
+        #   - utility=-0.5, max=-0.1 → -0.5/-0.1 = 5.0 → sigmoid(5.0) ≈ 0.99
+        #   - But -0.5 is LOWER utility than -0.1, should get LESS protection!
         #
-        # Сценарий "gradients появляются между проходами" невозможен — оба прохода
-        # итерируют по одним и тем же параметрам синхронно в рамках одного step().
-        # Reference: CLAUDE.md → "НЕ БАГИ" → #19
+        # FIX: Use min-max normalization to map utility to [0, 1] regardless of sign.
+        # This matches the AdaptiveUPGD implementation (adaptive_upgd.py:238-258).
+        #
+        # If both min and max remain at ±inf (all params have grad=None), they will
+        # be skipped in second pass too, so division issues don't occur.
         # ═══════════════════════════════════════════════════════════════════════════
+        global_min_util = torch.tensor(torch.inf, device="cpu")
         global_max_util = torch.tensor(-torch.inf, device="cpu")
 
         for group in self.param_groups:
@@ -146,8 +151,11 @@ class UPGDW(torch.optim.Optimizer):
                 exp_avg.mul_(beta1).add_(p.grad.data, alpha=1 - beta1)
                 exp_avg_sq.mul_(beta2).add_(p.grad.data ** 2, alpha=1 - beta2)
 
-                # Track global maximum utility
+                # Track global min/max utility for proper normalization
+                current_util_min = avg_utility.min()
                 current_util_max = avg_utility.max()
+                if current_util_min < global_min_util:
+                    global_min_util = current_util_min.cpu()
                 if current_util_max > global_max_util:
                     global_max_util = current_util_max.cpu()
 
@@ -178,11 +186,31 @@ class UPGDW(torch.optim.Optimizer):
                 # Generate perturbation noise
                 noise = torch.randn_like(p.grad) * group["sigma"]
 
-                # Scale utility with global normalization
+                # FIX (2025-11-26): Proper min-max normalization for utility scaling
+                # ═══════════════════════════════════════════════════════════════════
+                # Maps utility to [0, 1] regardless of sign:
+                #   - High utility (after normalization) → close to 1 → small update (protection)
+                #   - Low utility (after normalization) → close to 0 → large update (exploration)
+                #
+                # This fixes the bug where negative utilities caused inverted protection.
+                # Matches AdaptiveUPGD implementation (adaptive_upgd.py:238-258).
+                # ═══════════════════════════════════════════════════════════════════
+                global_min_on_device = global_min_util.to(device)
                 global_max_on_device = global_max_util.to(device)
-                scaled_utility = torch.sigmoid(
-                    (state["avg_utility"] / bias_correction2) / global_max_on_device
-                )
+
+                # Handle edge case where all utilities are equal (avoid division by zero)
+                epsilon = 1e-8
+                util_range = global_max_on_device - global_min_on_device + epsilon
+
+                # Min-max normalize to [0, 1]
+                bias_corrected_utility = state["avg_utility"] / bias_correction2
+                normalized_utility = (bias_corrected_utility - global_min_on_device) / util_range
+
+                # Clamp to [0, 1] to handle numerical issues
+                normalized_utility = torch.clamp(normalized_utility, 0.0, 1.0)
+
+                # Apply sigmoid for smoother scaling (maps [0, 1] → [0.27, 0.73])
+                scaled_utility = torch.sigmoid(2.0 * (normalized_utility - 0.5))
 
                 # Adaptive gradient with utility-based protection
                 # High utility → small update (protect important weights)

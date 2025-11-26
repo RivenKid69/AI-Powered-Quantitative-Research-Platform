@@ -1361,7 +1361,13 @@ class Mediator:
         if not math.isfinite(curr_price) or curr_price <= 0.0:
             curr_price = mark_price if mark_price > 0.0 else 1.0
 
-        if (prev_price_val is None or prev_price_val <= 0.0) and callable(resolve_reward_price):
+        # FIX (2025-11-26): Removed dead `prev_price_val is None` check
+        # ═══════════════════════════════════════════════════════════════════════════
+        # _coerce_finite() ALWAYS returns a float (default=0.0), never None.
+        # The `is None` check was unreachable dead code.
+        # Reference: _coerce_finite() at line 904-915
+        # ═══════════════════════════════════════════════════════════════════════════
+        if prev_price_val <= 0.0 and callable(resolve_reward_price):
             prev_idx = max(row_idx - 1, 0) if row_idx is not None else 0
             prev_row = None
             if df is not None and prev_idx < len(df):

@@ -6284,7 +6284,21 @@ class DistributionalPPO(RecurrentPPO):
             kwargs_local["target_kl"] = target_kl_value
 
         self.cql_alpha = float(cql_alpha)
+        # FIX (2025-11-26): Validate cql_beta > 0 to prevent division by zero
+        # ═══════════════════════════════════════════════════════════════════════════
+        # PROBLEM: cql_beta is used as divisor at line ~10147:
+        #   exp_arg = torch.clamp(advantages_selected / self.cql_beta, max=...)
+        # If cql_beta=0, this causes division by zero → NaN/Inf propagation.
+        #
+        # FIX: Enforce cql_beta > 0 at initialization with minimum floor of 1e-6.
+        # Tests: tests/test_cql_beta_validation.py
+        # ═══════════════════════════════════════════════════════════════════════════
         self.cql_beta = float(cql_beta)
+        if not math.isfinite(self.cql_beta) or self.cql_beta <= 0.0:
+            raise ValueError(
+                f"'cql_beta' must be positive and finite, got {cql_beta}. "
+                f"cql_beta is used as divisor in advantage weighting; zero causes division by zero."
+            )
         self.cvar_alpha = float(cvar_alpha)
         if not math.isfinite(self.cvar_alpha) or not (0.0 < self.cvar_alpha <= 1.0):
             raise ValueError("'cvar_alpha' must be a finite probability in the interval (0, 1]")

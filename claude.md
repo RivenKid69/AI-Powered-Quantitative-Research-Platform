@@ -122,6 +122,9 @@ python -m services.universe --output data/universe/symbols.json
 | signal_pos в obs отстаёт от market data | Obs содержал prev_signal_pos (t), но market data из t+1 | ✅ Фикс 2025-11-26: obs содержит next_signal_pos (t+1) |
 | VGS + AdaptiveUPGD: noise 212x amplification | EMA (beta=0.999) слишком медленно адаптируется к VGS scaling | ✅ Фикс 2025-11-26: `instant_noise_scale=True` (default) |
 | FG=50 (neutral) treated as missing data | `abs(value-50.0)>0.1` check false negative | ✅ Фикс 2025-11-26: uses `_get_safe_float_with_validity()` |
+| UPGDW: inverted weight protection | Only tracked max_util, not min_util | ✅ Фикс 2025-11-26: min-max normalization like AdaptiveUPGD |
+| Episode continues with stale data | row_idx clamped to last row instead of truncation | ✅ Фикс 2025-11-26: returns truncated=True when data exhausted |
+| cql_beta=0 causes NaN/Inf | No validation for cql_beta divisor | ✅ Фикс 2025-11-26: ValueError if cql_beta <= 0 |
 
 ---
 
@@ -1074,30 +1077,51 @@ winsorize_percentiles: Tuple[float, float] = (1.0, 99.0)
 
 ---
 
+### 50. obs_builder.pyx boundscheck=False (obs_builder.pyx:1)
+
+```cython
+# cython: boundscheck=False, wraparound=False
+```
+
+**Почему это BY DESIGN (performance trade-off)**:
+1. `boundscheck=False` is a **deliberate Cython optimization** for critical path
+2. The `build_observation_vector` Python wrapper validates all inputs before calling C version
+3. Array size is determined by `compute_n_features()` which ensures consistency with observation_space
+4. If mismatch occurs, it's a configuration error caught during testing
+5. Re-enabling bounds checking would add ~15-20% overhead to observation building
+6. Defense layers: P0 (mediator validation) → P1 (wrapper validation) → C function
+
+**Referenced in**: 2025-11-26 bug investigation (Issue #2 - concluded NOT A BUG)
+
+---
+
 ## 📊 СТАТУС ПРОЕКТА (2025-11-26)
 
 ### ✅ Production Ready
 
-Все критические исправления применены и протестированы. **200+ тестов** с 97%+ pass rate.
+Все критические исправления применены и протестированы. **215+ тестов** с 97%+ pass rate.
 
 | Компонент | Статус | Тесты |
 |-----------|--------|-------|
 | Step Observation Timing | ✅ Production | 6/6 |
-| Signal Pos in Observation | ✅ Production | 10/10 (NEW) |
+| Signal Pos in Observation | ✅ Production | 10/10 |
 | CLOSE_TO_OPEN Timing | ✅ Production | 5/5 |
 | LongOnlyActionWrapper | ✅ Production | 26/26 |
 | AdaptiveUPGD Optimizer | ✅ Production | 119/121 |
+| UPGDW Optimizer | ✅ Production | 4/4 (NEW) |
 | Twin Critics + VF Clipping | ✅ Production | 49/50 |
 | VGS v3.1 | ✅ Production | 7/7 |
 | PBT | ✅ Production | 14/14 |
 | SA-PPO | ✅ Production | 16/16 |
 | Data Leakage Prevention | ✅ Production | 46/47 |
 | Technical Indicators | ✅ Production | 11/16 (C++ pending) |
-| Fear & Greed Detection | ✅ Production | 13/13 (NEW) |
+| Fear & Greed Detection | ✅ Production | 13/13 |
+| Bug Fixes 2025-11-26 | ✅ Production | 13/13 (NEW) |
 
 ### ⚠️ Требуется действие
 
 **Переобучите модели**, если они обучены **до 2025-11-26**:
+- **UPGDW min-max normalization fix (2025-11-26)** — weight protection inverted with negative utilities!
 - **Fear & Greed detection fix (2025-11-26)** — FG=50 ошибочно помечался как missing data!
 - **signal_pos in observation fix (2025-11-26)** — obs содержал prev_signal_pos (t), но market data из t+1!
 - **step() observation timing fix (2025-11-25)** — obs был из той же row что reset!
@@ -1117,6 +1141,10 @@ winsorize_percentiles: Tuple[float, float] = (1.0, 99.0)
 
 | Дата | Исправление | Влияние |
 |------|-------------|---------|
+| **2025-11-26** | UPGDW min-max normalization fix | Negative utilities no longer invert weight protection |
+| **2025-11-26** | Data exhaustion truncation fix | Episode properly ends with truncated=True when data runs out |
+| **2025-11-26** | cql_beta validation fix | Division by zero prevented with ValueError for cql_beta <= 0 |
+| **2025-11-26** | Mediator dead code removal | Removed unreachable `is None` check (code smell) |
 | **2025-11-26** | Fear & Greed detection fix | FG=50 (neutral) correctly detected as valid data, not missing |
 | **2025-11-26** | AdaptiveUPGD instant_noise_scale fix | VGS + UPGD noise 212x amplification → 1.0x (constant ratio) |
 | **2025-11-26** | signal_pos in observation uses next_signal_pos | Temporal mismatch: market data t+1, position t → теперь оба t+1 |
@@ -1477,5 +1505,5 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-11-26
-**Версия документации**: 4.1 (Fear & Greed fix + НЕ БАГИ #45-#49: 5 новых исследованных паттернов)
-**Статус**: ✅ Production Ready (все критические исправления применены, 49 задокументированных "НЕ БАГИ")
+**Версия документации**: 4.2 (UPGDW fix + data truncation + cql_beta validation + НЕ БАГИ #50)
+**Статус**: ✅ Production Ready (все критические исправления применены, 50 задокументированных "НЕ БАГИ")

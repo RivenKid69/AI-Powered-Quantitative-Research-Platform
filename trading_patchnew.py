@@ -1635,13 +1635,50 @@ class TradingEnv(gym.Env):
                 False,  # truncated
                 {"error": "empty_dataframe", "step_idx": row_idx},
             )
+        # FIX (2025-11-26): Return truncated=True when data is exhausted
+        # ═══════════════════════════════════════════════════════════════════════════
+        # PROBLEM: Original code clamped row_idx to last row and continued episode.
+        # This violated Gymnasium contract by providing stale/repeated data.
+        #
+        # IMPACT:
+        #   - Model sees duplicate observations at episode end
+        #   - LSTM hidden states update from stale input
+        #   - Episode doesn't terminate naturally
+        #
+        # FIX: Return truncated=True to end episode properly when data runs out.
+        # This is a TRUNCATION (not termination) because the episode ended due to
+        # external constraint (data length), not internal state (bankruptcy).
+        #
+        # Tests: tests/test_data_exhaustion_truncation.py
+        # ═══════════════════════════════════════════════════════════════════════════
         if row_idx >= len(self.df):
             logger.warning(
-                "TradingEnv.step: row_idx=%d >= len(df)=%d. Clamping to last row.",
+                "TradingEnv.step: row_idx=%d >= len(df)=%d. Truncating episode.",
                 row_idx,
                 len(self.df),
             )
-            row_idx = len(self.df) - 1
+            # Use last valid row for final observation
+            final_row_idx = len(self.df) - 1
+            final_row = self.df.iloc[final_row_idx]
+            try:
+                final_obs = self._mediator._build_observation(
+                    row=final_row,
+                    state=self.state,
+                    mark_price=self._safe_float(final_row.get("close", 0.0)) or 1.0,
+                )
+            except Exception:
+                final_obs = np.zeros(self.observation_space.shape, dtype=np.float32)
+            return (
+                final_obs,
+                0.0,  # No reward for truncation step
+                False,  # terminated (not bankruptcy)
+                True,  # truncated (data exhausted)
+                {
+                    "truncated_reason": "data_exhausted",
+                    "step_idx": row_idx,
+                    "df_len": len(self.df),
+                },
+            )
         row = self.df.iloc[row_idx]
         self._episode_length += 1
         self._assert_feature_timestamps(row)
