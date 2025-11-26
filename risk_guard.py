@@ -97,10 +97,32 @@ class RiskGuard:
         return abs(float(state.units)) * price
 
     def _update_equity_windows(self, ts: int, state, mid_price: float) -> Tuple[float, float, float]:
-        # Возвращает (nw, peak, dd_pct)
+        """
+        Возвращает (nw, peak, dd_pct) - net worth, rolling peak, drawdown percentage.
+
+        ═══════════════════════════════════════════════════════════════════════════
+        НЕ БАГ: ROLLING WINDOW DRAWDOWN (BY DESIGN)
+        ═══════════════════════════════════════════════════════════════════════════
+        Peak вычисляется как max(NW) в пределах СКОЛЬЗЯЩЕГО ОКНА (dd_window баров).
+        Это НАМЕРЕННОЕ поведение для "recent drawdown" метрики.
+
+        После заполнения окна старые значения уходят и peak может УМЕНЬШИТЬСЯ.
+        Это корректно для trading bot, который оценивает текущую просадку
+        относительно недавнего максимума, а не исторического.
+
+        Для ГЛОБАЛЬНОГО drawdown увеличьте dd_window в configs/risk.yaml:
+            risk_guard:
+              dd_window: 999999  # Практически бесконечное окно
+
+        Двойной max() выглядит избыточным но корректен:
+          max(max(window), nw) = max(всех элементов окна + текущий nw)
+
+        Reference: CLAUDE.md → "НЕ БАГИ" → #22
+        ═══════════════════════════════════════════════════════════════════════════
+        """
         nw = float(state.cash) + float(state.units) * float(mid_price)
         self._nw_hist.append((ts, nw))
-        # поддерживаем окно пиков; если окно пустое — инициализируем пиком=NW
+        # Rolling window peak: max NW in last dd_window bars
         if not self._peak_nw_window:
             self._peak_nw_window.append(nw)
             peak = nw

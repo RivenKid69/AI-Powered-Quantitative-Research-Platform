@@ -121,6 +121,29 @@ def _trip_if_needed(kind: str) -> None:
 
 
 def _trip() -> None:
+    """
+    Activate kill switch - stop all trading operations.
+
+    ═══════════════════════════════════════════════════════════════════════════
+    НЕ БАГ: CRASH RECOVERY И LOCKING DESIGN
+    ═══════════════════════════════════════════════════════════════════════════
+    1. _tripped = True устанавливается ПЕРВЫМ (in-memory protection)
+    2. Flag file пишется с retry (может упасть - OK, см. ниже)
+    3. _save_state() выполняется ВСЕГДА (после try/except pass)
+
+    CRASH RECOVERY гарантии:
+    - Если flag write упал но _save_state() успел → state содержит tripped=True
+    - Если flag write успел но _save_state() упал → flag file существует
+    - При старте проверяются ОБА (flag file ИЛИ state.tripped) → дублирование
+
+    I/O внутри lock (_save_state в record_error) - trade-off для consistency:
+    - Блокирует другие потоки на ~10-100ms (I/O)
+    - НО гарантирует атомарность counter + state
+    - Для production с высокой частотой ошибок можно добавить async writer
+
+    Reference: CLAUDE.md → "НЕ БАГИ" → #23
+    ═══════════════════════════════════════════════════════════════════════════
+    """
     global _tripped
     if _tripped:
         return
@@ -129,8 +152,8 @@ def _trip() -> None:
         _flag_path.parent.mkdir(parents=True, exist_ok=True)
         atomic_write_with_retry(_flag_path, "1", retries=3, backoff=0.1)
     except Exception:
-        pass
-    _save_state()
+        pass  # Flag write failure OK - _save_state below provides backup
+    _save_state()  # ALWAYS runs - provides crash recovery redundancy
 
 
 # ---------------------------------------------------------------------------

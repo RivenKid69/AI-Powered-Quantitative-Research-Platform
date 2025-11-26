@@ -133,7 +133,16 @@ class VarianceGradientScaler:
         self._param_grad_mean_ema: Optional[torch.Tensor] = None  # [num_params] - E[g]
         self._param_grad_sq_ema: Optional[torch.Tensor] = None    # [num_params] - E[g²]
         self._param_numel: Optional[torch.Tensor] = None          # [num_params] - num elements per param
-        self._param_ids: Dict[int, int] = {}                      # param id -> flat index
+        # ═══════════════════════════════════════════════════════════════════════════
+        # НЕ БАГ: _param_ids НЕ ИСПОЛЬЗУЕТСЯ И НЕ СОХРАНЯЕТСЯ В STATE_DICT
+        # ═══════════════════════════════════════════════════════════════════════════
+        # Это legacy/placeholder код. VGS работает через enumerate(self._parameters)
+        # напрямую в update_statistics(), не используя _param_ids для lookup.
+        # Поиск "_param_ids[" по коду даёт 0 результатов - словарь не читается.
+        # Не нужно добавлять в state_dict() - это не влияет на функциональность.
+        # Reference: CLAUDE.md → "НЕ БАГИ" → #18
+        # ═══════════════════════════════════════════════════════════════════════════
+        self._param_ids: Dict[int, int] = {}                      # UNUSED - legacy placeholder
 
         # LEGACY v1.x: Global statistics (spatial variance - kept for backward compat logging)
         # These are now computed for logging only, not used for scaling

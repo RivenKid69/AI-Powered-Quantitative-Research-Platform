@@ -3505,6 +3505,19 @@ class ExecutionSimulator:
                 self._used_base_in_bar[symbol_key] = used_after
                 used_base_now = used_after
             trade_notional = filled_price * qty_total
+            # ═══════════════════════════════════════════════════════════════════════
+            # НЕ БАГ: FEE COMPUTED ON FILLED_PRICE (INCLUDES SLIPPAGE)
+            # ═══════════════════════════════════════════════════════════════════════
+            # filled_price уже включает slippage от _apply_trade_cost_price().
+            # Fee вычисляется от ФАКТИЧЕСКОЙ цены исполнения — это КОРРЕКТНО!
+            #
+            # На реальной бирже комиссия взимается от actual fill price, не от
+            # теоретической цены без slippage. Это НЕ double-counting:
+            #   - Slippage: разница между expected и actual price (market impact)
+            #   - Fee: процент от actual fill price (биржевая комиссия)
+            #
+            # Reference: CLAUDE.md → "НЕ БАГИ" → #17
+            # ═══════════════════════════════════════════════════════════════════════
             fee = self._compute_trade_fee(
                 side=state.side,
                 price=filled_price,
@@ -11412,12 +11425,27 @@ class ExecutionSimulator:
                 if best_bid is not None or best_ask is not None:
                     if side == "BUY":
                         if best_ask is not None and price_q >= best_ask:
+                            # TAKER fill: limit price crosses spread → immediate fill at best_ask
                             filled_price = float(best_ask)
                             liquidity_role = "taker"
                             if self._last_liquidity is not None:
                                 exec_qty = min(qty_q, float(self._last_liquidity))
                             filled = exec_qty > 0.0
                         elif best_ask is not None and price_q < best_ask:
+                            # ═══════════════════════════════════════════════════════════════
+                            # НЕ БАГ: MAKER ORDER FILL LOGIC (НЕ "ИСПРАВЛЯТЬ"!)
+                            # ═══════════════════════════════════════════════════════════════
+                            # BUY LIMIT с ценой НИЖЕ best_ask НЕ заполняется мгновенно.
+                            # Заполнение происходит ТОЛЬКО если intrabar_fill_price (low бара)
+                            # достигает или опускается ниже лимитной цены.
+                            #
+                            # Пример: BUY LIMIT @ 100, best_ask = 101
+                            #   - Если bar_low = 99 → filled = True (цена достигла лимита)
+                            #   - Если bar_low = 100.5 → filled = False (цена не достигла)
+                            #
+                            # Это КОРРЕКТНАЯ симуляция maker orders. Не путать с taker fills!
+                            # Reference: CLAUDE.md → "НЕ БАГИ" → #16
+                            # ═══════════════════════════════════════════════════════════════
                             filled_price = float(price_q)
                             liquidity_role = "maker"
                             if (
@@ -11430,12 +11458,15 @@ class ExecutionSimulator:
                                 filled = False
                     else:  # SELL
                         if best_bid is not None and price_q <= best_bid:
+                            # TAKER fill: limit price crosses spread → immediate fill at best_bid
                             filled_price = float(best_bid)
                             liquidity_role = "taker"
                             if self._last_liquidity is not None:
                                 exec_qty = min(qty_q, float(self._last_liquidity))
                             filled = exec_qty > 0.0
                         elif best_bid is not None and price_q > best_bid:
+                            # НЕ БАГ: SELL LIMIT maker fill - аналогично BUY LIMIT выше
+                            # Заполняется только если intrabar_fill_price >= limit_price
                             filled_price = float(price_q)
                             liquidity_role = "maker"
                             if (

@@ -969,6 +969,22 @@ class CustomActorCriticPolicy(RecurrentActorCriticPolicy):
         # сохраняя совместимость по устройству.
         episode_starts = episode_starts.to(device=target_device, dtype=torch.float32)
 
+        # ═══════════════════════════════════════════════════════════════════════════════
+        # НЕ БАГ: РАЗНЫЕ ПУТИ ДЛЯ GRU И LSTM (BY DESIGN)
+        # ═══════════════════════════════════════════════════════════════════════════════
+        # GRU: обрабатывается ЛОКАЛЬНО с explicit reshape episode_starts
+        # LSTM: делегируется в RecurrentActorCriticPolicy._process_sequence (sb3_contrib)
+        #
+        # Это НАМЕРЕННАЯ асимметрия:
+        # 1. GRU проще (одно hidden state) — можем обработать напрямую
+        # 2. LSTM сложнее (h, c states) — используем базовый класс для совместимости
+        # 3. _process_sequence внутри делает тот же reshape для episode_starts
+        #
+        # Оба пути корректно обрабатывают episode boundaries (episode_starts).
+        # Production код протестирован и работает для обоих типов recurrent modules.
+        #
+        # Reference: CLAUDE.md → "НЕ БАГИ" → #27
+        # ═══════════════════════════════════════════════════════════════════════════════
         if isinstance(recurrent_module, nn.GRU):
             if not lstm_states:
                 raise ValueError("GRU ожидает хотя бы одно скрытое состояние")

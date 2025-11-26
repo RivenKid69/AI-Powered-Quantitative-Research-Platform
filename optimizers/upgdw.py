@@ -103,6 +103,17 @@ class UPGDW(torch.optim.Optimizer):
                 loss = closure()
 
         # First pass: compute utilities, moments, and find global maximum
+        # ═══════════════════════════════════════════════════════════════════════════
+        # НЕ БАГ: ИНИЦИАЛИЗАЦИЯ -inf ДЛЯ global_max_util
+        # ═══════════════════════════════════════════════════════════════════════════
+        # Если global_max_util остаётся -inf, это означает что ВСЕ параметры имели
+        # grad=None в первом проходе. Но тогда они ТАКЖЕ будут пропущены во втором
+        # проходе (if p.grad is None: continue), поэтому деление на -inf не произойдёт.
+        #
+        # Сценарий "gradients появляются между проходами" невозможен — оба прохода
+        # итерируют по одним и тем же параметрам синхронно в рамках одного step().
+        # Reference: CLAUDE.md → "НЕ БАГИ" → #19
+        # ═══════════════════════════════════════════════════════════════════════════
         global_max_util = torch.tensor(-torch.inf, device="cpu")
 
         for group in self.param_groups:

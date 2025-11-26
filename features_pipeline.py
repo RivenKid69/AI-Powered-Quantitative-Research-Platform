@@ -337,8 +337,18 @@ class FeaturePipeline:
             cols_to_shift = _columns_to_shift(frame_copy)
 
             if cols_to_shift:
-                # Shift all feature columns by 1 period
-                # This ensures consistent temporal alignment for all features
+                # ═══════════════════════════════════════════════════════════════════════
+                # НЕ БАГ: ВСЕ FEATURES СДВИГАЮТСЯ ВМЕСТЕ (НЕТ TEMPORAL MISMATCH)
+                # ═══════════════════════════════════════════════════════════════════════
+                # SMA, Return, RSI, и все остальные features сдвигаются на 1 период
+                # ОДНОВРЕМЕННО. Нет рассинхронизации между разными типами features.
+                #
+                # До shift: SMA[t] использует bars [t-lb:t], Return[t] = close[t]/close[t-1]
+                # После shift: SMA[t] и Return[t] оба представляют данные на момент t-1
+                # → Temporal alignment сохраняется!
+                #
+                # Reference: CLAUDE.md → "НЕ БАГИ" → #24
+                # ═══════════════════════════════════════════════════════════════════════
                 for col in cols_to_shift:
                     frame_copy[col] = frame_copy[col].shift(1)
 
@@ -575,13 +585,23 @@ class FeaturePipeline:
                 out[c + add_suffix] = z
                 continue  # Skip winsorization and standardization
 
-            # Apply winsorization bounds from training for consistency
-            # This ensures train/inference distribution match and prevents OOD z-scores
+            # ═══════════════════════════════════════════════════════════════════════
+            # НЕ БАГ: WINSORIZATION PREVENTS UNBOUNDED Z-SCORES
+            # ═══════════════════════════════════════════════════════════════════════
+            # Winsorization bounds из training применяются ДО вычисления z-score.
+            # Это предотвращает экстремальные z-scores (50+ sigma) при flash crashes.
+            #
+            # Пример: training bounds [95, 105], mean=100, std=5
+            #   - Flash crash: raw_price = 70 → clipped to 95
+            #   - z = (95 - 100) / 5 = -1.0 (reasonable, not -6.0!)
             #
             # Best practice references:
             # - Huber (1981) "Robust Statistics": Apply same robust procedure on train/test
             # - Scikit-learn RobustScaler: Clips test data using train quantiles
             # - De Prado (2018) "Advances in Financial ML": Consistent winsorization
+            #
+            # Reference: CLAUDE.md → "НЕ БАГИ" → #25
+            # ═══════════════════════════════════════════════════════════════════════
             if "winsorize_bounds" in ms:
                 lower, upper = ms["winsorize_bounds"]
                 v = np.clip(v, lower, upper)

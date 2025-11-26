@@ -2014,6 +2014,20 @@ class TradingEnv(gym.Env):
                 self.total_steps,
             )
 
+        # ═══════════════════════════════════════════════════════════════════════════
+        # НЕ БАГ: row_idx ДЛЯ REWARD, obs_row_idx ДЛЯ OBSERVATION (GYMNASIUM SEMANTICS)
+        # ═══════════════════════════════════════════════════════════════════════════
+        # Reward вычисляется от row_idx (текущий шаг) — это reward за ТЕКУЩЕЕ действие.
+        # Observation строится от obs_row_idx = next_idx (следующий шаг) — состояние ПОСЛЕ действия.
+        #
+        # step(action) returns (s_{t+1}, r_t, ...) по стандарту Gymnasium:
+        #   - s_{t+1}: observation из next_row (будущее состояние)
+        #   - r_t: reward за текущий переход (текущие цены)
+        #
+        # Это НЕ temporal mismatch — это корректная MDP семантика!
+        # Reference: https://gymnasium.farama.org/api/env/#gymnasium.Env.step
+        # Reference: CLAUDE.md → "НЕ БАГИ" → #26
+        # ═══════════════════════════════════════════════════════════════════════════
         reward_price_prev = (
             self._last_reward_price
             if self._last_reward_price > 0.0

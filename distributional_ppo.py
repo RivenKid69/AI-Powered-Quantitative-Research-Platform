@@ -3649,10 +3649,15 @@ class DistributionalPPO(RecurrentPPO):
 
         if alpha_idx_float < 0.0:
             # ═══════════════════════════════════════════════════════════════════════
-            # EXTRAPOLATION CASE: α < tau_0 (very small alpha, e.g., α=0.01 with N=21)
+            # НЕ БАГ: EXTRAPOLATION CASE HANDLES NEGATIVE alpha_idx_float
             # ═══════════════════════════════════════════════════════════════════════
+            # Для α < tau_0 (например, α=0.01 с N=21): alpha_idx_float = -0.29
+            # Этот branch обрабатывает случай ДО того как floor() даст -1.
+            # Negative indexing (q[:, -1] = последний элемент) НИКОГДА не достигается!
+            #
             # alpha is smaller than the first quantile center (tau_0 = 0.5/N)
             # Use linear extrapolation from first two quantiles
+            # Reference: CLAUDE.md → "НЕ БАГИ" → #21
             if num_quantiles >= 2:
                 q0 = predicted_quantiles[:, 0]  # Value at tau_0 = 0.5/N
                 q1 = predicted_quantiles[:, 1]  # Value at tau_1 = 1.5/N
@@ -3693,6 +3698,17 @@ class DistributionalPPO(RecurrentPPO):
             if frac > 1e-8 and full_mass < num_quantiles:
                 partial = predicted_quantiles[:, full_mass] * frac
             expectation = mass * (tail_sum + partial)
+            # ═══════════════════════════════════════════════════════════════════════
+            # НЕ БАГ: tail_mass = max(alpha, mass * (full_mass + frac))
+            # ═══════════════════════════════════════════════════════════════════════
+            # Формула МАТЕМАТИЧЕСКИ КОРРЕКТНА. max() защищает от underestimate из-за
+            # дискретизации квантилей. Пример для α=0.95, N=20:
+            #   mass = 1/20 = 0.05, k_float = 19, full_mass = 19, frac = 0
+            #   tail_mass = max(0.95, 0.05 * 19) = max(0.95, 0.95) = 0.95 ✓
+            #
+            # Для α=0.99, N=20: tail_mass = max(0.99, 0.05 * 19.8) = 0.99 ✓
+            # Reference: CLAUDE.md → "НЕ БАГИ" → #20
+            # ═══════════════════════════════════════════════════════════════════════
             tail_mass = max(alpha, mass * (full_mass + frac))
             # CRITICAL FIX #3: Protect against division by very small tail_mass
             # When alpha < 0.01, division can cause gradient explosion (1000x+ norm)

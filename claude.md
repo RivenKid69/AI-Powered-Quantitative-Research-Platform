@@ -471,6 +471,178 @@ if self._reward_signal_only:
 
 ---
 
+### 16. Limit Order Maker Fill Logic (execution_sim.py:11420-11448)
+
+```python
+elif best_ask is not None and price_q < best_ask:
+    filled_price = float(price_q)
+    liquidity_role = "maker"
+    if (intrabar_fill_price is not None
+        and intrabar_fill_price <= limit_price_value + tolerance):
+        maker_fill = True
+        filled = True
+    else:
+        filled = False  # ← НЕ заполняется если цена не достигла лимита!
+```
+
+**Почему это НЕ баг**: BUY LIMIT с ценой НИЖЕ best_ask НЕ заполняется мгновенно. Заполнение происходит ТОЛЬКО если `intrabar_fill_price` (low бара) достигает лимитной цены. Это корректная симуляция maker orders.
+
+---
+
+### 17. Fee Computed on Filled Price (execution_sim.py:3507-3526)
+
+```python
+trade_notional = filled_price * qty_total  # filled_price includes slippage
+fee = self._compute_trade_fee(price=filled_price, ...)  # Fee от actual fill price
+```
+
+**Почему это НЕ баг (НЕ double-counting)**:
+- **Slippage**: разница между expected и actual price (market impact)
+- **Fee**: процент от actual fill price (биржевая комиссия)
+
+На реальной бирже комиссия взимается от **фактической цены исполнения**. Это корректное поведение.
+
+---
+
+### 18. VGS _param_ids не сохраняется в state_dict (variance_gradient_scaler.py:136)
+
+```python
+self._param_ids: Dict[int, int] = {}  # UNUSED - legacy placeholder
+```
+
+**Почему это НЕ баг**: `_param_ids` **НИГДЕ НЕ ИСПОЛЬЗУЕТСЯ**! Поиск `_param_ids[` по коду даёт 0 результатов. VGS работает через `enumerate(self._parameters)` напрямую. Это мёртвый/placeholder код.
+
+---
+
+### 19. UPGDW global_max_util = -inf (optimizers/upgdw.py:106)
+
+```python
+global_max_util = torch.tensor(-torch.inf, device="cpu")
+# В первом проходе обновляется если есть gradients
+# Во втором проходе используется для scaled_utility
+```
+
+**Почему это НЕ баг**: Если `global_max_util` остаётся `-inf`, это означает что ВСЕ параметры имели `grad=None` в первом проходе. Но тогда они ТАКЖЕ будут пропущены во втором проходе (`if p.grad is None: continue`). Деление на `-inf` не произойдёт.
+
+---
+
+### 20. CVaR tail_mass = max(alpha, mass * (full_mass + frac)) (distributional_ppo.py:3696)
+
+```python
+tail_mass = max(alpha, mass * (full_mass + frac))
+# Для α=0.95, N=20: tail_mass = max(0.95, 0.05*19) = 0.95 ✓
+```
+
+**Почему это НЕ баг**: Формула **математически корректна**. `max()` защищает от underestimate из-за дискретизации квантилей. Результат всегда ≥ alpha.
+
+---
+
+### 21. CVaR alpha_idx_float < 0 → Extrapolation (distributional_ppo.py:3650-3678)
+
+```python
+if alpha_idx_float < 0.0:
+    # EXTRAPOLATION CASE: handles negative alpha_idx_float
+    # This branch executes BEFORE floor() could give -1
+```
+
+**Почему это НЕ баг**: Отрицательный `alpha_idx_float` (для α < tau_0) обрабатывается **отдельным branch** через экстраполяцию. Negative indexing `q[:, -1]` **НИКОГДА не достигается**.
+
+---
+
+### 22. Rolling Window Drawdown Peak (risk_guard.py:99-133)
+
+```python
+peak = max(max(self._peak_nw_window, default=nw), nw)
+# _peak_nw_window is a deque with maxlen=dd_window
+```
+
+**Почему это НЕ баг (BY DESIGN)**: Peak вычисляется в пределах **СКОЛЬЗЯЩЕГО ОКНА** (`dd_window` баров). Это **намеренное** поведение для "recent drawdown" метрики. После заполнения окна peak может уменьшиться — это корректно.
+
+Для глобального drawdown: `dd_window: 999999` в configs/risk.yaml.
+
+---
+
+### 23. Kill Switch Crash Recovery (services/ops_kill_switch.py:123-156)
+
+```python
+def _trip() -> None:
+    _tripped = True  # 1. In-memory first
+    try:
+        atomic_write_with_retry(_flag_path, "1", ...)  # 2. Flag file
+    except Exception:
+        pass  # OK - _save_state provides backup
+    _save_state()  # 3. ALWAYS runs
+```
+
+**Почему это НЕ баг**: Crash recovery обеспечивается **дублированием**:
+- Если flag write упал → state содержит `tripped=True`
+- Если _save_state упал → flag file существует
+- При старте проверяются ОБА
+
+I/O внутри lock — trade-off для consistency, не race condition.
+
+---
+
+### 24. All Features Shifted Together (features_pipeline.py:339-353)
+
+```python
+for col in cols_to_shift:
+    frame_copy[col] = frame_copy[col].shift(1)
+```
+
+**Почему это НЕ баг (НЕТ temporal mismatch)**: SMA, Return, RSI и **ВСЕ** features сдвигаются на 1 период **ОДНОВРЕМЕННО**. После shift они все представляют данные на момент t-1. Temporal alignment сохраняется.
+
+---
+
+### 25. Winsorization Prevents Unbounded Z-scores (features_pipeline.py:588-607)
+
+```python
+if "winsorize_bounds" in ms:
+    lower, upper = ms["winsorize_bounds"]
+    v = np.clip(v, lower, upper)  # Clipping BEFORE z-score!
+z = (v - ms["mean"]) / ms["std"]
+```
+
+**Почему это НЕ баг**: Winsorization bounds из training применяются **ДО** вычисления z-score. Flash crash: raw=70 → clipped=95 → z=-1.0 (не -6.0!). Экстремальные 50+ sigma z-scores предотвращены.
+
+---
+
+### 26. row_idx для Reward, obs_row_idx для Observation (trading_patchnew.py:2017-2036)
+
+```python
+reward_price_curr = self._resolve_reward_price(row_idx, row)  # Current step
+# ... while observation uses next_row (obs_row_idx = next_idx)
+```
+
+**Почему это НЕ баг (GYMNASIUM SEMANTICS)**:
+- `step(action)` returns `(s_{t+1}, r_t, ...)` по стандарту Gymnasium
+- `s_{t+1}`: observation из next_row (будущее состояние)
+- `r_t`: reward за текущий переход (текущие цены)
+
+Это **корректная MDP семантика**, не temporal mismatch!
+
+---
+
+### 27. GRU vs LSTM Different Paths (custom_policy_patch1.py:972-1012)
+
+```python
+if isinstance(recurrent_module, nn.GRU):
+    # Handle locally with explicit reshape
+    episode_starts = episode_starts.reshape((n_seq, -1)).swapaxes(0, 1)
+    ...
+else:  # LSTM
+    # Delegate to base class _process_sequence
+    return RecurrentActorCriticPolicy._process_sequence(...)
+```
+
+**Почему это НЕ баг (BY DESIGN)**:
+- GRU проще (одно hidden state) → обрабатывается локально
+- LSTM сложнее (h, c states) → делегируется в базовый класс sb3_contrib
+- `_process_sequence` внутри делает тот же reshape для episode_starts
+- Оба пути корректно обрабатывают episode boundaries
+
+---
+
 ## 📊 СТАТУС ПРОЕКТА (2025-11-26)
 
 ### ✅ Production Ready
@@ -871,5 +1043,5 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-11-26
-**Версия документации**: 3.7 (AdaptiveUPGD instant_noise_scale + signal_pos temporal alignment)
+**Версия документации**: 3.8 (Добавлены НЕ БАГИ #16-#27: 12 паттернов кода задокументированы)
 **Статус**: ✅ Production Ready (все критические исправления применены)
