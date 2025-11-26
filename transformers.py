@@ -199,13 +199,28 @@ def _try_calculate_yang_zhang(ohlc_bars: List[Dict[str, float]], n: int) -> Opti
         if rs_count == 0:
             return None
 
-        # CRITICAL FIX #2: Apply Bessel's correction to Rogers-Satchell component
-        # Use (n-1) instead of n for consistent sample variance estimation
-        # This aligns with σ_o and σ_c which already use (len-1)
-        # Reference: Casella & Berger (2002) "Statistical Inference" - unbiased sample variance
-        if rs_count < 2:
-            return None
-        sigma_rs_sq = rs_sum / (rs_count - 1)
+        # FIX (2025-11-26): Rogers-Satchell uses n, NOT (n-1)
+        # ═══════════════════════════════════════════════════════════════════════════
+        # The original Yang-Zhang (2000) formula specifies:
+        #   σ²_rs = (1/n) Σ[log(H/C)·log(H/O) + log(L/C)·log(L/O)]
+        #
+        # This is DIFFERENT from σ_o and σ_c which use (n-1) because:
+        # 1. σ_o and σ_c are CENTERED estimators (subtract mean) → Bessel's correction
+        # 2. σ_rs is an UNCENTERED sum → uses n, not (n-1)
+        #
+        # The RS estimator is NOT a sample variance — it's an average of products.
+        # Bessel's correction applies ONLY to centered sample variance estimates.
+        #
+        # Previous "CRITICAL FIX #2" was incorrect — it inflated RS by n/(n-1):
+        #   +11.1% for n=10
+        #   +2.0% for n=50
+        #
+        # Reference: Yang, D. & Zhang, Q. (2000) "Drift-Independent Volatility
+        #            Estimation Based on High, Low, Open, and Close Prices"
+        # Reference: Rogers, L.C.G. & Satchell, S.E. (1991) "Estimating Variance
+        #            from High, Low and Closing Prices"
+        # ═══════════════════════════════════════════════════════════════════════════
+        sigma_rs_sq = rs_sum / rs_count
 
         # Комбинированная Yang-Zhang волатильность
         sigma_yz_sq = sigma_o_sq + k * sigma_c_sq + (1 - k) * sigma_rs_sq

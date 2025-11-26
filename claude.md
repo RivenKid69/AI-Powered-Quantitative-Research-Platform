@@ -125,6 +125,9 @@ python -m services.universe --output data/universe/symbols.json
 | UPGDW: inverted weight protection | Only tracked max_util, not min_util | ✅ Фикс 2025-11-26: min-max normalization like AdaptiveUPGD |
 | Episode continues with stale data | row_idx clamped to last row instead of truncation | ✅ Фикс 2025-11-26: returns truncated=True when data exhausted |
 | cql_beta=0 causes NaN/Inf | No validation for cql_beta divisor | ✅ Фикс 2025-11-26: ValueError if cql_beta <= 0 |
+| Twin Critics categorical VF clipping no effect | `_project_distribution` was identity stub | ✅ Фикс 2025-11-26: uses `_project_categorical_distribution` |
+| Yang-Zhang volatility inflated ~11% for n=10 | RS component used (n-1) instead of n | ✅ Фикс 2025-11-26: RS now uses n per original formula |
+| `_project_categorical_distribution` shape error | 1D atoms not expanded to batch_size | ✅ Фикс 2025-11-26: proper batch expansion |
 
 ---
 
@@ -1116,7 +1119,7 @@ winsorize_percentiles: Tuple[float, float] = (1.0, 99.0)
 | Data Leakage Prevention | ✅ Production | 46/47 |
 | Technical Indicators | ✅ Production | 11/16 (C++ pending) |
 | Fear & Greed Detection | ✅ Production | 13/13 |
-| Bug Fixes 2025-11-26 | ✅ Production | 13/13 (NEW) |
+| Bug Fixes 2025-11-26 | ✅ Production | 22/22 (includes projection+YZ fixes) |
 
 ### ⚠️ Требуется действие
 
@@ -1141,6 +1144,9 @@ winsorize_percentiles: Tuple[float, float] = (1.0, 99.0)
 
 | Дата | Исправление | Влияние |
 |------|-------------|---------|
+| **2025-11-26** | Twin Critics categorical VF clipping projection fix | `_project_distribution` was identity stub → now uses proper C51 projection |
+| **2025-11-26** | Yang-Zhang RS denominator fix | RS used (n-1) instead of n → +11% inflation for n=10 removed |
+| **2025-11-26** | `_project_categorical_distribution` batch shape fix | Shape mismatch for 1D atoms with batched probs → properly expands |
 | **2025-11-26** | UPGDW min-max normalization fix | Negative utilities no longer invert weight protection |
 | **2025-11-26** | Data exhaustion truncation fix | Episode properly ends with truncated=True when data runs out |
 | **2025-11-26** | cql_beta validation fix | Division by zero prevented with ValueError for cql_beta <= 0 |
@@ -1505,5 +1511,5 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-11-26
-**Версия документации**: 4.2 (UPGDW fix + data truncation + cql_beta validation + НЕ БАГИ #50)
+**Версия документации**: 4.4 (Twin Critics categorical VF clipping fix + Yang-Zhang RS denominator fix)
 **Статус**: ✅ Production Ready (все критические исправления применены, 50 задокументированных "НЕ БАГИ")

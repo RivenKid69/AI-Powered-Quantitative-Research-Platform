@@ -3376,11 +3376,19 @@ class DistributionalPPO(RecurrentPPO):
             atoms_shifted_2 = atoms + delta_norm_2.squeeze(-1)
 
             # Project current distributions onto shifted atoms
-            clipped_probs_1 = self._project_distribution(
-                current_probs_1, atoms, atoms_shifted_1
+            # FIX (2025-11-26): Use _project_categorical_distribution (proper C51 projection)
+            # instead of _project_distribution (stub returning identity).
+            # This fixes Twin Critics categorical VF clipping which was non-functional.
+            # Reference: Bellemare et al. (2017) "A Distributional Perspective on RL"
+            clipped_probs_1 = self._project_categorical_distribution(
+                probs=current_probs_1,
+                source_atoms=atoms_shifted_1,
+                target_atoms=atoms,
             )
-            clipped_probs_2 = self._project_distribution(
-                current_probs_2, atoms, atoms_shifted_2
+            clipped_probs_2 = self._project_categorical_distribution(
+                probs=current_probs_2,
+                source_atoms=atoms_shifted_2,
+                target_atoms=atoms,
             )
 
             # Compute clipped losses (cross-entropy with clipped distributions)
@@ -3435,7 +3443,14 @@ class DistributionalPPO(RecurrentPPO):
         atoms_dst: torch.Tensor,
     ) -> torch.Tensor:
         """
-        Project a categorical distribution from source atoms to destination atoms.
+        DEPRECATED: Use _project_categorical_distribution instead.
+
+        This function was a stub that returned identity projection.
+        It has been replaced by _project_categorical_distribution which
+        implements proper C51 projection (Bellemare et al. 2017).
+
+        This wrapper is kept for backward compatibility but will be removed
+        in a future version.
 
         Args:
             probs: Source probabilities [batch, n_atoms]
@@ -3445,16 +3460,18 @@ class DistributionalPPO(RecurrentPPO):
         Returns:
             Projected probabilities [batch, n_atoms]
         """
-        # Simple nearest-neighbor projection (can be improved with linear interpolation)
-        batch_size = probs.shape[0]
-        n_atoms = probs.shape[1]
-
-        if atoms_dst.dim() == 1:
-            atoms_dst = atoms_dst.unsqueeze(0).expand(batch_size, -1)
-
-        # For simplicity, use identity projection (can be improved)
-        # TODO: Implement proper distribution projection (e.g., Bellemare et al. 2017)
-        return probs
+        import warnings
+        warnings.warn(
+            "_project_distribution is deprecated. Use _project_categorical_distribution instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        # Delegate to proper implementation
+        return self._project_categorical_distribution(
+            probs=probs,
+            source_atoms=atoms_src,
+            target_atoms=atoms_dst,
+        )
 
     def _quantile_huber_loss(
         self,
@@ -3812,11 +3829,18 @@ class DistributionalPPO(RecurrentPPO):
         batch_size = probs.shape[0]
         num_atoms = probs.shape[1]
 
-        # Ensure atoms are properly shaped for broadcasting
+        # Ensure atoms are properly shaped for batch operations
+        # FIX (2025-11-26): Must expand to batch_size, not just [1, num_atoms]
+        # because downstream operations (like same_bounds handling) expect
+        # tensors with matching batch dimensions.
         if source_atoms.dim() == 1:
-            source_atoms = source_atoms.view(1, -1)
+            source_atoms = source_atoms.unsqueeze(0).expand(batch_size, -1)
+        elif source_atoms.shape[0] == 1 and batch_size > 1:
+            source_atoms = source_atoms.expand(batch_size, -1)
         if target_atoms.dim() == 1:
-            target_atoms = target_atoms.view(1, -1)
+            target_atoms = target_atoms.unsqueeze(0).expand(batch_size, -1)
+        elif target_atoms.shape[0] == 1 and batch_size > 1:
+            target_atoms = target_atoms.expand(batch_size, -1)
 
         # Validate num_atoms to prevent division by zero
         if num_atoms <= 1:
