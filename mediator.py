@@ -1402,15 +1402,20 @@ class Mediator:
         last_agent_fill_ratio = self._coerce_finite(getattr(state, "last_agent_fill_ratio", 0.0), default=0.0)
 
         # Fear & Greed
-        fear_greed_value = self._get_safe_float(row, "fear_greed_value", 50.0)
-        has_fear_greed = abs(fear_greed_value - 50.0) > 0.1  # Check if we have real FG data
+        # FIX (2025-11-26): Use _get_safe_float_with_validity to properly detect missing data.
+        # PREVIOUS BUG: abs(value - 50.0) > 0.1 gave false negative when FG=50 (neutral).
+        # FG=50 is a valid value meaning "neutral sentiment", NOT missing data!
+        fear_greed_value, has_fear_greed = self._get_safe_float_with_validity(
+            row, "fear_greed_value", default=50.0, min_value=0.0, max_value=100.0
+        )
 
         # Event metadata
         is_high_importance = self._get_safe_float(row, "is_high_importance", 0.0)
         time_since_event = self._get_safe_float(row, "time_since_event", 0.0)
 
         # Risk-off flag (simplified: based on fear & greed)
-        risk_off_flag = fear_greed_value < 25.0
+        # Only set risk-off if we have valid FG data AND it indicates extreme fear
+        risk_off_flag = has_fear_greed and fear_greed_value < 25.0
 
         # Token metadata (single token by default)
         token_id = getattr(state, "token_index", 0)
