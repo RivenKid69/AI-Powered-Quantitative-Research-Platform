@@ -265,14 +265,30 @@ class PBTScheduler:
     ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any], Optional[str]]:
         """Perform exploitation and exploration for a population member.
 
+        ═══════════════════════════════════════════════════════════════════════════════
+        НЕ БАГ #52: VGS STATE IS PROPERLY HANDLED DURING PBT EXPLOIT
+        ═══════════════════════════════════════════════════════════════════════════════
+        When loading v2_full_parameters checkpoint, VGS state is INCLUDED:
+        - Line 357: has_vgs = "vgs_state" in new_parameters
+        - Line 359-361: Logs VGS state presence
+        - Caller (DistributionalPPO.set_parameters) restores VGS via _restore_vgs_state()
+
+        This ensures gradient variance statistics are transferred along with model weights,
+        maintaining VGS consistency after PBT exploitation.
+
+        Reference: CLAUDE.md → "НЕ БАГИ" → #52
+        ═══════════════════════════════════════════════════════════════════════════════
+
         Args:
             member: Population member to update
             model_state_dict: DEPRECATED. Current model state dict (unused, for backward compatibility)
 
         Returns:
             Tuple of (new_model_parameters, new_hyperparams, checkpoint_format)
-            - new_model_parameters: Full model parameters (includes VGS state and optimizer state)
-                                   if exploitation occurred, None otherwise
+            - new_model_parameters: Full model parameters including:
+                * Policy/value network weights
+                * VGS state (gradient variance statistics) - ALWAYS included in v2
+                * Optimizer state (optional, depends on strategy)
             - new_hyperparams: Updated hyperparameters
             - checkpoint_format: "v2_full_parameters", "v1_policy_only", or None
 

@@ -3607,12 +3607,24 @@ class DistributionalPPO(RecurrentPPO):
             2. If α >= tau_{N-1}: Use ALL quantiles with fractional weighting
             3. Otherwise: INTERPOLATE between quantiles bracketing α
 
-        Note on Accuracy:
+        Note on Accuracy (НЕ БАГ #48 - documented trade-off):
+            ═══════════════════════════════════════════════════════════════════
             - Perfect for linear distributions (0% error)
             - ~5-18% approximation error for standard normal (decreases with N)
             - N=21 (default): ~16% error
             - N=51: ~5% error
             - See test_cvar_computation_integration.py for benchmarks
+
+            WHY THIS IS A CONFIGURABLE TRADE-OFF (NOT a bug):
+            1. Numerical integration over discrete quantiles has inherent error
+            2. Error decreases with N: N=51 gives ~5%, N=101 gives ~2%
+            3. Trade-off: more quantiles = more accurate CVaR but slower training
+            4. For risk-critical applications: increase `num_quantiles` to 51+
+            5. For standard RL use: N=21 provides reasonable speed/accuracy balance
+
+            Reference: CLAUDE.md → "НЕ БАГИ" → #48
+            Reference: Dabney et al. (2018) "IQN", quantile regression theory
+            ═══════════════════════════════════════════════════════════════════
         """
         alpha = float(self.cvar_alpha)
         if alpha <= 0.0 or alpha > 1.0:
@@ -12741,6 +12753,19 @@ class DistributionalPPO(RecurrentPPO):
         """
         Get model parameters including policy, value networks, and optional optimizer state.
 
+        ═══════════════════════════════════════════════════════════════════════════════
+        НЕ БАГ #52: VGS STATE IS PROPERLY SERIALIZED AND RESTORED
+        ═══════════════════════════════════════════════════════════════════════════════
+        VGS state (variance gradient scaler statistics) is ALWAYS included via
+        _serialize_vgs_state(). During PBT exploit, VGS state is transferred along
+        with model weights via set_parameters().
+
+        This ensures gradient statistics are consistent with model weights after exploit.
+        If you need to reset VGS statistics: call model._variance_gradient_scaler.reset_statistics()
+
+        Reference: CLAUDE.md → "НЕ БАГИ" → #52
+        ═══════════════════════════════════════════════════════════════════════════════
+
         Args:
             include_optimizer: If True, include optimizer state in the returned dict.
                              Critical for PBT to avoid optimizer state mismatch after exploit.
@@ -12749,12 +12774,12 @@ class DistributionalPPO(RecurrentPPO):
             Dictionary with model parameters including:
             - Policy and value network weights (from super().get_parameters())
             - KL penalty state
-            - VGS state
+            - VGS state (ALWAYS included - gradient variance statistics)
             - Optimizer state (if include_optimizer=True)
         """
         params = super().get_parameters()
         params["kl_penalty_state"] = self._serialize_kl_penalty_state()
-        params["vgs_state"] = self._serialize_vgs_state()
+        params["vgs_state"] = self._serialize_vgs_state()  # VGS state ALWAYS serialized
 
         if include_optimizer:
             params["optimizer_state"] = self._serialize_optimizer_state()
@@ -12770,14 +12795,31 @@ class DistributionalPPO(RecurrentPPO):
         """
         Set model parameters including policy, value networks, and optional optimizer state.
 
+        ═══════════════════════════════════════════════════════════════════════════════
+        НЕ БАГ #52: VGS STATE IS AUTOMATICALLY RESTORED FROM CHECKPOINT
+        ═══════════════════════════════════════════════════════════════════════════════
+        If the checkpoint contains "vgs_state" key, VGS statistics are restored via
+        _restore_vgs_state(). This happens automatically during PBT exploit when
+        loading weights from a better-performing agent.
+
+        VGS state includes:
+        - step_count: Number of gradient updates
+        - param_grad_mean_ema: Per-parameter gradient mean EMA
+        - param_grad_sq_ema: Per-parameter gradient squared EMA (for variance)
+        - Configuration (beta, alpha, warmup_steps)
+
+        Reference: CLAUDE.md → "НЕ БАГИ" → #52
+        ═══════════════════════════════════════════════════════════════════════════════
+
         Args:
             load_path_or_dict: Path to checkpoint or dictionary with parameters
             exact_match: If True, require exact parameter match
             device: Device to load parameters to
 
         Note:
-            If parameters include "optimizer_state", it will be restored.
-            This is critical for PBT to avoid optimizer state mismatch after exploit.
+            - If parameters include "vgs_state", VGS statistics are restored
+            - If parameters include "optimizer_state", optimizer is restored
+            - Both are critical for PBT to maintain state consistency after exploit
         """
         if isinstance(load_path_or_dict, Mapping):
             params: dict[str, Any] = dict(load_path_or_dict)

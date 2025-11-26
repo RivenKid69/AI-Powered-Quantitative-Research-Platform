@@ -1,3 +1,28 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# FEATURE CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════════
+# This module defines the observation feature layout for the trading environment.
+#
+# НЕ БАГ #50: FEATURE DIMENSION SYNCHRONIZATION RISK IS ADDRESSED BY DESIGN
+# ═══════════════════════════════════════════════════════════════════════════════
+# FEATURES_LAYOUT defines block sizes, but the ACTUAL observation vector is ALWAYS
+# built by obs_builder.pyx:build_observation_vector_c(). This file is ONLY used for:
+# 1. Size calculation via compute_n_features()
+# 2. Documentation of feature order
+#
+# DEFENSE IN DEPTH:
+# - P0: mediator validation (validates inputs before obs_builder)
+# - P1: obs_builder Python wrapper validates array sizes
+# - P2: obs_builder.pyx builds actual vector (Cython boundscheck=False for speed)
+# - P3: observation_space.shape is set from compute_n_features(FEATURES_LAYOUT)
+#
+# If layout changes:
+# 1. Update BOTH this file AND obs_builder.pyx:build_observation_vector_c()
+# 2. Run pytest tests/test_feature_*.py to verify consistency
+#
+# Reference: CLAUDE.md → "НЕ БАГИ" → #50
+# ═══════════════════════════════════════════════════════════════════════════════
+
 # Default normalization constants
 DEFAULT_TANH_CLIP = 0.999
 OBS_EPS = 1e-8
@@ -18,8 +43,11 @@ def make_layout(obs_params=None):
     ext_dim = obs_params.get('ext_norm_dim', EXT_NORM_DIM)
     include_fear = obs_params.get('include_fear_greed', obs_params.get('use_dynamic_risk', False))
     # Define feature blocks
-    # IMPORTANT: This order MUST match obs_builder.pyx build_observation_vector_c() implementation!
+    # ═══════════════════════════════════════════════════════════════════════════
+    # CRITICAL: This order MUST match obs_builder.pyx build_observation_vector_c()!
     # See obs_builder.pyx:236-590 for the exact order of feature construction.
+    # If you modify this, update obs_builder.pyx AND run feature tests!
+    # ═══════════════════════════════════════════════════════════════════════════
     layout = []
 
     # Block 1: Bar-level features (indices 0-2)

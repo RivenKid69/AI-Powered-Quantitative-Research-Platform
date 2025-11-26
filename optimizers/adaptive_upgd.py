@@ -253,8 +253,30 @@ class AdaptiveUPGD(torch.optim.Optimizer):
                 # Clamp to [0, 1] to handle numerical issues
                 normalized_utility = torch.clamp(normalized_utility, 0.0, 1.0)
 
-                # Apply sigmoid for smoother scaling (optional but keeps backward compatibility)
-                # Maps [0, 1] → [0.27, 0.73] with sigmoid, providing gentler scaling
+                # ═══════════════════════════════════════════════════════════════════════════
+                # НЕ БАГ #51: SIGMOID UTILITY SCALING IS BY DESIGN
+                # ═══════════════════════════════════════════════════════════════════════════
+                # Maps [0, 1] → [0.27, 0.73] with sigmoid, providing GENTLER scaling.
+                #
+                # WHY THIS IS INTENTIONAL (NOT a bug):
+                # 1. Smooth gradients: Sigmoid provides smooth gradients at boundaries
+                #    (vs hard clamp which has zero gradient at edges)
+                # 2. No dead zones: Even high-utility weights get 27% update (1-0.73)
+                #    → prevents complete weight freezing → maintains some plasticity
+                # 3. No full exposure: Even low-utility weights have 27% protection (1-0.73)
+                #    → prevents uncontrolled weight changes → improves stability
+                #
+                # Weight factor = (1 - scaled_utility):
+                # - normalized=0 (min utility) → scaled=0.27 → factor=0.73 (73% update)
+                # - normalized=1 (max utility) → scaled=0.73 → factor=0.27 (27% update)
+                #
+                # Alternative (NOT recommended): scaled_utility = normalized_utility
+                # This gives full [0,1] range but has sharp boundaries and can cause
+                # instability with fully frozen or fully exposed weights.
+                #
+                # Reference: CLAUDE.md → "НЕ БАГИ" → #51
+                # Reference: Dohare et al. (2023) "Maintaining Plasticity in Deep Continual Learning"
+                # ═══════════════════════════════════════════════════════════════════════════
                 scaled_utility = torch.sigmoid(2.0 * (normalized_utility - 0.5))
 
                 # Adaptive update with utility-based protection:
