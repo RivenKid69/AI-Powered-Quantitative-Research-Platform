@@ -8068,7 +8068,8 @@ class DistributionalPPO(RecurrentPPO):
             with torch.no_grad():
                 # CRITICAL: Run forward pass on terminal_obs to get fresh LSTM states
                 # This updates LSTM hidden state to correspond to terminal_obs
-                _, fresh_lstm_states = self.policy.forward(
+                # forward() returns (scores, values, log_prob, new_states)
+                _, _, _, fresh_lstm_states = self.policy.forward(
                     obs_tensor,
                     value_states,  # Start from current env's states
                     episode_starts_tensor,
