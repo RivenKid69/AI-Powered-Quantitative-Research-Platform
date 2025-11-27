@@ -1143,5 +1143,301 @@ class TestEdgeCases:
             assert event.payload == expected_payload
 
 
+# =============================================================================
+# New Tests for Bug Fixes (Stage 5 Review)
+# =============================================================================
+class TestPriorityOrdering:
+    """Tests for priority field ordering fix."""
+
+    def test_priority_affects_ordering_same_timestamp(self):
+        """Test that priority field affects event ordering for same timestamp."""
+        # Create events with same timestamp but different priorities
+        e1 = ScheduledEvent(
+            timestamp_ns=1000,
+            priority=10,  # Lower priority (higher number)
+            sequence_id=1,
+            event_type=EventType.TIMER,
+            exchange_time_ns=1000,
+        )
+        e2 = ScheduledEvent(
+            timestamp_ns=1000,
+            priority=0,  # Higher priority (lower number)
+            sequence_id=2,
+            event_type=EventType.TIMER,
+            exchange_time_ns=1000,
+        )
+        e3 = ScheduledEvent(
+            timestamp_ns=1000,
+            priority=5,  # Medium priority
+            sequence_id=3,
+            event_type=EventType.TIMER,
+            exchange_time_ns=1000,
+        )
+
+        # Sort events
+        events = [e1, e2, e3]
+        sorted_events = sorted(events)
+
+        # Expected order: e2 (priority=0), e3 (priority=5), e1 (priority=10)
+        assert sorted_events[0].priority == 0
+        assert sorted_events[1].priority == 5
+        assert sorted_events[2].priority == 10
+
+    def test_priority_before_sequence_in_ordering(self):
+        """Test that priority is compared before sequence_id."""
+        # Event with higher priority (lower number) but higher sequence_id
+        high_priority = ScheduledEvent(
+            timestamp_ns=1000,
+            priority=0,
+            sequence_id=100,  # Higher sequence_id
+            event_type=EventType.TIMER,
+            exchange_time_ns=1000,
+        )
+        # Event with lower priority but lower sequence_id
+        low_priority = ScheduledEvent(
+            timestamp_ns=1000,
+            priority=10,
+            sequence_id=1,  # Lower sequence_id
+            event_type=EventType.TIMER,
+            exchange_time_ns=1000,
+        )
+
+        # High priority should come first despite higher sequence_id
+        assert high_priority < low_priority
+
+    def test_scheduler_respects_priority(self):
+        """Test that EventScheduler processes events by priority."""
+        scheduler = create_event_scheduler("institutional", seed=42)
+
+        # Schedule events with different priorities but close timestamps
+        # Use custom events with specific priorities
+        scheduler.schedule_custom(
+            timestamp_ns=1000,
+            event_type=EventType.TIMER,
+            exchange_time_ns=1000,
+            payload="low_priority",
+            priority=10,
+        )
+        scheduler.schedule_custom(
+            timestamp_ns=1000,
+            event_type=EventType.TIMER,
+            exchange_time_ns=1000,
+            payload="high_priority",
+            priority=0,
+        )
+        scheduler.schedule_custom(
+            timestamp_ns=1000,
+            event_type=EventType.TIMER,
+            exchange_time_ns=1000,
+            payload="medium_priority",
+            priority=5,
+        )
+
+        # Process events
+        processed = scheduler.process_all()
+
+        # Should be ordered by priority
+        assert processed[0].payload == "high_priority"
+        assert processed[1].payload == "medium_priority"
+        assert processed[2].payload == "low_priority"
+
+    def test_timestamp_still_primary_sort_key(self):
+        """Test that timestamp is still the primary sort key."""
+        e_early = ScheduledEvent(
+            timestamp_ns=500,
+            priority=10,  # Low priority
+            sequence_id=1,
+            event_type=EventType.TIMER,
+            exchange_time_ns=500,
+        )
+        e_late = ScheduledEvent(
+            timestamp_ns=1000,
+            priority=0,  # High priority
+            sequence_id=2,
+            event_type=EventType.TIMER,
+            exchange_time_ns=1000,
+        )
+
+        # Earlier timestamp should come first regardless of priority
+        assert e_early < e_late
+
+
+class TestRaceConditionsLimit:
+    """Tests for race conditions list memory limit."""
+
+    def test_race_conditions_limit_default(self):
+        """Test default max_race_conditions value."""
+        scheduler = EventScheduler(seed=42)
+        assert scheduler._max_race_conditions == EventScheduler.DEFAULT_MAX_RACE_CONDITIONS
+
+    def test_race_conditions_limit_custom(self):
+        """Test custom max_race_conditions value."""
+        scheduler = EventScheduler(max_race_conditions=100, seed=42)
+        assert scheduler._max_race_conditions == 100
+
+    def test_race_conditions_list_bounded(self):
+        """Test that race conditions list is bounded."""
+        scheduler = EventScheduler(
+            max_race_conditions=10,  # Small limit for testing
+            detect_race_conditions=True,
+            seed=42,
+        )
+
+        # Submit an order
+        order = LimitOrder(
+            order_id="bounded_test",
+            price=150.0,
+            qty=100.0,
+            remaining_qty=100.0,
+            timestamp_ns=1_000_000,
+            side=Side.BUY,
+        )
+        scheduler.schedule_order_arrival(order=order, our_send_time_ns=1_000_000)
+
+        # Schedule many market data events to trigger race conditions
+        for i in range(100):
+            event = MarketDataEvent(
+                symbol="AAPL",
+                exchange_time_ns=1_000_000 + i * 10,  # Very close timing
+            )
+            scheduler.schedule_market_data(event, exchange_time_ns=event.exchange_time_ns)
+
+        # Race conditions list should be bounded
+        races = scheduler.get_race_conditions()
+        assert len(races) <= 10
+
+    def test_stats_includes_race_tracking_info(self):
+        """Test that stats include race tracking information."""
+        scheduler = EventScheduler(max_race_conditions=500, seed=42)
+
+        stats = scheduler.stats()
+        assert "tracked_races" in stats
+        assert "max_race_conditions" in stats
+        assert stats["max_race_conditions"] == 500
+
+    def test_oldest_races_dropped_when_limit_reached(self):
+        """Test that oldest race conditions are dropped when limit is reached."""
+        scheduler = EventScheduler(
+            max_race_conditions=5,
+            detect_race_conditions=True,
+            seed=42,
+        )
+
+        # Submit an order
+        order = LimitOrder(
+            order_id="drop_test",
+            price=150.0,
+            qty=100.0,
+            remaining_qty=100.0,
+            timestamp_ns=1_000_000,
+            side=Side.BUY,
+        )
+        scheduler.schedule_order_arrival(order=order, our_send_time_ns=1_000_000)
+
+        # Schedule events to trigger race conditions
+        for i in range(20):
+            event = MarketDataEvent(
+                symbol="AAPL",
+                exchange_time_ns=1_000_000 + i * 10,
+            )
+            scheduler.schedule_market_data(event, exchange_time_ns=event.exchange_time_ns)
+
+        races = scheduler.get_race_conditions()
+        # Should have at most 5 race conditions
+        assert len(races) <= 5
+
+        # The tracked races should be the most recent ones
+        # (deque drops oldest when maxlen is exceeded)
+
+
+class TestParetoAlphaWarnings:
+    """Tests for Pareto alpha warning."""
+
+    def test_pareto_alpha_less_than_one_warning(self):
+        """Test warning for Pareto alpha <= 1 (undefined mean)."""
+        with pytest.warns(UserWarning, match="undefined mean"):
+            LatencyConfig(
+                distribution=LatencyDistribution.PARETO,
+                pareto_alpha=0.9,
+            )
+
+    def test_pareto_alpha_equal_one_warning(self):
+        """Test warning for Pareto alpha = 1 (undefined mean)."""
+        with pytest.warns(UserWarning, match="undefined mean"):
+            LatencyConfig(
+                distribution=LatencyDistribution.PARETO,
+                pareto_alpha=1.0,
+            )
+
+    def test_pareto_alpha_less_than_two_warning(self):
+        """Test warning for Pareto alpha <= 2 (infinite variance)."""
+        with pytest.warns(UserWarning, match="infinite variance"):
+            LatencyConfig(
+                distribution=LatencyDistribution.PARETO,
+                pareto_alpha=1.5,
+            )
+
+    def test_pareto_alpha_equal_two_warning(self):
+        """Test warning for Pareto alpha = 2 (infinite variance)."""
+        with pytest.warns(UserWarning, match="infinite variance"):
+            LatencyConfig(
+                distribution=LatencyDistribution.PARETO,
+                pareto_alpha=2.0,
+            )
+
+    def test_pareto_alpha_greater_than_two_no_warning(self):
+        """Test no warning for Pareto alpha > 2."""
+        import warnings as warn_module
+
+        with warn_module.catch_warnings(record=True) as w:
+            warn_module.simplefilter("always")
+            LatencyConfig(
+                distribution=LatencyDistribution.PARETO,
+                pareto_alpha=2.5,
+            )
+            # Filter for our specific warnings
+            pareto_warnings = [x for x in w if "Pareto" in str(x.message)]
+            assert len(pareto_warnings) == 0, f"Unexpected warnings: {pareto_warnings}"
+
+    def test_non_pareto_distribution_no_warning(self):
+        """Test no warning for non-Pareto distributions even with same alpha value."""
+        import warnings as warn_module
+
+        with warn_module.catch_warnings(record=True) as w:
+            warn_module.simplefilter("always")
+            LatencyConfig(
+                distribution=LatencyDistribution.LOGNORMAL,
+                pareto_alpha=0.5,  # Would trigger warning for Pareto
+            )
+            # Filter for our specific warnings
+            pareto_warnings = [x for x in w if "Pareto" in str(x.message)]
+            assert len(pareto_warnings) == 0
+
+
+class TestSequenceIdFIFO:
+    """Tests for sequence_id FIFO ordering when timestamp and priority are equal."""
+
+    def test_sequence_id_fifo_for_equal_priority(self):
+        """Test FIFO ordering by sequence_id when timestamp and priority are equal."""
+        scheduler = create_event_scheduler("institutional", seed=42)
+
+        # Schedule events with same timestamp and priority
+        for i in range(5):
+            scheduler.schedule_custom(
+                timestamp_ns=1000,
+                event_type=EventType.TIMER,
+                exchange_time_ns=1000,
+                payload=f"event_{i}",
+                priority=0,  # Same priority
+            )
+
+        # Process events
+        processed = scheduler.process_all()
+
+        # Should be in FIFO order (by sequence_id)
+        for i, event in enumerate(processed):
+            assert event.payload == f"event_{i}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

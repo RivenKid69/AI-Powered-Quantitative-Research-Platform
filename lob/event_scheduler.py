@@ -26,11 +26,14 @@ from __future__ import annotations
 
 import heapq
 import threading
+import warnings
+from collections import deque
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import (
     Any,
     Callable,
+    Deque,
     Dict,
     Generic,
     Iterator,
@@ -71,37 +74,68 @@ class EventType(IntEnum):
     END_OF_DATA = 31            # No more data
 
 
-@dataclass(order=True)
+@dataclass
 class ScheduledEvent:
     """Event in the scheduler priority queue.
 
-    Events are ordered by (timestamp_ns, sequence_id) to ensure
+    Events are ordered by (timestamp_ns, priority, sequence_id) to ensure
     deterministic ordering when timestamps are equal.
+
+    Ordering rules:
+        1. Earlier timestamp_ns wins
+        2. For same timestamp: lower priority value wins (0 = highest priority)
+        3. For same timestamp AND priority: lower sequence_id wins (FIFO)
 
     Attributes:
         timestamp_ns: When this event should be processed (our local time)
-        sequence_id: Tie-breaker for equal timestamps (FIFO)
+        sequence_id: Unique sequence number for FIFO ordering
         event_type: Type of event
         exchange_time_ns: Original exchange timestamp
         payload: Event-specific data
         callback: Optional callback to execute
-        priority: Lower = higher priority (for same timestamp)
+        priority: Lower = higher priority (for same timestamp, default=0)
     """
 
     timestamp_ns: int
-    sequence_id: int = field(compare=True)
-    event_type: EventType = field(compare=False)
-    exchange_time_ns: int = field(compare=False)
-    payload: Any = field(compare=False, default=None)
-    callback: Optional[Callable[["ScheduledEvent"], None]] = field(
-        compare=False, default=None
-    )
-    priority: int = field(compare=True, default=0)
+    sequence_id: int
+    event_type: EventType
+    exchange_time_ns: int
+    payload: Any = None
+    callback: Optional[Callable[["ScheduledEvent"], None]] = None
+    priority: int = 0
 
     def __post_init__(self) -> None:
         """Validate event."""
         if self.timestamp_ns < 0:
             raise ValueError("timestamp_ns must be non-negative")
+
+    def _sort_key(self) -> Tuple[int, int, int]:
+        """Return sort key: (timestamp_ns, priority, sequence_id)."""
+        return (self.timestamp_ns, self.priority, self.sequence_id)
+
+    def __lt__(self, other: "ScheduledEvent") -> bool:
+        """Compare events for priority queue ordering."""
+        if not isinstance(other, ScheduledEvent):
+            return NotImplemented
+        return self._sort_key() < other._sort_key()
+
+    def __le__(self, other: "ScheduledEvent") -> bool:
+        """Compare events for priority queue ordering."""
+        if not isinstance(other, ScheduledEvent):
+            return NotImplemented
+        return self._sort_key() <= other._sort_key()
+
+    def __gt__(self, other: "ScheduledEvent") -> bool:
+        """Compare events for priority queue ordering."""
+        if not isinstance(other, ScheduledEvent):
+            return NotImplemented
+        return self._sort_key() > other._sort_key()
+
+    def __ge__(self, other: "ScheduledEvent") -> bool:
+        """Compare events for priority queue ordering."""
+        if not isinstance(other, ScheduledEvent):
+            return NotImplemented
+        return self._sort_key() >= other._sort_key()
 
     @property
     def latency_ns(self) -> int:
@@ -232,6 +266,9 @@ class EventScheduler:
         ... )
     """
 
+    # Default maximum number of race conditions to track
+    DEFAULT_MAX_RACE_CONDITIONS = 10000
+
     def __init__(
         self,
         latency_model: Optional[LatencyModel] = None,
@@ -240,6 +277,7 @@ class EventScheduler:
         detect_race_conditions: bool = True,
         on_race_condition: Optional[Callable[[RaceConditionInfo], None]] = None,
         on_event: Optional[EventHandler] = None,
+        max_race_conditions: int = DEFAULT_MAX_RACE_CONDITIONS,
     ) -> None:
         """Initialize event scheduler.
 
@@ -250,6 +288,8 @@ class EventScheduler:
             detect_race_conditions: Whether to detect and report race conditions
             on_race_condition: Callback for race condition detection
             on_event: Default callback for event processing
+            max_race_conditions: Maximum number of race conditions to track (default 10000).
+                                 Oldest race conditions are dropped when limit is reached.
         """
         self._lock = threading.Lock()
 
@@ -259,15 +299,18 @@ class EventScheduler:
         else:
             self._latency_model = create_latency_model(profile, seed=seed)
 
-        # Priority queue: (timestamp_ns, sequence_id, event)
+        # Priority queue: (timestamp_ns, priority, sequence_id, event)
         self._queue: List[ScheduledEvent] = []
         self._sequence_counter = 0
 
-        # Race condition detection
+        # Race condition detection with bounded memory
         self._detect_races = detect_race_conditions
         self._on_race_condition = on_race_condition
         self._pending_orders: Dict[str, OrderSubmission] = {}
-        self._race_conditions: List[RaceConditionInfo] = []
+        self._max_race_conditions = max(1, max_race_conditions)
+        self._race_conditions: Deque[RaceConditionInfo] = deque(
+            maxlen=self._max_race_conditions
+        )
 
         # Event handling
         self._on_event = on_event
@@ -731,6 +774,8 @@ class EventScheduler:
                 "pending_events": len(self._queue),
                 "pending_orders": len(self._pending_orders),
                 "detected_races": self._detected_races,
+                "tracked_races": len(self._race_conditions),
+                "max_race_conditions": self._max_race_conditions,
                 "current_time_ns": self._current_time_ns,
                 "latency": latency_stats,
             }

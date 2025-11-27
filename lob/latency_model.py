@@ -30,6 +30,7 @@ from __future__ import annotations
 import math
 import random
 import threading
+import warnings
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import (
@@ -116,6 +117,23 @@ class LatencyConfig:
             raise ValueError("pareto_alpha must be positive")
         if self.pareto_xmin_us <= 0:
             raise ValueError("pareto_xmin_us must be positive")
+
+        # Warn about extreme Pareto alpha values
+        if self.distribution == LatencyDistribution.PARETO:
+            if self.pareto_alpha <= 1:
+                warnings.warn(
+                    f"Pareto alpha={self.pareto_alpha} <= 1 has undefined mean. "
+                    "Results may be extreme. Consider alpha > 2 for stable statistics.",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            elif self.pareto_alpha <= 2:
+                warnings.warn(
+                    f"Pareto alpha={self.pareto_alpha} <= 2 has infinite variance. "
+                    "Results may have high variability. Consider alpha > 2.",
+                    UserWarning,
+                    stacklevel=2,
+                )
 
 
 @dataclass
@@ -608,7 +626,15 @@ class LatencyModel:
 
     Timestamp Convention:
         - Returns NANOSECONDS for LOB integration
-        - Internal calculations use microseconds for precision
+        - Internal calculations use MICROSECONDS for precision
+
+    Precision Limitation:
+        Internal calculations are performed in microseconds (μs) and then
+        converted to nanoseconds (ns) via multiplication by 1000. This means:
+        - Minimum effective latency is ~1μs (1000ns)
+        - Sub-microsecond precision (< 1μs) is NOT supported
+        - For co-located HFT simulation requiring < 1μs precision,
+          consider using nanosecond-native calculations
 
     Thread Safety:
         - All sampling methods are thread-safe
