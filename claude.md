@@ -841,30 +841,63 @@ Phase 10 добавляет высокоточную симуляцию order bo
    - Backward compatible with L2 (crypto unchanged)
    - 79 comprehensive tests
 
+8. **Stage 8: Data Pipeline & Calibration** (`lob/data_adapters.py`, `lob/calibration_pipeline.py`)
+   - Data adapters: LOBSTER, ITCH, Binance L2, Alpaca L2
+   - Unified L3 calibration pipeline for latency + queue dynamics
+   - Format-agnostic LOB update processing
+   - Historical data loading utilities
+
+9. **Stage 9: Testing & Validation** (see `docs/L3_VALIDATION_REPORT.md`)
+   - 749+ tests passing (100% pass rate)
+   - Validation metrics: fill rate >95%, slippage <2bps, queue error <10%
+   - Performance benchmarks meeting targets
+   - Full backward compatibility with crypto
+
+10. **Stage 10: Documentation & Deployment** (`docs/l3_simulator/`)
+    - Comprehensive documentation for all L3 components
+    - Deployment checklist with feature flags
+    - Gradual rollout strategy (shadow mode → canary → production)
+    - Monitoring dashboards and alert rules
+    - Rollback procedures
+
 ### Архитектура
 
 ```
 lob/
-├── data_structures.py    # LimitOrder, PriceLevel, OrderBook, Fill, Trade
-├── matching_engine.py    # MatchingEngine, ProRataMatchingEngine, STP
-├── queue_tracker.py      # QueuePositionTracker (MBP/MBO estimation)
-├── order_manager.py      # OrderManager, ManagedOrder, TimeInForce
-├── state_manager.py      # LOBStateManager, LOBSnapshot
-├── parsers.py            # LOBSTERParser
-├── fill_probability.py   # Poisson, Queue-Reactive, Historical models (Stage 3)
-├── queue_value.py        # Queue value computation (Moallemi & Yuan) (Stage 3)
-├── calibration.py        # Model calibration from historical data (Stage 3)
-├── market_impact.py      # Kyle, Almgren-Chriss, Gatheral models (Stage 4)
-├── impact_effects.py     # Quote shifting, liquidity reaction (Stage 4)
-├── impact_calibration.py # Impact parameter estimation (Stage 4)
-├── latency_model.py      # Realistic latency simulation (Stage 5)
-├── event_scheduler.py    # Event ordering with priority queue (Stage 5)
-├── hidden_liquidity.py   # Iceberg detection, hidden qty estimation (Stage 6)
-├── dark_pool.py          # Dark pool simulation, multi-venue routing (Stage 6)
-├── config.py             # Pydantic config models for L3 subsystems (Stage 7)
-└── __init__.py           # Public API exports
+├── data_structures.py       # LimitOrder, PriceLevel, OrderBook, Fill, Trade
+├── matching_engine.py       # MatchingEngine, ProRataMatchingEngine, STP
+├── queue_tracker.py         # QueuePositionTracker (MBP/MBO estimation)
+├── order_manager.py         # OrderManager, ManagedOrder, TimeInForce
+├── state_manager.py         # LOBStateManager, LOBSnapshot
+├── parsers.py               # LOBSTERParser
+├── fill_probability.py      # Poisson, Queue-Reactive, Historical models (Stage 3)
+├── queue_value.py           # Queue value computation (Moallemi & Yuan) (Stage 3)
+├── calibration.py           # Model calibration from historical data (Stage 3)
+├── market_impact.py         # Kyle, Almgren-Chriss, Gatheral models (Stage 4)
+├── impact_effects.py        # Quote shifting, liquidity reaction (Stage 4)
+├── impact_calibration.py    # Impact parameter estimation (Stage 4)
+├── latency_model.py         # Realistic latency simulation (Stage 5)
+├── event_scheduler.py       # Event ordering with priority queue (Stage 5)
+├── hidden_liquidity.py      # Iceberg detection, hidden qty estimation (Stage 6)
+├── dark_pool.py             # Dark pool simulation, multi-venue routing (Stage 6)
+├── config.py                # Pydantic config models for L3 subsystems (Stage 7)
+├── data_adapters.py         # LOBSTER, ITCH, Binance, Alpaca adapters (Stage 8)
+├── calibration_pipeline.py  # Unified L3 calibration pipeline (Stage 8)
+└── __init__.py              # Public API exports
 
-execution_providers_l3.py # L3ExecutionProvider combining all LOB components (Stage 7)
+execution_providers_l3.py    # L3ExecutionProvider combining all LOB components (Stage 7)
+
+docs/l3_simulator/           # Stage 10 Documentation
+├── overview.md              # Architecture overview
+├── data_structures.md       # LOB data structures
+├── matching_engine.md       # FIFO matching, STP
+├── queue_position.md        # Queue position tracking
+├── market_impact.md         # Impact models (Kyle, AC, Gatheral)
+├── latency.md               # Latency simulation, event scheduling
+├── calibration.md           # Parameter estimation
+├── configuration.md         # Config reference
+├── deployment.md            # Deployment checklist, rollout, rollback
+└── migration_guide.md       # L2 to L3 migration reference
 ```
 
 ### Ключевые классы
@@ -899,6 +932,14 @@ execution_providers_l3.py # L3ExecutionProvider combining all LOB components (St
 | `L3SlippageProvider` | LOB-based slippage with market impact (Stage 7) |
 | `L3FillProvider` | LOB-based fill logic with queue position (Stage 7) |
 | `L3ExecutionConfig` | Pydantic config model for L3 subsystems (Stage 7) |
+| `BaseLOBAdapter` | Abstract base for LOB data adapters (Stage 8) |
+| `LOBSTERAdapter` | LOBSTER format adapter (Stage 8) |
+| `ITCHAdapter` | ITCH format adapter (Stage 8) |
+| `BinanceL2Adapter` | Binance L2 data adapter (Stage 8) |
+| `AlpacaL2Adapter` | Alpaca L2 data adapter (Stage 8) |
+| `L3CalibrationPipeline` | Unified calibration for L3 (Stage 8) |
+| `LatencyCalibrator` | Latency distribution calibration (Stage 8) |
+| `QueueDynamicsCalibrator` | Queue dynamics calibration (Stage 8) |
 
 ### Self-Trade Prevention (STP)
 
@@ -1243,11 +1284,19 @@ pytest tests/test_hidden_liquidity_dark_pools.py -v
 # Stage 7 тесты (L3 execution provider, config)
 pytest tests/test_execution_providers_l3.py -v
 
+# Stage 8 тесты (data adapters, calibration pipeline)
+pytest tests/test_lob_data_adapters.py tests/test_lob_calibration_pipeline.py -v
+
+# Stage 9 тесты (validation, backward compatibility)
+pytest tests/test_queue_tracker.py tests/test_l3_vs_production.py tests/test_l3_backward_compatibility.py -v
+
 # Все LOB тесты
-pytest tests/test_lob*.py tests/test_matching_engine.py tests/test_fill_probability_queue_value.py tests/test_market_impact.py tests/test_hidden_liquidity_dark_pools.py tests/test_execution_providers_l3.py -v
+pytest tests/test_lob*.py tests/test_matching_engine.py tests/test_fill_probability_queue_value.py \
+    tests/test_market_impact.py tests/test_hidden_liquidity_dark_pools.py tests/test_execution_providers_l3.py \
+    tests/test_queue_tracker.py tests/test_l3_vs_production.py tests/test_l3_backward_compatibility.py -v
 ```
 
-**Покрытие**: 522 тестов (106 Stage 1 + 72 Stage 2 + 66 Stage 3 + 57 Stage 4 + 66 Stage 5 + 62 Stage 6 + 79 Stage 7 + 95 execution_providers)
+**Покрытие**: 749+ тестов (106 Stage 1 + 72 Stage 2 + 66 Stage 3 + 57 Stage 4 + 66 Stage 5 + 62 Stage 6 + 79 Stage 7 + Stage 8 + 117 Stage 9 + 95 execution_providers)
 
 ### Ключевые файлы
 
@@ -1276,7 +1325,26 @@ pytest tests/test_lob*.py tests/test_matching_engine.py tests/test_fill_probabil
 | `lob/config.py` | Pydantic configuration models for L3 subsystems (Stage 7) |
 | `configs/execution_l3.yaml` | L3 execution configuration file (Stage 7) |
 | `tests/test_execution_providers_l3.py` | 79 Stage 7 tests |
-| `docs/L3_MIGRATION_GUIDE.md` | Migration guide from L2 to L3 (Stage 7) |
+| `lob/data_adapters.py` | LOBSTER, ITCH, Binance, Alpaca adapters (Stage 8) |
+| `lob/calibration_pipeline.py` | Unified L3 calibration pipeline (Stage 8) |
+| `tests/test_lob_data_adapters.py` | Data adapters tests (Stage 8) |
+| `tests/test_lob_calibration_pipeline.py` | Calibration pipeline tests (Stage 8) |
+| `tests/test_queue_tracker.py` | 55 Queue position tracking tests (Stage 9) |
+| `tests/test_l3_vs_production.py` | 30 Validation metrics tests (Stage 9) |
+| `tests/test_l3_backward_compatibility.py` | 32 Backward compatibility tests (Stage 9) |
+| `benchmarks/bench_matching.py` | Matching engine benchmarks (Stage 9) |
+| `benchmarks/bench_full_sim.py` | Full simulation benchmarks (Stage 9) |
+| `docs/L3_VALIDATION_REPORT.md` | Stage 9 validation report |
+| `docs/L3_MIGRATION_GUIDE.md` | Migration guide from L2 to L3 |
+| `docs/l3_simulator/overview.md` | L3 architecture overview (Stage 10) |
+| `docs/l3_simulator/data_structures.md` | LOB data structures (Stage 10) |
+| `docs/l3_simulator/matching_engine.md` | Matching engine docs (Stage 10) |
+| `docs/l3_simulator/queue_position.md` | Queue position tracking (Stage 10) |
+| `docs/l3_simulator/market_impact.md` | Impact models (Stage 10) |
+| `docs/l3_simulator/latency.md` | Latency simulation (Stage 10) |
+| `docs/l3_simulator/calibration.md` | Calibration guide (Stage 10) |
+| `docs/l3_simulator/configuration.md` | Config reference (Stage 10) |
+| `docs/l3_simulator/deployment.md` | Deployment checklist & rollout (Stage 10) |
 
 ### Референсы
 
@@ -2820,5 +2888,5 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-11-28
-**Версия документации**: 7.0 (Phase 10: L3 LOB Simulation - Stage 7: L3 Execution Provider Integration)
+**Версия документации**: 10.0 (Phase 10: L3 LOB Simulation - Stage 10: Documentation & Deployment)
 **Статус**: ✅ Production Ready (все критические исправления применены, 53 задокументированных "НЕ БАГИ")
