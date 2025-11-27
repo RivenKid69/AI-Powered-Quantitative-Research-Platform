@@ -6,6 +6,7 @@ di_registry.py
   - указание параметров конструктора в конфиге (params)
   - авто-подстановку зависимостей по имени параметра конструктора,
     если такой компонент уже собран в контейнере (name → instance)
+  - Exchange adapters для multi-exchange support (Binance, Alpaca)
 """
 
 from __future__ import annotations
@@ -27,6 +28,77 @@ from core_config import (
     ExecutionRuntimeConfig,
 )
 from impl_quantizer import QuantizerImpl
+
+
+# =============================================================================
+# Exchange Adapter Support
+# =============================================================================
+
+def _build_exchange_adapters(
+    exchange_config: Mapping[str, Any],
+    container: Dict[Any, Any],
+) -> None:
+    """
+    Build exchange adapters from configuration and add to container.
+
+    Args:
+        exchange_config: Exchange configuration dict with vendor/settings
+        container: DI container to add adapters to
+    """
+    try:
+        from adapters.config import ExchangeConfig
+        from adapters.base import (
+            MarketDataAdapter,
+            FeeAdapter,
+            TradingHoursAdapter,
+            ExchangeInfoAdapter,
+            OrderExecutionAdapter,
+        )
+
+        # Parse exchange config
+        if isinstance(exchange_config, ExchangeConfig):
+            cfg = exchange_config
+        else:
+            cfg = ExchangeConfig.from_dict(exchange_config)
+
+        container["exchange_config"] = cfg
+        container["exchange_vendor"] = cfg.vendor
+
+        # Create and register adapters
+        try:
+            market_data_adapter = cfg.create_market_data_adapter()
+            container["market_data_adapter"] = market_data_adapter
+            container[MarketDataAdapter] = market_data_adapter
+        except Exception as e:
+            logger.debug(f"Could not create market data adapter: {e}")
+
+        try:
+            fee_adapter = cfg.create_fee_adapter()
+            container["fee_adapter"] = fee_adapter
+            container[FeeAdapter] = fee_adapter
+        except Exception as e:
+            logger.debug(f"Could not create fee adapter: {e}")
+
+        try:
+            trading_hours_adapter = cfg.create_trading_hours_adapter()
+            container["trading_hours_adapter"] = trading_hours_adapter
+            container[TradingHoursAdapter] = trading_hours_adapter
+        except Exception as e:
+            logger.debug(f"Could not create trading hours adapter: {e}")
+
+        try:
+            exchange_info_adapter = cfg.create_exchange_info_adapter()
+            container["exchange_info_adapter"] = exchange_info_adapter
+            container[ExchangeInfoAdapter] = exchange_info_adapter
+        except Exception as e:
+            logger.debug(f"Could not create exchange info adapter: {e}")
+
+        logger.info(f"Registered exchange adapters for vendor: {cfg.vendor}")
+
+    except ImportError as e:
+        logger.warning(f"Exchange adapters not available: {e}")
+    except Exception as e:
+        logger.warning(f"Failed to build exchange adapters: {e}")
 
 
 def _load_class(dotted: str):
@@ -107,6 +179,8 @@ def build_graph(components: Components, run_config: Optional[CommonRunConfig] = 
     """
     Сборка графа в последовательности: market_data → feature_pipe → policy → risk_guards → executor → backtest_engine
     (BacktestEngine опционален.)
+
+    Also builds exchange adapters if 'exchange' config is present.
     """
     container: Dict[Any, Any] = {}
     if run_config is not None:
@@ -140,6 +214,12 @@ def build_graph(components: Components, run_config: Optional[CommonRunConfig] = 
             container["adv_runtime_config"] = adv_cfg
             container[AdvRuntimeConfig] = adv_cfg
             container.setdefault("adv", adv_cfg)
+
+        # Build exchange adapters if exchange config is present
+        exchange_cfg = getattr(run_config, "exchange", None)
+        if exchange_cfg is not None and isinstance(exchange_cfg, Mapping):
+            _build_exchange_adapters(exchange_cfg, container)
+
     build_component("market_data", components.market_data, container)
     build_component("feature_pipe", components.feature_pipe, container)
     build_component("policy", components.policy, container)

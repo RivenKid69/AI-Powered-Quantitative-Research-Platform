@@ -1,0 +1,133 @@
+# -*- coding: utf-8 -*-
+# Exchange Configuration for Multi-Exchange Support
+#
+# This configuration file defines exchange-specific settings.
+# Select vendor to switch between Binance (crypto) and Alpaca (stocks).
+#
+# Usage:
+#   from adapters.config import ExchangeConfig
+#   config = ExchangeConfig.from_yaml("configs/exchange.yaml")
+#   adapter = config.create_market_data_adapter()
+
+# =============================================================================
+# MAIN EXCHANGE SELECTION
+# =============================================================================
+
+# Exchange vendor: "binance", "binance_us", or "alpaca"
+vendor: "binance"
+
+# Market type: CRYPTO_SPOT, CRYPTO_FUTURES, CRYPTO_PERP, EQUITY, EQUITY_OPTIONS
+market_type: "CRYPTO_SPOT"
+
+
+# =============================================================================
+# BINANCE CONFIGURATION (Crypto)
+# =============================================================================
+
+binance:
+  # API endpoints
+  base_url: "https://api.binance.com"
+  futures_url: "https://fapi.binance.com"
+  use_futures: false
+  timeout: 20
+
+  # API credentials (use environment variables for security)
+  # Format: ${ENV_VAR_NAME} or $ENV_VAR_NAME
+  api_key: "${BINANCE_API_KEY}"
+  api_secret: "${BINANCE_API_SECRET}"
+
+  # Fee settings (basis points = 0.01%)
+  maker_bps: 10.0    # 0.10% maker fee (default VIP0)
+  taker_bps: 10.0    # 0.10% taker fee (default VIP0)
+  use_bnb_discount: false  # 25% discount when paying fees in BNB
+  vip_tier: 0        # VIP tier (0-9)
+
+  # Cache paths
+  filters_cache_path: "data/binance_filters.json"
+  fees_cache_path: "data/fees/fees_by_symbol.json"
+
+
+# =============================================================================
+# ALPACA CONFIGURATION (US Equities)
+# =============================================================================
+
+alpaca:
+  # API credentials (required)
+  api_key: "${ALPACA_API_KEY}"
+  api_secret: "${ALPACA_API_SECRET}"
+
+  # Trading mode
+  paper: true          # Use paper trading (recommended for testing)
+
+  # Data feed: "iex" (free, 15-min delay) or "sip" (paid, real-time)
+  feed: "iex"
+
+  # Extended hours trading
+  extended_hours: false        # Allow orders during extended hours
+  allow_extended_hours: true   # Consider extended hours as "market open"
+
+  # Regulatory fees
+  include_regulatory_fees: true   # Include SEC/TAF fees in calculations
+  options_per_contract_fee: 0.65  # Fee per options contract
+
+
+# =============================================================================
+# COMMON FEE OVERRIDES
+# =============================================================================
+
+fees:
+  # Include regulatory fees (SEC/TAF for US equities)
+  include_regulatory: true
+
+  # Override maker/taker fees (null = use vendor defaults)
+  custom_maker_bps: null
+  custom_taker_bps: null
+
+
+# =============================================================================
+# TRADING HOURS CONFIGURATION
+# =============================================================================
+
+trading_hours:
+  # Allow trading during extended hours (pre/post market for equities)
+  allow_extended: true
+
+  # Fetch calendar from exchange API
+  use_exchange_calendar: true
+
+
+# =============================================================================
+# EXAMPLE CONFIGURATIONS
+# =============================================================================
+
+# --- Binance Crypto (Default) ---
+# vendor: "binance"
+# market_type: "CRYPTO_SPOT"
+# binance:
+#   use_futures: false
+#   maker_bps: 10.0
+#   taker_bps: 10.0
+
+# --- Binance Futures ---
+# vendor: "binance"
+# market_type: "CRYPTO_PERP"
+# binance:
+#   use_futures: true
+#   maker_bps: 2.0
+#   taker_bps: 4.0
+
+# --- Alpaca Stocks (Paper Trading) ---
+# vendor: "alpaca"
+# market_type: "EQUITY"
+# alpaca:
+#   paper: true
+#   feed: "iex"
+#   extended_hours: false
+
+# --- Alpaca Stocks (Live Trading) ---
+# vendor: "alpaca"
+# market_type: "EQUITY"
+# alpaca:
+#   paper: false
+#   feed: "sip"
+#   extended_hours: true

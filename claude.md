@@ -55,10 +55,131 @@ python train_model_multi_patch.py --config configs/config_train.yaml
 # Обучение (PBT + Adversarial)
 python train_model_multi_patch.py --config configs/config_pbt_adversarial.yaml
 
-# Обновление данных
+# Обновление данных (Crypto)
 python scripts/fetch_binance_filters.py --universe --out data/binance_filters.json
 python scripts/refresh_fees.py
 python -m services.universe --output data/universe/symbols.json
+
+# Обновление данных (Stocks)
+python scripts/fetch_alpaca_universe.py --output data/universe/alpaca_symbols.json --popular
+
+# Live Trading (Stocks - Alpaca)
+python script_live.py --config configs/config_live_alpaca.yaml
+```
+
+---
+
+## 📈 Multi-Exchange Support (Phase 2)
+
+### Поддерживаемые биржи
+
+| Биржа | Тип | Статус | Адаптеры |
+|-------|-----|--------|----------|
+| **Binance** | Crypto (Spot/Futures) | ✅ Production | MarketData, Fee, TradingHours, ExchangeInfo |
+| **Alpaca** | US Equities | ✅ Production | MarketData, Fee, TradingHours, ExchangeInfo, OrderExecution |
+
+### Архитектура адаптеров
+
+```
+adapters/
+├── base.py           # Абстрактные базовые классы
+├── models.py         # Exchange-agnostic модели данных
+├── registry.py       # Фабрика + регистрация адаптеров
+├── config.py         # Pydantic конфигурация
+├── binance/          # Binance реализация (crypto)
+│   ├── market_data.py
+│   ├── fees.py
+│   ├── trading_hours.py
+│   └── exchange_info.py
+└── alpaca/           # Alpaca реализация (stocks)
+    ├── market_data.py
+    ├── fees.py
+    ├── trading_hours.py
+    ├── exchange_info.py
+    └── order_execution.py
+```
+
+### Использование
+
+```python
+# Через Registry
+from adapters.registry import create_market_data_adapter, create_fee_adapter
+
+# Crypto
+binance_md = create_market_data_adapter("binance")
+binance_fees = create_fee_adapter("binance")
+
+# Stocks
+alpaca_md = create_market_data_adapter("alpaca", {
+    "api_key": "...",
+    "api_secret": "...",
+    "feed": "iex",
+})
+
+# Через Config
+from adapters.config import ExchangeConfig
+
+config = ExchangeConfig.from_yaml("configs/exchange.yaml")
+adapter = config.create_market_data_adapter()
+```
+
+### Конфигурация
+
+**configs/exchange.yaml** — главный файл конфигурации биржи:
+```yaml
+vendor: "alpaca"  # или "binance"
+market_type: "EQUITY"  # или "CRYPTO_SPOT"
+
+alpaca:
+  api_key: "${ALPACA_API_KEY}"
+  api_secret: "${ALPACA_API_SECRET}"
+  paper: true
+  feed: "iex"
+  extended_hours: false
+```
+
+**configs/config_live_alpaca.yaml** — live trading для Alpaca
+
+### Ключевые отличия Crypto vs Stocks
+
+| Аспект | Crypto (Binance) | Stocks (Alpaca) |
+|--------|------------------|-----------------|
+| **Часы торговли** | 24/7 | NYSE 9:30-16:00 ET + extended |
+| **Комиссии** | % от notional (maker/taker) | $0 (+ regulatory на продажу) |
+| **Минимальный лот** | По фильтрам биржи | 1 share (или fractional) |
+| **Tick size** | Varies by symbol | $0.01 |
+| **Short selling** | Через futures | Shortable flag per symbol |
+| **Latency** | ~100-500ms | ~50-200ms |
+
+### Команды для Alpaca
+
+```bash
+# Получить universe акций
+python scripts/fetch_alpaca_universe.py --popular
+
+# Live trading (paper)
+python script_live.py --config configs/config_live_alpaca.yaml
+
+# Запустить тесты адаптеров
+pytest tests/test_alpaca_adapters.py -v
+```
+
+### Требования
+
+```bash
+pip install alpaca-py  # Alpaca SDK
+```
+
+### Environment Variables
+
+```bash
+# Alpaca
+ALPACA_API_KEY=...
+ALPACA_API_SECRET=...
+
+# Binance (существующие)
+BINANCE_API_KEY=...
+BINANCE_API_SECRET=...
 ```
 
 ---
@@ -129,6 +250,7 @@ python -m services.universe --output data/universe/symbols.json
 | Yang-Zhang volatility inflated ~11% for n=10 | RS component used (n-1) instead of n | ✅ Фикс 2025-11-26: RS now uses n per original formula |
 | `_project_categorical_distribution` shape error | 1D atoms not expanded to batch_size | ✅ Фикс 2025-11-26: proper batch expansion |
 | Limit order fills missed for high-price assets | Fixed tolerance 1e-12 < machine epsilon at $100k | ✅ Фикс 2025-11-26: `_compute_price_tolerance` с relative tolerance |
+| EV≈0, Twin Critics loss +327%, grad norm -82% | VGS alpha=0.1 даёт 91% редукцию градиентов при высокой variance | ✅ Фикс 2025-11-27: VGS v3.2 с `min_scaling_factor=0.1`, `variance_cap=50.0` |
 
 ---
 
@@ -1209,6 +1331,7 @@ if ratio > 1.0:
 
 | Дата | Исправление | Влияние |
 |------|-------------|---------|
+| **2025-11-27** | VGS v3.2: min_scaling_factor + variance_cap | EV≈0, Twin Critics loss +327%, grad norm -82% → VGS не блокирует обучение |
 | **2025-11-26** | Twin Critics categorical VF clipping projection fix | `_project_distribution` was identity stub → now uses proper C51 projection |
 | **2025-11-26** | Yang-Zhang RS denominator fix | RS used (n-1) instead of n → +11% inflation for n=10 removed |
 | **2025-11-26** | `_project_categorical_distribution` batch shape fix | Shape mismatch for 1D atoms with batched probs → properly expands |
@@ -1256,7 +1379,7 @@ if ratio > 1.0:
 - **Язык**: Python 3.12 + Cython + C++
 - **RL Framework**: Stable-Baselines3 (Distributional PPO with Twin Critics)
 - **Optimizer**: AdaptiveUPGD (default) — continual learning
-- **Gradient Scaling**: VGS v3.1 — automatic per-layer normalization
+- **Gradient Scaling**: VGS v3.2 — automatic per-layer normalization + anti-blocking
 - **Training**: PBT + SA-PPO (adversarial training)
 - **Биржа**: Binance (Spot/Futures)
 - **Режимы**: Бэктест, Live trading, Обучение
@@ -1576,6 +1699,6 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 
 ---
 
-**Последнее обновление**: 2025-11-26
-**Версия документации**: 4.5 (Limit order tolerance fix + 3 new NOT BUGS documented)
+**Последнее обновление**: 2025-11-27
+**Версия документации**: 4.6 (VGS v3.2: min_scaling_factor + variance_cap для предотвращения блокировки обучения)
 **Статус**: ✅ Production Ready (все критические исправления применены, 53 задокументированных "НЕ БАГИ")
