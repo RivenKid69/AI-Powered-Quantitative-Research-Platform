@@ -1,16 +1,39 @@
 # risk_guard.py
+"""
+Risk management guards for trading systems.
+
+This module provides:
+1. RiskGuard - Core risk checks (position limits, drawdown, bankruptcy)
+2. SimpleRiskGuard - Lightweight per-symbol risk guard
+3. PortfolioLimitGuard - Aggregate portfolio exposure limits
+4. StockRiskGuard - Stock-specific risk management (PDT, margin, short sale)
+
+Architecture:
+    For crypto trading: Use RiskGuard alone
+    For stock trading: Use RiskGuard + StockRiskGuard
+
+Stock-specific guards (Phase 6):
+- PDTRuleGuard: Pattern Day Trader rule enforcement (< $25k accounts)
+- MarginGuard: Reg T margin requirements (50% initial, 25% maintenance)
+- ShortSaleGuard: Uptick rule, HTB list, circuit breakers
+- CorporateActionsHandler: Dividends, stock splits
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, asdict
-from enum import IntEnum
+from enum import IntEnum, auto
 import math
-from typing import Optional, Deque, Tuple, Dict, Any, TYPE_CHECKING, Sequence, Callable, Mapping
+import logging
+from typing import Optional, Deque, Tuple, Dict, Any, TYPE_CHECKING, Sequence, Callable, Mapping, List
 from collections import deque
 from collections.abc import Mapping as MappingABC
 from clock import now_ms
+from datetime import date
 
 if TYPE_CHECKING:
     from core_contracts import RiskGuards
+    from adapters.models import MarketType
 
 try:
     import event_bus as eb
@@ -25,6 +48,8 @@ except Exception:  # на случай отсутствия event_bus в окр�
 
 from action_proto import ActionProto, ActionType
 
+logger = logging.getLogger(__name__)
+
 
 class RiskEvent(IntEnum):
     NONE = 0
@@ -32,6 +57,11 @@ class RiskEvent(IntEnum):
     NOTIONAL_LIMIT = 2        # превышение лимита по ноционалу (post)
     DRAWDOWN = 3              # превышение лимита по дроудауну (post)
     BANKRUPTCY = 4            # cash ниже порога банкротства (post)
+    # Stock-specific events (Phase 6)
+    PDT_VIOLATION = 5         # Pattern Day Trader rule violation
+    MARGIN_CALL = 6           # Margin requirement violation
+    SHORT_SALE_RESTRICTED = 7  # Short sale restriction (uptick rule, HTB)
+    CORPORATE_ACTION = 8      # Corporate action affecting position
 
 
 @dataclass
@@ -688,4 +718,719 @@ class PortfolioLimitGuard:
             return approved, None
         return [], "RISK_PORTFOLIO_LIMIT"
 
+
+# =========================
+# Stock Risk Guard (Phase 6)
+# =========================
+
+@dataclass
+class StockRiskConfig:
+    """Configuration for stock-specific risk management."""
+
+    # Asset class detection
+    market_type: str = "EQUITY"  # EQUITY, CRYPTO_SPOT, etc.
+
+    # PDT settings
+    pdt_enabled: bool = True
+    pdt_account_equity: float = 30_000.0  # Account equity for PDT check
+    pdt_threshold: float = 25_000.0  # PDT exemption threshold
+    pdt_max_day_trades: int = 3  # Max day trades in rolling window
+    pdt_rolling_days: int = 5  # Rolling window size
+
+    # Margin settings
+    margin_enabled: bool = True
+    initial_margin: float = 0.50  # Reg T initial margin (50%)
+    maintenance_margin: float = 0.25  # Reg T maintenance margin (25%)
+    margin_buffer: float = 0.05  # House buffer above maintenance
+
+    # Short sale settings
+    short_sale_enabled: bool = True
+    enforce_uptick_rule: bool = True
+    check_htb_list: bool = True
+    circuit_breaker_threshold: float = -0.10  # 10% drop triggers Rule 201
+
+    # Corporate actions settings
+    corporate_actions_enabled: bool = True
+    warn_on_ex_dividend: bool = True
+    adjust_positions_on_split: bool = True
+
+    # General settings
+    simulation_mode: bool = False  # Warn but don't block
+    strict_mode: bool = True  # Block vs warn
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "StockRiskConfig":
+        """Create config from mapping."""
+        return cls(
+            market_type=str(data.get("market_type", "EQUITY")),
+            pdt_enabled=bool(data.get("pdt_enabled", True)),
+            pdt_account_equity=float(data.get("pdt_account_equity", 30_000.0)),
+            pdt_threshold=float(data.get("pdt_threshold", 25_000.0)),
+            margin_enabled=bool(data.get("margin_enabled", True)),
+            initial_margin=float(data.get("initial_margin", 0.50)),
+            maintenance_margin=float(data.get("maintenance_margin", 0.25)),
+            short_sale_enabled=bool(data.get("short_sale_enabled", True)),
+            enforce_uptick_rule=bool(data.get("enforce_uptick_rule", True)),
+            corporate_actions_enabled=bool(data.get("corporate_actions_enabled", True)),
+            simulation_mode=bool(data.get("simulation_mode", False)),
+            strict_mode=bool(data.get("strict_mode", True)),
+        )
+
+    @property
+    def is_stock_trading(self) -> bool:
+        """Check if this is stock trading (not crypto)."""
+        return self.market_type.upper() in ("EQUITY", "EQUITY_OPTIONS")
+
+
+class StockRiskGuard:
+    """
+    Combined stock-specific risk management guard.
+
+    Integrates:
+    1. PDT Rule Enforcement (< $25k accounts)
+    2. Reg T Margin Requirements (50%/25%)
+    3. Short Sale Rules (uptick, HTB, circuit breaker)
+    4. Corporate Actions (dividends, splits)
+
+    BACKWARD COMPATIBLE: For crypto trading, all checks are skipped
+    automatically based on market_type configuration.
+
+    Usage:
+        # For stock trading
+        stock_guard = StockRiskGuard(StockRiskConfig(market_type="EQUITY"))
+
+        # Pre-trade check
+        event = stock_guard.check_trade(
+            symbol="AAPL",
+            side="BUY",
+            quantity=100,
+            price=150.0,
+            is_day_trade=True,
+        )
+
+        if event != RiskEvent.NONE:
+            reject_trade(event)
+
+        # Post-trade update
+        stock_guard.record_trade(
+            symbol="AAPL",
+            side="BUY",
+            quantity=100,
+            price=150.0,
+            timestamp_ms=now_ms(),
+        )
+
+    For crypto trading:
+        # All checks automatically disabled
+        crypto_guard = StockRiskGuard(StockRiskConfig(market_type="CRYPTO_SPOT"))
+        event = crypto_guard.check_trade(...)  # Always returns NONE
+    """
+
+    def __init__(
+        self,
+        config: Optional[StockRiskConfig] = None,
+    ) -> None:
+        """
+        Initialize StockRiskGuard.
+
+        Args:
+            config: Stock risk configuration
+        """
+        self._config = config or StockRiskConfig()
+        self._last_event: RiskEvent = RiskEvent.NONE
+        self._last_event_reason: str = ""
+
+        # Lazy initialization of sub-guards
+        self._pdt_tracker = None
+        self._margin_guard = None
+        self._short_sale_guard = None
+        self._corporate_actions = None
+
+        # Only initialize if this is stock trading
+        if self._config.is_stock_trading:
+            self._initialize_guards()
+
+        logger.debug(
+            f"StockRiskGuard initialized: market_type={self._config.market_type}, "
+            f"is_stock={self._config.is_stock_trading}"
+        )
+
+    def _initialize_guards(self) -> None:
+        """Initialize sub-guards for stock trading."""
+        try:
+            # Import stock risk modules
+            from services.pdt_tracker import PDTTracker, PDTTrackerConfig
+            from services.stock_risk_guards import (
+                MarginGuard, MarginGuardConfig,
+                ShortSaleGuard, ShortSaleGuardConfig,
+                CorporateActionsHandler, CorporateActionsConfig,
+            )
+
+            # PDT Tracker
+            if self._config.pdt_enabled:
+                pdt_config = PDTTrackerConfig(
+                    initial_equity=self._config.pdt_account_equity,
+                    pdt_threshold=self._config.pdt_threshold,
+                    max_day_trades=self._config.pdt_max_day_trades,
+                    rolling_days=self._config.pdt_rolling_days,
+                    simulation_mode=self._config.simulation_mode,
+                    strict_mode=self._config.strict_mode,
+                )
+                self._pdt_tracker = PDTTracker(
+                    account_equity=self._config.pdt_account_equity,
+                    config=pdt_config,
+                )
+
+            # Margin Guard
+            if self._config.margin_enabled:
+                margin_config = MarginGuardConfig(
+                    initial_margin=self._config.initial_margin,
+                    maintenance_margin=self._config.maintenance_margin,
+                    house_margin_buffer=self._config.margin_buffer,
+                    strict_mode=self._config.strict_mode,
+                )
+                self._margin_guard = MarginGuard(config=margin_config)
+
+            # Short Sale Guard
+            if self._config.short_sale_enabled:
+                short_config = ShortSaleGuardConfig(
+                    enforce_uptick_rule=self._config.enforce_uptick_rule,
+                    check_htb_list=self._config.check_htb_list,
+                    circuit_breaker_threshold=self._config.circuit_breaker_threshold,
+                    strict_mode=self._config.strict_mode,
+                )
+                self._short_sale_guard = ShortSaleGuard(config=short_config)
+
+            # Corporate Actions Handler
+            if self._config.corporate_actions_enabled:
+                ca_config = CorporateActionsConfig(
+                    adjust_positions_on_split=self._config.adjust_positions_on_split,
+                    warn_on_ex_dividend=self._config.warn_on_ex_dividend,
+                )
+                self._corporate_actions = CorporateActionsHandler(config=ca_config)
+
+            logger.info("StockRiskGuard: All sub-guards initialized")
+
+        except ImportError as e:
+            logger.warning(f"StockRiskGuard: Could not import sub-guards: {e}")
+
+    # =========================
+    # Properties
+    # =========================
+
+    @property
+    def config(self) -> StockRiskConfig:
+        """Get current configuration."""
+        return self._config
+
+    @property
+    def last_event(self) -> RiskEvent:
+        """Get last risk event."""
+        return self._last_event
+
+    @property
+    def last_event_reason(self) -> str:
+        """Get reason for last risk event."""
+        return self._last_event_reason
+
+    @property
+    def pdt_tracker(self):
+        """Access PDT tracker directly."""
+        return self._pdt_tracker
+
+    @property
+    def margin_guard(self):
+        """Access margin guard directly."""
+        return self._margin_guard
+
+    @property
+    def short_sale_guard(self):
+        """Access short sale guard directly."""
+        return self._short_sale_guard
+
+    @property
+    def corporate_actions(self):
+        """Access corporate actions handler directly."""
+        return self._corporate_actions
+
+    # =========================
+    # Pre-Trade Checks
+    # =========================
+
+    def check_trade(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        is_day_trade: bool = False,
+        timestamp_ms: Optional[int] = None,
+    ) -> RiskEvent:
+        """
+        Check if a trade is allowed under stock risk rules.
+
+        Args:
+            symbol: Trading symbol
+            side: "BUY" or "SELL"
+            quantity: Trade quantity
+            price: Trade price
+            is_day_trade: Whether this would complete a day trade
+            timestamp_ms: Current timestamp
+
+        Returns:
+            RiskEvent indicating any violation (NONE if OK)
+        """
+        # Skip all checks for non-stock trading
+        if not self._config.is_stock_trading:
+            self._last_event = RiskEvent.NONE
+            self._last_event_reason = "Not stock trading - checks skipped"
+            return RiskEvent.NONE
+
+        if timestamp_ms is None:
+            timestamp_ms = now_ms()
+
+        side = side.upper()
+        symbol = symbol.upper()
+
+        # 1. PDT Check (for potential day trades)
+        if is_day_trade and self._pdt_tracker is not None:
+            can_trade, reason = self._pdt_tracker.can_day_trade(symbol, timestamp_ms)
+            if not can_trade:
+                self._last_event = RiskEvent.PDT_VIOLATION
+                self._last_event_reason = reason
+                eb.log_risk({
+                    "ts": timestamp_ms,
+                    "type": "PDT_VIOLATION",
+                    "symbol": symbol,
+                    "reason": reason,
+                })
+                if self._config.strict_mode and not self._config.simulation_mode:
+                    return RiskEvent.PDT_VIOLATION
+
+        # 2. Margin Check (for buys)
+        if side == "BUY" and self._margin_guard is not None:
+            can_buy, reason = self._margin_guard.can_open_position(
+                symbol, quantity, price, timestamp_ms
+            )
+            if not can_buy:
+                self._last_event = RiskEvent.MARGIN_CALL
+                self._last_event_reason = reason
+                eb.log_risk({
+                    "ts": timestamp_ms,
+                    "type": "MARGIN_VIOLATION",
+                    "symbol": symbol,
+                    "side": side,
+                    "quantity": quantity,
+                    "price": price,
+                    "reason": reason,
+                })
+                if self._config.strict_mode and not self._config.simulation_mode:
+                    return RiskEvent.MARGIN_CALL
+
+        # 3. Short Sale Check (for sells that open/increase short position)
+        if side == "SELL" and self._short_sale_guard is not None:
+            # Check if this would be a short sale
+            can_short, status = self._short_sale_guard.can_short(
+                symbol, price, quantity, timestamp_ms
+            )
+            if not can_short:
+                self._last_event = RiskEvent.SHORT_SALE_RESTRICTED
+                self._last_event_reason = f"Short sale restricted: {status.restriction.value}"
+                eb.log_risk({
+                    "ts": timestamp_ms,
+                    "type": "SHORT_SALE_RESTRICTED",
+                    "symbol": symbol,
+                    "restriction": status.restriction.value,
+                })
+                if self._config.strict_mode and not self._config.simulation_mode:
+                    return RiskEvent.SHORT_SALE_RESTRICTED
+
+        # 4. Corporate Actions Check
+        if self._corporate_actions is not None:
+            is_short = side == "SELL"  # Simplification
+            warning = self._corporate_actions.check_dividend_warning(symbol, is_short)
+            if warning:
+                logger.warning(f"StockRiskGuard: {warning}")
+                # Don't block, just warn
+
+        self._last_event = RiskEvent.NONE
+        self._last_event_reason = "All stock risk checks passed"
+        return RiskEvent.NONE
+
+    def check_short_sale(
+        self,
+        symbol: str,
+        price: float,
+        quantity: float,
+        timestamp_ms: Optional[int] = None,
+    ) -> Tuple[bool, str]:
+        """
+        Specifically check if a short sale is allowed.
+
+        Args:
+            symbol: Trading symbol
+            price: Short sale price
+            quantity: Short quantity
+            timestamp_ms: Current timestamp
+
+        Returns:
+            (can_short, reason) tuple
+        """
+        if not self._config.is_stock_trading:
+            return True, "Not stock trading"
+
+        if self._short_sale_guard is None:
+            return True, "Short sale guard not enabled"
+
+        can_short, status = self._short_sale_guard.can_short(
+            symbol, price, quantity, timestamp_ms
+        )
+        return can_short, status.restriction.value
+
+    def check_day_trade(
+        self,
+        symbol: str,
+        timestamp_ms: Optional[int] = None,
+    ) -> Tuple[bool, str]:
+        """
+        Check if a day trade is allowed.
+
+        Args:
+            symbol: Trading symbol
+            timestamp_ms: Current timestamp
+
+        Returns:
+            (can_day_trade, reason) tuple
+        """
+        if not self._config.is_stock_trading:
+            return True, "Not stock trading"
+
+        if self._pdt_tracker is None:
+            return True, "PDT tracker not enabled"
+
+        return self._pdt_tracker.can_day_trade(symbol, timestamp_ms)
+
+    def check_margin(
+        self,
+        symbol: str,
+        quantity: float,
+        price: float,
+        timestamp_ms: Optional[int] = None,
+    ) -> Tuple[bool, str]:
+        """
+        Check if a position can be opened within margin requirements.
+
+        Args:
+            symbol: Trading symbol
+            quantity: Position size
+            price: Price
+            timestamp_ms: Current timestamp
+
+        Returns:
+            (can_open, reason) tuple
+        """
+        if not self._config.is_stock_trading:
+            return True, "Not stock trading"
+
+        if self._margin_guard is None:
+            return True, "Margin guard not enabled"
+
+        return self._margin_guard.can_open_position(symbol, quantity, price, timestamp_ms)
+
+    # =========================
+    # Post-Trade Recording
+    # =========================
+
+    def record_trade(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        price: float,
+        timestamp_ms: int,
+        is_opening: bool = True,
+    ) -> None:
+        """
+        Record a completed trade for tracking.
+
+        Args:
+            symbol: Trading symbol
+            side: "BUY" or "SELL"
+            quantity: Trade quantity
+            price: Trade price
+            timestamp_ms: Trade timestamp
+            is_opening: Whether this opens (vs closes) a position
+        """
+        if not self._config.is_stock_trading:
+            return
+
+        symbol = symbol.upper()
+        side = side.upper()
+
+        # Update PDT tracking
+        if self._pdt_tracker is not None:
+            if is_opening:
+                pdt_side = "LONG" if side == "BUY" else "SHORT"
+                self._pdt_tracker.record_open(
+                    symbol, pdt_side, quantity, price, timestamp_ms
+                )
+            else:
+                self._pdt_tracker.record_close(
+                    symbol, quantity, price, timestamp_ms
+                )
+
+        # Update short sale last price
+        if self._short_sale_guard is not None:
+            self._short_sale_guard.update_last_sale(symbol, price, timestamp_ms)
+
+    def record_day_trade(
+        self,
+        symbol: str,
+        timestamp_ms: int,
+        buy_price: float = 0.0,
+        sell_price: float = 0.0,
+        quantity: float = 1.0,
+    ) -> None:
+        """
+        Directly record a completed day trade.
+
+        Args:
+            symbol: Trading symbol
+            timestamp_ms: Trade timestamp
+            buy_price: Buy price
+            sell_price: Sell price
+            quantity: Trade quantity
+        """
+        if not self._config.is_stock_trading:
+            return
+
+        if self._pdt_tracker is not None:
+            from services.pdt_tracker import DayTradeType
+            self._pdt_tracker.record_day_trade(
+                symbol=symbol,
+                timestamp_ms=timestamp_ms,
+                trade_type=DayTradeType.LONG_ROUND_TRIP,
+                buy_price=buy_price,
+                sell_price=sell_price,
+                quantity=quantity,
+            )
+
+    # =========================
+    # State Updates
+    # =========================
+
+    def update_account_equity(self, equity: float, cash: float = 0.0) -> None:
+        """
+        Update account equity for margin and PDT calculations.
+
+        Args:
+            equity: Total account equity
+            cash: Cash balance (optional)
+        """
+        if not self._config.is_stock_trading:
+            return
+
+        if self._pdt_tracker is not None:
+            self._pdt_tracker.account_equity = equity
+
+        if self._margin_guard is not None:
+            self._margin_guard.set_equity(equity, cash)
+
+    def trigger_circuit_breaker(
+        self,
+        symbol: str,
+        timestamp_ms: int,
+        duration_ms: Optional[int] = None,
+    ) -> None:
+        """
+        Trigger short sale circuit breaker (Rule 201).
+
+        Args:
+            symbol: Symbol to restrict
+            timestamp_ms: Current timestamp
+            duration_ms: Custom duration (default: ~1.5 trading days)
+        """
+        if not self._config.is_stock_trading:
+            return
+
+        if self._short_sale_guard is not None:
+            self._short_sale_guard.trigger_circuit_breaker(
+                symbol, timestamp_ms, duration_ms
+            )
+
+    def add_corporate_action(
+        self,
+        symbol: str,
+        action_type: str,
+        ex_date: date,
+        dividend_amount: float = 0.0,
+        split_ratio: Tuple[int, int] = (1, 1),
+    ) -> None:
+        """
+        Add a corporate action.
+
+        Args:
+            symbol: Trading symbol
+            action_type: "DIVIDEND", "STOCK_SPLIT", etc.
+            ex_date: Ex-dividend or effective date
+            dividend_amount: Dividend per share (for dividends)
+            split_ratio: (new_shares, old_shares) for splits
+        """
+        if not self._config.is_stock_trading:
+            return
+
+        if self._corporate_actions is not None:
+            from services.stock_risk_guards import CorporateAction, CorporateActionType
+            try:
+                action = CorporateAction(
+                    symbol=symbol,
+                    action_type=CorporateActionType(action_type),
+                    ex_date=ex_date,
+                    dividend_amount=dividend_amount,
+                    split_ratio=split_ratio,
+                )
+                self._corporate_actions.add_action(action)
+            except ValueError:
+                logger.warning(f"Unknown corporate action type: {action_type}")
+
+    # =========================
+    # Status and Reporting
+    # =========================
+
+    def get_pdt_status(self, timestamp_ms: Optional[int] = None) -> Dict[str, Any]:
+        """Get PDT status summary."""
+        if not self._config.is_stock_trading or self._pdt_tracker is None:
+            return {"enabled": False}
+
+        return self._pdt_tracker.get_summary(timestamp_ms)
+
+    def get_margin_status(self) -> Dict[str, Any]:
+        """Get margin status summary."""
+        if not self._config.is_stock_trading or self._margin_guard is None:
+            return {"enabled": False}
+
+        status = self._margin_guard.get_margin_status()
+        return {
+            "enabled": True,
+            "equity": status.equity,
+            "buying_power": status.buying_power,
+            "margin_used": status.margin_used,
+            "margin_call_type": status.margin_call_type.value,
+            "margin_call_amount": status.margin_call_amount,
+        }
+
+    def get_short_status(self, symbol: str, timestamp_ms: Optional[int] = None) -> Dict[str, Any]:
+        """Get short sale status for a symbol."""
+        if not self._config.is_stock_trading or self._short_sale_guard is None:
+            return {"enabled": False}
+
+        status = self._short_sale_guard.get_short_status(symbol, timestamp_ms)
+        return {
+            "enabled": True,
+            "symbol": status.symbol,
+            "restriction": status.restriction.value,
+            "is_shortable": status.is_shortable,
+            "is_easy_to_borrow": status.is_easy_to_borrow,
+            "borrow_rate": status.borrow_rate,
+            "circuit_breaker_active": status.circuit_breaker_active,
+        }
+
+    def snapshot(self) -> Dict[str, Any]:
+        """Get comprehensive status snapshot."""
+        return {
+            "market_type": self._config.market_type,
+            "is_stock_trading": self._config.is_stock_trading,
+            "last_event": self._last_event.name,
+            "last_event_reason": self._last_event_reason,
+            "pdt_enabled": self._pdt_tracker is not None,
+            "margin_enabled": self._margin_guard is not None,
+            "short_sale_enabled": self._short_sale_guard is not None,
+            "corporate_actions_enabled": self._corporate_actions is not None,
+        }
+
+    # =========================
+    # Reset
+    # =========================
+
+    def reset(self) -> None:
+        """Reset all stock risk guards state."""
+        self._last_event = RiskEvent.NONE
+        self._last_event_reason = ""
+
+        if self._pdt_tracker is not None:
+            self._pdt_tracker.reset()
+
+        if self._margin_guard is not None:
+            self._margin_guard.clear_positions()
+
+        if self._short_sale_guard is not None:
+            self._short_sale_guard.clear_htb_cache()
+
+        logger.debug("StockRiskGuard: State reset")
+
+
+# =========================
+# Factory Functions
+# =========================
+
+def create_stock_risk_guard(
+    market_type: str = "EQUITY",
+    account_equity: float = 30_000.0,
+    simulation_mode: bool = False,
+    strict_mode: bool = True,
+) -> StockRiskGuard:
+    """
+    Create a StockRiskGuard with common defaults.
+
+    Args:
+        market_type: "EQUITY" for stocks, "CRYPTO_SPOT" for crypto
+        account_equity: Account equity for PDT/margin calculations
+        simulation_mode: If True, warn but don't block
+        strict_mode: If True, enforce limits strictly
+
+    Returns:
+        Configured StockRiskGuard instance
+    """
+    config = StockRiskConfig(
+        market_type=market_type,
+        pdt_account_equity=account_equity,
+        simulation_mode=simulation_mode,
+        strict_mode=strict_mode,
+    )
+    return StockRiskGuard(config)
+
+
+def create_combined_risk_guard(
+    risk_config: Optional[RiskConfig] = None,
+    stock_config: Optional[StockRiskConfig] = None,
+) -> Tuple[RiskGuard, Optional[StockRiskGuard]]:
+    """
+    Create both RiskGuard and StockRiskGuard.
+
+    Returns:
+        (RiskGuard, StockRiskGuard) tuple
+        StockRiskGuard is None if market_type is crypto
+
+    Usage:
+        risk_guard, stock_guard = create_combined_risk_guard(
+            stock_config=StockRiskConfig(market_type="EQUITY")
+        )
+
+        # Use risk_guard for core checks
+        event = risk_guard.on_action_proposed(state, proto)
+
+        # Use stock_guard for stock-specific checks
+        if stock_guard:
+            event = stock_guard.check_trade(...)
+    """
+    risk_guard = RiskGuard(risk_config)
+
+    if stock_config is None:
+        return risk_guard, None
+
+    if stock_config.is_stock_trading:
+        stock_guard = StockRiskGuard(stock_config)
+        return risk_guard, stock_guard
+
+    return risk_guard, None
 
