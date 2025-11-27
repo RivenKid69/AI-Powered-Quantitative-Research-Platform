@@ -30,6 +30,7 @@
 | Position sync (Alpaca) | `services/position_sync.py` | `pytest tests/test_phase9_live_trading.py::TestPositionSynchronizer` |
 | Extended hours trading | `services/session_router.py` | `pytest tests/test_phase9_live_trading.py::TestSessionRouter` |
 | Bracket/OCO orders | `adapters/alpaca/order_execution.py` | `pytest tests/test_phase9_live_trading.py::TestBracketOrderConfig` |
+| Скачать stock data | `scripts/download_stock_data.py` | `--symbols GLD IAU SLV --start 2020-01-01` |
 
 ### 🔍 Quick File Reference
 
@@ -66,6 +67,7 @@ python -m services.universe --output data/universe/symbols.json
 
 # Обновление данных (Stocks)
 python scripts/fetch_alpaca_universe.py --output data/universe/alpaca_symbols.json --popular
+python scripts/download_stock_data.py --symbols GLD IAU SGOL SLV --start 2020-01-01 --timeframe 1h --resample 4h
 
 # Live Trading (Stocks - Alpaca)
 python script_live.py --config configs/config_live_alpaca.yaml
@@ -229,6 +231,39 @@ Phase 3 добавляет полную поддержку акций в trainin
    - Exponential backoff и heartbeat monitoring
    - Rate limiting и message buffering
 
+### Поддерживаемые символы
+
+**Tech Stocks:**
+- AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA
+
+**Index ETFs:**
+- SPY (S&P 500), QQQ (Nasdaq 100), IWM (Russell 2000)
+
+**Precious Metals ETFs:**
+- GLD (SPDR Gold Trust, $60B AUM)
+- IAU (iShares Gold Trust)
+- SGOL (Aberdeen Physical Gold)
+- SLV (iShares Silver Trust)
+
+### Скачивание данных
+
+```bash
+# Скачать все поддерживаемые символы (3 года истории)
+python scripts/download_stock_data.py \
+    --symbols AAPL MSFT GOOGL AMZN NVDA META TSLA SPY QQQ IWM GLD IAU SGOL SLV \
+    --start 2020-01-01 --timeframe 1h --resample 4h
+
+# Только precious metals
+python scripts/download_stock_data.py \
+    --symbols GLD IAU SGOL SLV \
+    --start 2020-01-01 --timeframe 1h --resample 4h
+
+# Популярные tech stocks
+python scripts/download_stock_data.py --popular --start 2020-01-01
+```
+
+Данные сохраняются в: `data/raw_stocks/*.parquet`
+
 ### Stock Training Configuration
 
 ```yaml
@@ -241,6 +276,9 @@ data:
   timeframe: "4h"
   filter_trading_hours: true
   include_extended_hours: false
+  paths:
+    - "data/raw_stocks/*.parquet"
+    - "data/stocks/*.parquet"
 
 env:
   session:
@@ -301,6 +339,22 @@ frames, obs_shapes = load_from_adapter(
     start_date="2024-01-01",
     end_date="2024-12-31",
 )
+```
+
+### Gold-Specific Features (опционально)
+
+Для улучшения модели на precious metals можно добавить макро-индикаторы:
+
+| Feature | Источник | Корреляция с золотом |
+|---------|----------|----------------------|
+| DXY (Dollar Index) | Yahoo (`DX-Y.NYB`) | Обратная (сильная) |
+| Real Yields (TIPS) | FRED (`DFII10`) | Обратная |
+| Gold/Silver Ratio | Расчёт (`GLD/SLV`) | Mean-reverts (60-80) |
+| VIX | Yahoo (`^VIX`) | Положительная (fear) |
+
+```bash
+# Скачать VIX для fear indicator
+python scripts/download_stock_data.py --symbols ^VIX --start 2020-01-01
 ```
 
 ### Требования

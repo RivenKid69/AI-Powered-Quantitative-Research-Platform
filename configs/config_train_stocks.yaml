@@ -57,12 +57,14 @@ data:
 
   # Local file paths (for source=local)
   paths:
+    - "data/raw_stocks/*.parquet"
     - "data/stocks/*.parquet"
     - "data/stocks/*.feather"
 
   # API configuration (for source=alpaca or polygon)
   api:
     symbols:
+      # Tech stocks
       - "AAPL"
       - "MSFT"
       - "GOOGL"
@@ -70,9 +72,16 @@ data:
       - "NVDA"
       - "META"
       - "TSLA"
+      # Index ETFs
       - "SPY"
       - "QQQ"
       - "IWM"
+      # Gold ETFs
+      - "GLD"    # SPDR Gold Trust ($60B AUM)
+      - "IAU"    # iShares Gold Trust
+      - "SGOL"   # Aberdeen Physical Gold
+      # Silver ETFs
+      - "SLV"    # iShares Silver Trust
     # Credentials from environment: ALPACA_API_KEY, ALPACA_API_SECRET, POLYGON_API_KEY
 
   # Training window

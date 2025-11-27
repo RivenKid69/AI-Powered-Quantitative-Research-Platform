@@ -27,6 +27,7 @@ data:
   source: local  # or alpaca, polygon
 
   paths:
+    - "data/raw_stocks/*.parquet"
     - "data/stocks/*.parquet"
     - "data/stocks/*.feather"
 
