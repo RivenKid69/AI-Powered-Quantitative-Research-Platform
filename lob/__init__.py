@@ -31,6 +31,7 @@ Stage 3 (v3.0): Fill probability models, queue value, calibration
 Stage 4 (v4.0): Market impact models, effects, impact calibration
 Stage 5 (v5.0): Latency simulation, event scheduler
 Stage 6 (v6.0): Hidden liquidity detection, dark pool simulation
+Stage 8 (v8.0): Data adapters, unified L3 calibration pipeline
 
 Usage:
     from lob import OrderBook, LimitOrder, PriceLevel
@@ -295,6 +296,46 @@ from lob.config import (
     impact_config_to_parameters,
 )
 
+# Stage 8: Data Adapters & Unified Calibration Pipeline (v8.0)
+from lob.data_adapters import (
+    # Base adapter
+    BaseLOBAdapter,
+    # Format-specific adapters
+    LOBSTERAdapter,
+    ITCHAdapter,
+    BinanceL2Adapter,
+    AlpacaL2Adapter,
+    # Data structures
+    LOBUpdate,
+    DepthLevel,
+    DepthSnapshot,
+    AdapterStats,
+    DataSourceType,
+    # Factory functions
+    create_lob_adapter,
+    load_orderbook_from_file,
+    get_supported_formats,
+)
+
+from lob.calibration_pipeline import (
+    # Main calibration pipeline
+    L3CalibrationPipeline,
+    # Component calibrators
+    LatencyCalibrator,
+    QueueDynamicsCalibrator,
+    # Data structures
+    LatencyObservation,
+    QuoteObservation,
+    LatencyDistributionParams,
+    LatencyCalibrationResult,
+    QueueDynamicsResult,
+    L3CalibrationResult,
+    CalibrationDataType,
+    # Factory functions
+    create_calibration_pipeline as create_l3_calibration_pipeline,
+    calibrate_from_dataframe,
+)
+
 __all__ = [
     # Core data structures
     "Side",
@@ -479,6 +520,33 @@ __all__ = [
     "create_l3_config",
     "latency_config_to_dataclass",
     "impact_config_to_parameters",
+    # Data Adapters (Stage 8)
+    "BaseLOBAdapter",
+    "LOBSTERAdapter",
+    "ITCHAdapter",
+    "BinanceL2Adapter",
+    "AlpacaL2Adapter",
+    "LOBUpdate",
+    "DepthLevel",
+    "DepthSnapshot",
+    "AdapterStats",
+    "DataSourceType",
+    "create_lob_adapter",
+    "load_orderbook_from_file",
+    "get_supported_formats",
+    # Unified Calibration Pipeline (Stage 8)
+    "L3CalibrationPipeline",
+    "LatencyCalibrator",
+    "QueueDynamicsCalibrator",
+    "LatencyObservation",
+    "QuoteObservation",
+    "LatencyDistributionParams",
+    "LatencyCalibrationResult",
+    "QueueDynamicsResult",
+    "L3CalibrationResult",
+    "CalibrationDataType",
+    "create_l3_calibration_pipeline",
+    "calibrate_from_dataframe",
 ]
 
-__version__ = "7.0.0"
+__version__ = "8.0.0"
