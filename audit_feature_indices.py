@@ -10,7 +10,7 @@ from pathlib import Path
 def audit_obs_builder():
     """Parse obs_builder.pyx and track feature_idx increments."""
 
-    obs_builder_path = Path("/home/user/TradingBot2/obs_builder.pyx")
+    obs_builder_path = Path("/home/user/AI-Powered Quantitative Research Platform/obs_builder.pyx")
 
     if not obs_builder_path.exists():
         print(f"❌ File not found: {obs_builder_path}")
@@ -120,7 +120,7 @@ def check_feature_config():
     print("AUDIT: feature_config.py")
     print("=" * 80)
 
-    config_path = Path("/home/user/TradingBot2/feature_config.py")
+    config_path = Path("/home/user/AI-Powered Quantitative Research Platform/feature_config.py")
 
     with open(config_path, 'r') as f:
         content = f.read()
@@ -141,7 +141,7 @@ def check_feature_config():
 
     # Compute total from layout
     import sys
-    sys.path.insert(0, '/home/user/TradingBot2')
+    sys.path.insert(0, '/home/user/AI-Powered Quantitative Research Platform')
 
     try:
         from feature_config import N_FEATURES, FEATURES_LAYOUT
@@ -186,7 +186,7 @@ def check_documentation():
     checks = []
 
     # Check FEATURE_MAPPING_63.md
-    mapping_path = Path("/home/user/TradingBot2/FEATURE_MAPPING_63.md")
+    mapping_path = Path("/home/user/AI-Powered Quantitative Research Platform/FEATURE_MAPPING_63.md")
     if mapping_path.exists():
         with open(mapping_path, 'r') as f:
             content = f.read()
@@ -204,7 +204,7 @@ def check_documentation():
         checks.append(("FEATURE_MAPPING_63.md exists", False))
 
     # Check MIGRATION_GUIDE
-    migration_path = Path("/home/user/TradingBot2/MIGRATION_GUIDE_62_TO_63.md")
+    migration_path = Path("/home/user/AI-Powered Quantitative Research Platform/MIGRATION_GUIDE_62_TO_63.md")
     if migration_path.exists():
         with open(migration_path, 'r') as f:
             content = f.read()

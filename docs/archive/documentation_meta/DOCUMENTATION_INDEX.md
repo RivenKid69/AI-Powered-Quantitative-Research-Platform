@@ -1,6 +1,6 @@
-# TradingBot2 - Индекс документации
+# AI-Powered Quantitative Research Platform - Индекс документации
 
-Этот документ является справочником по всем аналитическим документам, созданным для проекта TradingBot2.
+Этот документ является справочником по всем аналитическим документам, созданным для проекта.
 
 ---
 
@@ -288,16 +288,16 @@ External (21)     │ Token (3)      │
 ## Быстрые ссылки на документы
 
 ### Внутри проекта
-- [PROJECT_STRUCTURE_ANALYSIS.md](/home/user/TradingBot2/PROJECT_STRUCTURE_ANALYSIS.md)
-- [ARCHITECTURE_DIAGRAM.md](/home/user/TradingBot2/ARCHITECTURE_DIAGRAM.md)
-- [QUICK_START_REFERENCE.md](/home/user/TradingBot2/QUICK_START_REFERENCE.md)
-- [README.md](/home/user/TradingBot2/README.md)
-- [ARCHITECTURE.md](/home/user/TradingBot2/ARCHITECTURE.md)
+- [PROJECT_STRUCTURE_ANALYSIS.md](/home/user/AI-Powered Quantitative Research Platform/PROJECT_STRUCTURE_ANALYSIS.md)
+- [ARCHITECTURE_DIAGRAM.md](/home/user/AI-Powered Quantitative Research Platform/ARCHITECTURE_DIAGRAM.md)
+- [QUICK_START_REFERENCE.md](/home/user/AI-Powered Quantitative Research Platform/QUICK_START_REFERENCE.md)
+- [README.md](/home/user/AI-Powered Quantitative Research Platform/README.md)
+- [ARCHITECTURE.md](/home/user/AI-Powered Quantitative Research Platform/ARCHITECTURE.md)
 
 ### Документация
-- [docs/bar_execution.md](/home/user/TradingBot2/docs/bar_execution.md)
-- [docs/pipeline.md](/home/user/TradingBot2/docs/pipeline.md)
-- [docs/seasonality.md](/home/user/TradingBot2/docs/seasonality.md)
+- [docs/bar_execution.md](/home/user/AI-Powered Quantitative Research Platform/docs/bar_execution.md)
+- [docs/pipeline.md](/home/user/AI-Powered Quantitative Research Platform/docs/pipeline.md)
+- [docs/seasonality.md](/home/user/AI-Powered Quantitative Research Platform/docs/seasonality.md)
 
 ---
 
@@ -379,5 +379,5 @@ External (21)     │ Token (3)      │
 
 **Последнее обновление**: 2025-11-11 16:43 UTC
 **Автор анализа**: Claude Code Agent
-**Проект**: TradingBot2
+**Проект**: AI-Powered Quantitative Research Platform
 

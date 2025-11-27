@@ -20,7 +20,7 @@ This migration adds a **critical validity flag for ATR** (Average True Range) to
 ### ✅ 1. Code Changes
 
 #### ✅ 1.1 obs_builder.pyx
-**File**: `/home/user/TradingBot2/obs_builder.pyx`
+**File**: `/home/user/AI-Powered Quantitative Research Platform/obs_builder.pyx`
 
 **Change 1: Declaration (Line 228)**
 ```cython
@@ -57,7 +57,7 @@ out_features[feature_idx] = <float>vol_proxy
 ✅ **Verified**: vol_proxy calculation checks validity flag
 
 #### ✅ 1.2 feature_config.py
-**File**: `/home/user/TradingBot2/feature_config.py`
+**File**: `/home/user/AI-Powered Quantitative Research Platform/feature_config.py`
 
 **Change: Indicators block size (Line 51)**
 ```python
@@ -89,7 +89,7 @@ layout.append({
 ### ✅ 2. Tests Created/Updated
 
 #### ✅ 2.1 New Test: test_atr_validity_flag.py
-**File**: `/home/user/TradingBot2/tests/test_atr_validity_flag.py`
+**File**: `/home/user/AI-Powered Quantitative Research Platform/tests/test_atr_validity_flag.py`
 **Status**: ✅ Created (9 comprehensive tests)
 
 **Test Coverage**:
@@ -121,7 +121,7 @@ layout.append({
 ### ✅ 4. Documentation
 
 #### ✅ 4.1 FEATURE_MAPPING_63.md (CREATED)
-**File**: `/home/user/TradingBot2/FEATURE_MAPPING_63.md`
+**File**: `/home/user/AI-Powered Quantitative Research Platform/FEATURE_MAPPING_63.md`
 **Status**: ✅ Created
 
 **Contents**:
@@ -132,7 +132,7 @@ layout.append({
 - Research references
 
 #### ✅ 4.2 OBSERVATION_MAPPING.md (UPDATED)
-**File**: `/home/user/TradingBot2/OBSERVATION_MAPPING.md`
+**File**: `/home/user/AI-Powered Quantitative Research Platform/OBSERVATION_MAPPING.md`
 **Status**: ✅ Updated (62→63)
 
 **Changes**:
@@ -141,7 +141,7 @@ layout.append({
 - Updated all indices after 15 (+1 shift)
 
 #### ✅ 4.3 MIGRATION_GUIDE_62_TO_63.md (CREATED)
-**File**: `/home/user/TradingBot2/MIGRATION_GUIDE_62_TO_63.md`
+**File**: `/home/user/AI-Powered Quantitative Research Platform/MIGRATION_GUIDE_62_TO_63.md`
 **Status**: ✅ Created
 
 **Contents**:

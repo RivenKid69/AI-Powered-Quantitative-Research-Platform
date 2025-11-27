@@ -5,7 +5,7 @@ import sys
 import os
 
 # Add the project root to the path
-sys.path.insert(0, '/home/user/TradingBot2')
+sys.path.insert(0, '/home/user/AI-Powered Quantitative Research Platform')
 
 def test_default_behavior():
     """Test that Twin Critics are enabled by default."""

@@ -202,7 +202,7 @@ SCHEDULED IMPROVEMENTS (Session 3+):
 FILE LOCATIONS FOR CHANGES
 ================================================================================
 
-Main Changes: /home/user/TradingBot2/distributional_ppo.py
+Main Changes: /home/user/AI-Powered Quantitative Research Platform/distributional_ppo.py
 
 Critical Fixes:
   - Line 6535-6536: CVaR violation

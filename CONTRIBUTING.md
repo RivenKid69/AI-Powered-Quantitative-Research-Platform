@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for considering contributing to TradingBot.
+Thank you for considering contributing to AI-Powered Quantitative Research Platform.
 
 ## Seasonality review requirements
 

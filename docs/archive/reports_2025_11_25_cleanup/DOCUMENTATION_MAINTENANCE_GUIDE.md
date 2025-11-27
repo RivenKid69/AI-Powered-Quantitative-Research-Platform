@@ -1,4 +1,4 @@
-# TradingBot2 Documentation Maintenance Guide
+# AI-Powered Quantitative Research Platform Documentation Maintenance Guide
 
 > **Руководство по поддержке и актуализации документации проекта**
 

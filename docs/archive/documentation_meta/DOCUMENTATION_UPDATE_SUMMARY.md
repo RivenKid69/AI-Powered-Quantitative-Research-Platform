@@ -131,7 +131,7 @@ Following the discovery and fix of three critical bugs on 2025-11-20, comprehens
 ## 📊 Documentation Structure
 
 ```
-TradingBot2/
+AI-Powered Quantitative Research Platform/
 ├── CRITICAL_FIXES_REPORT.md              ⭐ NEW - Complete analysis
 ├── DOCUMENTATION_UPDATE_SUMMARY.md       ⭐ NEW - This file
 ├── CHANGELOG.md                          📝 UPDATED - Added bugs #10-12

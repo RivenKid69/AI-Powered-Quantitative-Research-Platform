@@ -1,7 +1,7 @@
 # Remaining Integration Issues Report - UPGD/PBT/Twin Critics/VGS
 
 **Date:** 2025-11-20
-**Project:** TradingBot2
+**Project:** AI-Powered Quantitative Research Platform
 **Status:** 🟡 Integration Tests Need Fixes
 **Previous Bugs:** ✅ All 5 critical bugs already fixed
 

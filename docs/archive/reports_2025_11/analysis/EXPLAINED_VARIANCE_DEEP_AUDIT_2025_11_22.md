@@ -270,14 +270,14 @@ def explained_variance(y_pred: np.ndarray, y_true: np.ndarray) -> np.ndarray:
     return np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
 ```
 
-**TradingBot2 Advantages** ✅:
+**AI-Powered Quantitative Research Platform Advantages** ✅:
 1. ✅ Better numerical stability (float64 promotion)
 2. ✅ Finite value filtering (NaN/Inf handling)
 3. ✅ Weighted variance support (for importance sampling)
 4. ✅ Epsilon protection in ratio (SB3 lacks this!)
 5. ✅ Comprehensive edge case handling
 
-**TradingBot2 Complexity** ⚠️:
+**AI-Powered Quantitative Research Platform Complexity** ⚠️:
 1. ⚠️ More complex code (harder to maintain)
 2. ⚠️ Multiple fallback paths (potential for subtle bugs)
 3. ⚠️ Data leakage risk in fallback (acknowledged but not prevented)
@@ -291,12 +291,12 @@ var_y = np.var(y_true)
 explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
 ```
 
-**TradingBot2 Advantages** ✅:
+**AI-Powered Quantitative Research Platform Advantages** ✅:
 1. ✅ More robust (CleanRL can return `inf` if var_y extremely small)
 2. ✅ Weighted variance support
 3. ✅ Grouped EV computation (per-group diagnostics)
 
-**Overall Assessment**: TradingBot2 implementation is **more robust** than both SB3 and CleanRL, with only minor issues remaining.
+**Overall Assessment**: AI-Powered Quantitative Research Platform implementation is **more robust** than both SB3 and CleanRL, with only minor issues remaining.
 
 ---
 

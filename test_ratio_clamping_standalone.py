@@ -209,7 +209,7 @@ def test_actual_code_uses_correct_value():
     print("Test 6: Verifying actual code uses ±10...")
 
     try:
-        with open('/home/user/TradingBot2/distributional_ppo.py', 'r') as f:
+        with open('/home/user/ai-quant-platform/distributional_ppo.py', 'r') as f:
             content = f.read()
     except FileNotFoundError:
         print("  ⚠ distributional_ppo.py not found, skipping")

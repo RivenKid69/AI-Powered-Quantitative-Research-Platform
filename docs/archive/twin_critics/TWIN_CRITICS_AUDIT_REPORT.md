@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-Проведен полный аудит реализации Twin Critics в проекте TradingBot2 для проверки критического утверждения:
+Проведен полный аудит реализации Twin Critics в проекте AI-Powered Quantitative Research Platform для проверки критического утверждения:
 
 > **Утверждение пользователя**: "При сборе rollout и вычислении GAE используется только первый критик, а не min(Q1, Q2), что нарушает смысл Twin Critics и приводит к тому, что второй критик просто повторяет ошибки первого."
 
@@ -215,7 +215,7 @@ Target Value = min(Value 1, Value 2)
 
 ## Сравнение с TD3/SAC (best practices)
 
-| Аспект | TD3/SAC | TradingBot2 | Статус |
+| Аспект | TD3/SAC | AI-Powered Quantitative Research Platform | Статус |
 |--------|---------|-------------|--------|
 | Две независимые value networks | ✅ | ✅ | ✅ Корректно |
 | min(Q1, Q2) для target | ✅ | ✅ | ✅ Корректно |

@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from TradingBot2.winrate_stats import (
+from winrate_stats import (
     WinRateStats,
     _clopper_pearson_interval,
     compute_win_rate_stats,

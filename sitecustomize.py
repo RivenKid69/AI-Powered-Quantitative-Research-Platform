@@ -1,4 +1,4 @@
-"""Global interpreter tweaks for TradingBot2."""
+"""Global interpreter tweaks for AI-Powered Quantitative Research Platform."""
 
 import os
 

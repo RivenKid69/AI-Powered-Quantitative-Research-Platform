@@ -46,7 +46,7 @@ def analyze_test_file(filepath):
 
 def main():
     """Main analysis function."""
-    test_dir = Path('/home/user/TradingBot2/tests')
+    test_dir = Path('/home/user/AI-Powered Quantitative Research Platform/tests')
 
     # Find all PBT + Adversarial test files
     test_files = [

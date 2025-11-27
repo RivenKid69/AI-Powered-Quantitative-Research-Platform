@@ -2,7 +2,7 @@
 **Date**: 2025-11-23
 **Auditor**: Claude Code (Deep Conceptual Analysis)
 **Scope**: RL Training Dynamics, Algorithmic Correctness, Best Practices
-**Project**: TradingBot2 - Distributional PPO with Twin Critics + VGS + UPGD
+**Project**: AI-Powered Quantitative Research Platform - Distributional PPO with Twin Critics + VGS + UPGD
 
 ---
 

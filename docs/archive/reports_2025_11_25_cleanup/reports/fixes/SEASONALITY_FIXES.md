@@ -167,7 +167,7 @@ Note on parameter naming:
 Команда для проверки всех файлов:
 
 ```bash
-grep -n "latency.seasonality_override_path\|latency.seasonality_hash" /home/user/TradingBot2/docs/seasonality*.md
+grep -n "latency.seasonality_override_path\|latency.seasonality_hash" /home/user/ai-quant-platform/docs/seasonality*.md
 ```
 
 Должна вернуть только историческую информацию, а не ошибки в документации.

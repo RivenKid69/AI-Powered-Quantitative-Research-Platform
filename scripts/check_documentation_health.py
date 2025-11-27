@@ -3,7 +3,7 @@
 """
 Documentation Health Check Script
 
-Автоматическая проверка здоровья документации проекта TradingBot2.
+Автоматическая проверка здоровья документации проекта AI-Powered Quantitative Research Platform.
 
 Проверки:
 - Возраст файлов (warn if > 3 months old)
@@ -287,7 +287,7 @@ class DocumentationHealthChecker:
     def run_all_checks(self) -> bool:
         """Run all health checks."""
         print("\n" + "="*70)
-        print("TradingBot2 Documentation Health Check")
+        print("AI-Powered Quantitative Research Platform Documentation Health Check")
         print("="*70 + "\n")
 
         # 1. Check core docs exist
@@ -411,7 +411,7 @@ class DocumentationHealthChecker:
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Check documentation health for TradingBot2"
+        description="Check documentation health for AI-Powered Quantitative Research Platform"
     )
     parser.add_argument(
         "--root",

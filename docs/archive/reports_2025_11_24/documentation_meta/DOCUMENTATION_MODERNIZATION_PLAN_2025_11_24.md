@@ -7,7 +7,7 @@
 
 ## Executive Summary
 
-TradingBot2 has accumulated ~200 markdown documents through intensive bug fixing wave (Nov 2025). This plan organizes documentation into:
+AI-Powered Quantitative Research Platform has accumulated ~200 markdown documents through intensive bug fixing wave (Nov 2025). This plan organizes documentation into:
 1. **Core Documentation** (remain in root) - 25 essential files
 2. **Archive** (move to docs/archive/verification_2025_11/) - 12 verification reports
 3. **Update** - Refresh CLAUDE.md, README.md, DOCS_INDEX.md with latest state
@@ -249,7 +249,7 @@ File: `docs/archive/verification_2025_11/README.md`
 
 ## Summary
 
-During November 2025, TradingBot2 underwent comprehensive verification and bug fixing. These reports document the analysis process that confirmed:
+During November 2025, AI-Powered Quantitative Research Platform underwent comprehensive verification and bug fixing. These reports document the analysis process that confirmed:
 
 ✅ **NO CRITICAL BUGS FOUND** in core training system
 ✅ All reported issues were either FALSE POSITIVES or MINOR

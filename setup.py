@@ -147,7 +147,7 @@ ext_modules = [
 ]
 
 setup(
-    name="tradingbot-extensions",
+    name="ai-quant-platform-extensions",
     version="0.1.0",
     description="Cython/C++ extensions: LOB and microstructure generator",
     py_modules=["apply_no_trade_mask", "no_trade"],

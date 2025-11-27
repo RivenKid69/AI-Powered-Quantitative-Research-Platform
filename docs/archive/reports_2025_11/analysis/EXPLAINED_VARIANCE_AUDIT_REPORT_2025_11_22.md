@@ -13,7 +13,7 @@
 **HIGH PRIORITY ISSUES**: 2
 **MEDIUM PRIORITY ISSUES**: 1
 
-This audit reveals **THREE CRITICAL BUGS** that severely compromise the diagnostic value of explained variance metrics in TradingBot2's PPO implementation:
+This audit reveals **THREE CRITICAL BUGS** that severely compromise the diagnostic value of explained variance metrics in AI-Powered Quantitative Research Platform's PPO implementation:
 
 1. ✅ **BUG #1 (CRITICAL)**: VF-clipped predictions used for explained variance → **artificially inflated EV**
 2. ⚠️ **BUG #2 (CRITICAL)**: Twin Critics VF clipping may use clipped quantiles → **optimistically biased EV**
@@ -450,10 +450,10 @@ def explained_variance(y_pred: np.ndarray, y_true: np.ndarray) -> np.ndarray:
     return np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
 ```
 
-**Differences from TradingBot2**:
-- ❌ TradingBot2 uses **VF-clipped predictions** (BUG #1)
-- ❌ TradingBot2 has complex weighted variance logic (may be unnecessary)
-- ✅ TradingBot2 has better numerical stability (float64, finite checks)
+**Differences from AI-Powered Quantitative Research Platform**:
+- ❌ AI-Powered Quantitative Research Platform uses **VF-clipped predictions** (BUG #1)
+- ❌ AI-Powered Quantitative Research Platform has complex weighted variance logic (may be unnecessary)
+- ✅ AI-Powered Quantitative Research Platform has better numerical stability (float64, finite checks)
 
 ---
 
@@ -711,12 +711,12 @@ def test_explained_variance_uses_unclipped_predictions():
 ```python
 def test_explained_variance_matches_sb3():
     """
-    Compare TradingBot2 explained variance with Stable-Baselines3 reference.
+    Compare AI-Powered Quantitative Research Platform explained variance with Stable-Baselines3 reference.
     """
     y_true = np.random.randn(1000)
     y_pred = y_true + np.random.randn(1000) * 0.5  # Add noise
 
-    # TradingBot2 implementation
+    # AI-Powered Quantitative Research Platform implementation
     ev_tb2 = safe_explained_variance(y_true, y_pred, weights=None)
 
     # SB3 implementation (reference)

@@ -197,7 +197,7 @@ self.observation_space = spaces.Box(
 
 ### 1. Recompile Cython Modules ⚠️
 ```bash
-cd /home/user/TradingBot2
+cd /home/user/AI-Powered Quantitative Research Platform
 python setup.py build_ext --inplace
 ```
 

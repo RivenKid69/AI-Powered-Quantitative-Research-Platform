@@ -10,7 +10,7 @@ import torch.nn as nn
 import sys
 import os
 
-sys.path.insert(0, '/home/user/TradingBot2')
+sys.path.insert(0, '/home/user/ai-quant-platform')
 from variance_gradient_scaler import VarianceGradientScaler
 
 

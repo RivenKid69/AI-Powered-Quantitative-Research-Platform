@@ -266,7 +266,7 @@ Add clarification to architecture docs:
 ````markdown
 ## Timestamp Convention
 
-TradingBot2 uses **close_time-based** timestamps with **1-bar shift** for lookahead prevention.
+AI-Powered Quantitative Research Platform uses **close_time-based** timestamps with **1-bar shift** for lookahead prevention.
 
 ### Design Rationale
 

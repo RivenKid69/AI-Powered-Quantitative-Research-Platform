@@ -1,4 +1,4 @@
-# TradingBot2 - Quick Guide for AI Assistants
+# AI-Powered Quantitative Research Platform - Quick Guide for AI Assistants
 
 > **Экспресс-справочник для быстрого понимания проекта**
 
@@ -10,7 +10,7 @@
 
 ## 🎯 Что это?
 
-**TradingBot2** - высокочастотный торговый бот для криптовалют с RL (Reinforcement Learning):
+**AI-Powered Quantitative Research Platform** - высокочастотный торговый бот для криптовалют с RL (Reinforcement Learning):
 - **Биржа**: Binance spot/futures
 - **Алгоритм**: Distributional PPO + Twin Critics
 - **Optimizer**: AdaptiveUPGD (continual learning)

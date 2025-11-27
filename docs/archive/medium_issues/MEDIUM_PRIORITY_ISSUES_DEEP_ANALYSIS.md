@@ -30,7 +30,7 @@
 
 ### Location and Code
 
-**File**: `c:\Users\suyun\TradingBot2\transformers.py`
+**File**: `c:\Users\suyun\AI-Powered Quantitative Research Platform\transformers.py`
 **Lines**: 932-937
 
 ```python
@@ -203,7 +203,7 @@ USE_NAN_FOR_INVALID_RETURNS = os.getenv("USE_NAN_RETURNS", "true").lower() == "t
 
 ### Location and Code
 
-**File**: `c:\Users\suyun\TradingBot2\transformers.py`
+**File**: `c:\Users\suyun\AI-Powered Quantitative Research Platform\transformers.py`
 **Lines**: 217-267
 
 ```python
@@ -465,7 +465,7 @@ else:
 
 ### Location and Code
 
-**File**: `c:\Users\suyun\TradingBot2\transformers.py`
+**File**: `c:\Users\suyun\AI-Powered Quantitative Research Platform\transformers.py`
 **Lines**: 76-94 (log returns calculation), 932-937 (return feature)
 
 ```python
@@ -819,7 +819,7 @@ def log_outlier_statistics(returns: List[float]) -> None:
 
 ### Location and Code
 
-**File**: `c:\Users\suyun\TradingBot2\transformers.py`
+**File**: `c:\Users\suyun\AI-Powered Quantitative Research Platform\transformers.py`
 **Lines**: 369-376 (historical volatility)
 
 ```python
@@ -1142,7 +1142,7 @@ def calculate_with_monitoring(prices):
 
 ### Location and Code
 
-**File**: `c:\Users\suyun\TradingBot2\transformers.py`
+**File**: `c:\Users\suyun\AI-Powered Quantitative Research Platform\transformers.py`
 **Lines**: 932-937
 
 ```python
@@ -1614,7 +1614,7 @@ def update_with_logging(self, **kwargs):
 
 ### Location and Code
 
-**File**: `c:\Users\suyun\TradingBot2\config.py`
+**File**: `c:\Users\suyun\AI-Powered Quantitative Research Platform\config.py`
 **Lines**: 264-288
 
 ```python
@@ -2017,7 +2017,7 @@ class AdvancedDegradationConfig:
 
 ### Location and Code
 
-**File**: `c:\Users\suyun\TradingBot2\reward.pyx`
+**File**: `c:\Users\suyun\AI-Powered Quantitative Research Platform\reward.pyx`
 **Lines**: 139-154
 
 ```python
@@ -2359,7 +2359,7 @@ def check_double_penalty_usage():
 
 ### Location and Code
 
-**File**: `c:\Users\suyun\TradingBot2\reward.pyx`
+**File**: `c:\Users\suyun\AI-Powered Quantitative Research Platform\reward.pyx`
 **Lines**: 59-77
 
 ```python
@@ -2720,7 +2720,7 @@ if state.use_event_rewards:  # NEW: Wrap in feature flag
 
 ### Location and Code
 
-**File**: `c:\Users\suyun\TradingBot2\reward.pyx`
+**File**: `c:\Users\suyun\AI-Powered Quantitative Research Platform\reward.pyx`
 **Line**: 163
 
 ```python
@@ -3017,7 +3017,7 @@ def compare_reward_clipping():
 
 ### Location and Code
 
-**File**: `c:\Users\suyun\TradingBot2\obs_builder.pyx`
+**File**: `c:\Users\suyun\AI-Powered Quantitative Research Platform\obs_builder.pyx`
 **Lines**: 478-499
 
 ```python
@@ -3333,7 +3333,7 @@ compare_models(model_old, model_new)
 
 ### Location and Code
 
-**File**: `c:\Users\suyun\TradingBot2\obs_builder.pyx`
+**File**: `c:\Users\suyun\AI-Powered Quantitative Research Platform\obs_builder.pyx`
 **Lines**: 426-450
 
 ```python
@@ -3675,7 +3675,7 @@ def validate_bb_squeeze(observations, prices, bb_lowers, bb_uppers):
 
 ### Location and Code
 
-**File**: `c:\Users\suyun\TradingBot2\mediator.py`
+**File**: `c:\Users\suyun\AI-Powered Quantitative Research Platform\mediator.py`
 **Lines**: 1557-1562
 
 ```python
@@ -4068,7 +4068,7 @@ def test_bankruptcy_state_consistency():
 
 ### Location and Code
 
-**File**: `c:\Users\suyun\TradingBot2\distributional_ppo.py`
+**File**: `c:\Users\suyun\AI-Powered Quantitative Research Platform\distributional_ppo.py`
 **Lines**: No explicit checkpoint validation found
 
 **Typical checkpoint loading**:
@@ -4573,7 +4573,7 @@ model = load_checkpoint_safe(
 
 ### Location and Code
 
-**File**: `c:\Users\suyun\TradingBot2\distributional_ppo.py`
+**File**: `c:\Users\suyun\AI-Powered Quantitative Research Platform\distributional_ppo.py`
 **Searched but not found explicit entropy validation**
 
 **Entropy calculation in PPO** (typical location in policy):

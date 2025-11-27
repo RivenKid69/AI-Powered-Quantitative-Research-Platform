@@ -1,4 +1,4 @@
-# TradingBot2 Training Pipeline - Comprehensive Error Analysis Report
+# AI-Powered Quantitative Research Platform Training Pipeline - Comprehensive Error Analysis Report
 
 > **⚠️ DOCUMENT STATUS (2025-11-21):**
 > This analysis was created in November 2025 and reflects the training pipeline at that time.
@@ -10,7 +10,7 @@
 > For the most current documentation, refer to [CLAUDE.md](../../../CLAUDE.md) and the critical fixes reports.
 
 ## Executive Summary
-The training pipeline in TradingBot2 is a sophisticated multi-stage system using Distributional PPO (Policy Gradient optimization) with Optuna hyperparameter optimization. The code has been extensively refactored with improvements for EV (Explained Variance) stability, CVaR (Conditional Value at Risk) integration, and data leakage prevention.
+The training pipeline in AI-Powered Quantitative Research Platform is a sophisticated multi-stage system using Distributional PPO (Policy Gradient optimization) with Optuna hyperparameter optimization. The code has been extensively refactored with improvements for EV (Explained Variance) stability, CVaR (Conditional Value at Risk) integration, and data leakage prevention.
 
 ---
 

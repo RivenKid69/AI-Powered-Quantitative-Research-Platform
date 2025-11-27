@@ -1,5 +1,5 @@
 # COMPREHENSIVE TECHNICAL INDICATORS ANALYSIS REPORT
-## TradingBot2 - Complete Audit of 60+ Indicators
+## AI-Powered Quantitative Research Platform - Complete Audit of 60+ Indicators
 
 **Date**: 2025-11-24  
 **Scope**: End-to-end analysis from indicator calculation to model training  

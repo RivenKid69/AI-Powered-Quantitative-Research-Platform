@@ -8,11 +8,11 @@
 ✓ Все основные функции работают правильно
 
 КЛЮЧЕВЫЕ ФАЙЛЫ:
-- /home/user/TradingBot2/transformers.py (основной генератор признаков)
-- /home/user/TradingBot2/mediator.py (извлечение и нормализация)
-- /home/user/TradingBot2/obs_builder.pyx (финальная сборка observation)
-- /home/user/TradingBot2/config_4h_timeframe.py (конфигурация)
-- /home/user/TradingBot2/feature_config.py (структура признаков)
+- /home/user/AI-Powered Quantitative Research Platform/transformers.py (основной генератор признаков)
+- /home/user/AI-Powered Quantitative Research Platform/mediator.py (извлечение и нормализация)
+- /home/user/AI-Powered Quantitative Research Platform/obs_builder.pyx (финальная сборка observation)
+- /home/user/AI-Powered Quantitative Research Platform/config_4h_timeframe.py (конфигурация)
+- /home/user/AI-Powered Quantitative Research Platform/feature_config.py (структура признаков)
 
 КРИТИЧЕСКИЕ ПРОБЛЕМЫ:
 

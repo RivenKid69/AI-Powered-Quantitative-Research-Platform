@@ -132,7 +132,7 @@ Examples:
 - **Edge Cases**: Larger impact on small datasets (N<100)
 
 #### Real-World Scenario
-For TradingBot2 with typical training data:
+For AI-Powered Quantitative Research Platform with typical training data:
 - Training samples: ~500k-1M bars
 - Impact: (1M / (1M-1))^0.5 ≈ 1.0000005 (0.0005% inflation)
 - **Verdict**: Negligible practical impact, but correct implementation matters for principle
@@ -972,7 +972,7 @@ Therefore: argmax_a Q'*(s,a) = argmax_a Q*(s,a)
 
 #### The Potential Function
 
-In TradingBot2, the potential function captures risk aversion:
+In AI-Powered Quantitative Research Platform, the potential function captures risk aversion:
 ```python
 def potential_phi(net_worth, peak_value, units, atr,
                   risk_aversion_variance, risk_aversion_drawdown, coef):

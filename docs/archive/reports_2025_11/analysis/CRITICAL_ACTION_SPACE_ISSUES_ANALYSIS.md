@@ -1,5 +1,5 @@
 # CRITICAL ACTION SPACE ISSUES - DETAILED ANALYSIS
-## TradingBot2 - Action Space & Position Semantics Audit
+## AI-Powered Quantitative Research Platform - Action Space & Position Semantics Audit
 
 **Date**: 2025-11-21
 **Status**: ✅ ALL THREE PROBLEMS CONFIRMED

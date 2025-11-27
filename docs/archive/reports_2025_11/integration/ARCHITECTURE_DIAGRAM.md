@@ -1,4 +1,4 @@
-# TradingBot2 - Архитектурная диаграмма
+# AI-Powered Quantitative Research Platform - Архитектурная диаграмма
 
 ## Общая архитектура системы
 

@@ -15,7 +15,7 @@ def read_file(path):
 
 def check_transformers_defaults():
     """Проверяет дефолтные параметры в transformers.py для 4h интервала."""
-    content = read_file('/home/user/TradingBot2/transformers.py')
+    content = read_file('/home/user/ai-quant-platform/transformers.py')
 
     issues = []
 
@@ -48,7 +48,7 @@ def check_transformers_defaults():
 
 def check_parkinson_formula():
     """Проверяет улучшение формулы Parkinson (MAJOR #1)."""
-    content = read_file('/home/user/TradingBot2/transformers.py')
+    content = read_file('/home/user/ai-quant-platform/transformers.py')
 
     issues = []
 
@@ -64,7 +64,7 @@ def check_parkinson_formula():
 
 def check_taker_buy_ratio_clamping():
     """Проверяет добавление clamping для taker_buy_ratio (MINOR #2)."""
-    content = read_file('/home/user/TradingBot2/transformers.py')
+    content = read_file('/home/user/ai-quant-platform/transformers.py')
 
     issues = []
 
@@ -77,7 +77,7 @@ def check_taker_buy_ratio_clamping():
 
 def check_obs_builder_comments():
     """Проверяет добавление комментариев в obs_builder.pyx (MAJOR #2)."""
-    content = read_file('/home/user/TradingBot2/obs_builder.pyx')
+    content = read_file('/home/user/ai-quant-platform/obs_builder.pyx')
 
     issues = []
 
@@ -93,7 +93,7 @@ def check_obs_builder_comments():
 
 def check_config_names():
     """Проверяет исправление названий в config_4h_timeframe.py (MINOR #1)."""
-    content = read_file('/home/user/TradingBot2/config_4h_timeframe.py')
+    content = read_file('/home/user/ai-quant-platform/config_4h_timeframe.py')
 
     issues = []
 

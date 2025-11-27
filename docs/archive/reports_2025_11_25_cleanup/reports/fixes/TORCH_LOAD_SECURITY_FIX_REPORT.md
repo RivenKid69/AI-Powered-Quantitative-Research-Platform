@@ -2,7 +2,7 @@
 
 ## Executive Summary
 
-Successfully identified, confirmed, and fixed a **CRITICAL security vulnerability** in the TradingBot2 codebase related to unsafe usage of `torch.load()` without the `weights_only=True` parameter. This vulnerability could allow arbitrary code execution through malicious pickle payloads in model checkpoints.
+Successfully identified, confirmed, and fixed a **CRITICAL security vulnerability** in the AI-Powered Quantitative Research Platform codebase related to unsafe usage of `torch.load()` without the `weights_only=True` parameter. This vulnerability could allow arbitrary code execution through malicious pickle payloads in model checkpoints.
 
 **Status**: ✅ **FIXED AND VERIFIED**
 

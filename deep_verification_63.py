@@ -41,7 +41,7 @@ warnings = []
 # ============================================================================
 print_header("PART 1: obs_builder.pyx Code Analysis")
 
-obs_builder = Path("/home/user/TradingBot2/obs_builder.pyx")
+obs_builder = Path("/home/user/AI-Powered Quantitative Research Platform/obs_builder.pyx")
 if not obs_builder.exists():
     print_fail("obs_builder.pyx not found!")
     sys.exit(1)
@@ -108,7 +108,7 @@ else:
 print_header("PART 2: feature_config.py Verification")
 
 try:
-    sys.path.insert(0, '/home/user/TradingBot2')
+    sys.path.insert(0, '/home/user/AI-Powered Quantitative Research Platform')
     from feature_config import N_FEATURES, FEATURES_LAYOUT, EXT_NORM_DIM
 
     if N_FEATURES == 63:
@@ -183,7 +183,7 @@ except Exception as e:
 # ============================================================================
 print_header("PART 3: test_atr_validity_flag.py Critical Indices")
 
-test_file = Path("/home/user/TradingBot2/tests/test_atr_validity_flag.py")
+test_file = Path("/home/user/AI-Powered Quantitative Research Platform/tests/test_atr_validity_flag.py")
 if test_file.exists():
     with open(test_file, 'r') as f:
         test_code = f.read()
@@ -225,7 +225,7 @@ else:
 # ============================================================================
 print_header("PART 4: FEATURE_MAPPING_63.md Documentation")
 
-feature_map = Path("/home/user/TradingBot2/FEATURE_MAPPING_63.md")
+feature_map = Path("/home/user/AI-Powered Quantitative Research Platform/FEATURE_MAPPING_63.md")
 if feature_map.exists():
     with open(feature_map, 'r') as f:
         doc = f.read()
@@ -269,7 +269,7 @@ else:
 # ============================================================================
 print_header("PART 5: OBSERVATION_MAPPING.md Documentation")
 
-obs_map = Path("/home/user/TradingBot2/OBSERVATION_MAPPING.md")
+obs_map = Path("/home/user/AI-Powered Quantitative Research Platform/OBSERVATION_MAPPING.md")
 if obs_map.exists():
     with open(obs_map, 'r') as f:
         obs_doc = f.read()
@@ -307,7 +307,7 @@ else:
 # ============================================================================
 print_header("PART 6: MIGRATION_GUIDE_62_TO_63.md")
 
-migration_guide = Path("/home/user/TradingBot2/MIGRATION_GUIDE_62_TO_63.md")
+migration_guide = Path("/home/user/AI-Powered Quantitative Research Platform/MIGRATION_GUIDE_62_TO_63.md")
 if migration_guide.exists():
     with open(migration_guide, 'r') as f:
         guide = f.read()
@@ -359,7 +359,7 @@ test_files = [
 ]
 
 for test_name in test_files:
-    test_path = Path(f"/home/user/TradingBot2/tests/{test_name}")
+    test_path = Path(f"/home/user/AI-Powered Quantitative Research Platform/tests/{test_name}")
     if test_path.exists():
         with open(test_path, 'r') as f:
             test_content = f.read()
@@ -383,7 +383,7 @@ for test_name in test_files:
 # ============================================================================
 print_header("PART 8: INDEX_AUDIT_REPORT.md Completeness")
 
-audit_report = Path("/home/user/TradingBot2/INDEX_AUDIT_REPORT.md")
+audit_report = Path("/home/user/AI-Powered Quantitative Research Platform/INDEX_AUDIT_REPORT.md")
 if audit_report.exists():
     with open(audit_report, 'r') as f:
         report = f.read()

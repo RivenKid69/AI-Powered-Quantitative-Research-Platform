@@ -1,7 +1,7 @@
 # Integration Bugs Verification Report - UPGD/PBT/Twin Critics/VGS
 
 **Date:** 2025-11-20
-**Project:** TradingBot2
+**Project:** AI-Powered Quantitative Research Platform
 **Phase:** Post-Integration Testing & Fixes
 **Methodology:** Systematic bug localization → specialized tests → confirmation → fixes → verification
 

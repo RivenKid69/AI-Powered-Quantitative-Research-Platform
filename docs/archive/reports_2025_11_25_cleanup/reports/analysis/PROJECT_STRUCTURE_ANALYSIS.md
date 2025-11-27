@@ -1,9 +1,9 @@
-# TradingBot2 - Подробный анализ структуры проекта
+# AI-Powered Quantitative Research Platform - Подробный анализ структуры проекта
 
 ## 1. ОБЗОР ПРОЕКТА
 
 ### Что это за проект?
-**TradingBot2** — это сложная система торговки на базе машинного обучения (ML), предназначенная для среднечастотной торговли (medium-frequency trading) на биржи криптовалют (в основном Binance). Проект реализует полный цикл от накопления данных, обучения моделей до исполнения торговых сигналов в реальном времени.
+**AI-Powered Quantitative Research Platform** — это сложная система торговки на базе машинного обучения (ML), предназначенная для среднечастотной торговли (medium-frequency trading) на биржи криптовалют (в основном Binance). Проект реализует полный цикл от накопления данных, обучения моделей до исполнения торговых сигналов в реальном времени.
 
 ### Основные характеристики:
 - **Язык**: Python (основной) + Cython + C++ (оптимизация критичных операций)
@@ -181,7 +181,7 @@
 ## 4. ДИРЕКТОРИЯ СТРУКТУРА
 
 ```
-/home/user/TradingBot2/
+/home/user/AI-Powered Quantitative Research Platform/
 ├── core_*.py                  # Core layer (models, contracts, strategy interface)
 ├── impl_*.py                  # Implementation layer (executors, data sources, fees, etc)
 ├── service_*.py              # Service layer (main business logic)
@@ -593,7 +593,7 @@ MarketData -> FeaturePipe -> Model Inference ->
 
 ## 14. ВЫВОДЫ
 
-TradingBot2 — это **комплексная, production-ready торговая система**, построенная на:
+AI-Powered Quantitative Research Platform — это **комплексная, production-ready торговая система**, построенная на:
 
 1. **Solid Architecture** - четко определенная слойная архитектура
 2. **Advanced ML** - Distributional PPO с CVaR и Optuna HPO

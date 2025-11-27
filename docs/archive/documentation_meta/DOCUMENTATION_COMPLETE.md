@@ -143,7 +143,7 @@ Then review:
 
 ### All Tests Passing
 ```bash
-cd TradingBot2
+cd AI-Powered Quantitative Research Platform
 python -m pytest \
     tests/test_stale_bar_temporal_causality.py \
     tests/test_normalization_cross_symbol_contamination.py \

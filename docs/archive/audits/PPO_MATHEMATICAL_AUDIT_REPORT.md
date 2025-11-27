@@ -1,7 +1,7 @@
 # Comprehensive Mathematical Audit: PPO Implementation in distributional_ppo.py
 
 **Date**: 2025-11-20
-**File**: `c:\Users\suyun\TradingBot2\distributional_ppo.py`
+**File**: `c:\Users\suyun\AI-Powered Quantitative Research Platform\distributional_ppo.py`
 **Lines of Code**: 11,298
 **Auditor**: Claude Code (Sonnet 4.5)
 

@@ -1,5 +1,5 @@
 """
-Комплексный end-to-end тест системы признаков TradingBot2.
+Комплексный end-to-end тест системы признаков AI-Powered Quantitative Research Platform.
 
 Проверяет полный цикл прохождения данных:
 1. Создание 24 технических признаков в transformers.py

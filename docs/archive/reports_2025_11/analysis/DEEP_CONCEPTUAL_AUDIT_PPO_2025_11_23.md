@@ -1,11 +1,11 @@
-# Deep Conceptual Audit: TradingBot2 PPO Training System
+# Deep Conceptual Audit: AI-Powered Quantitative Research Platform PPO Training System
 ## 2025-11-23
 
 ---
 
 ## Executive Summary
 
-This audit examined the mathematical and conceptual correctness of the Distributional PPO training system in TradingBot2, focusing on:
+This audit examined the mathematical and conceptual correctness of the Distributional PPO training system in AI-Powered Quantitative Research Platform, focusing on:
 - Quantile regression and distributional value learning
 - VGS (Variance Gradient Scaler) implementation
 - UPGD (Utility-based Perturbed Gradient Descent) optimizer

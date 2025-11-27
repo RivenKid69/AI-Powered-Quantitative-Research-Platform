@@ -1,5 +1,5 @@
 # Regression Prevention Checklist
-## TradingBot2 - Предотвращение повторения критических проблем
+## AI-Powered Quantitative Research Platform - Предотвращение повторения критических проблем
 
 **Дата создания**: 2025-11-21
 **Версия**: 1.0

@@ -1,7 +1,7 @@
 # Critical Bugs Verification Report
 
 **Date:** 2025-11-20
-**Project:** TradingBot2
+**Project:** AI-Powered Quantitative Research Platform
 **Features Tested:** UPGD Optimizer, PBT, Twin Critics, Variance Gradient Scaling
 **Methodology:** Isolated reproducible tests following scientific method
 

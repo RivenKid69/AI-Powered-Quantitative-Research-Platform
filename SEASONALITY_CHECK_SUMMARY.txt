@@ -11,7 +11,7 @@
 
 1. ❌ НЕПРАВИЛЬНЫЙ ПАРАМЕТР В seasonality.md (строка 154)
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   Файл: /home/user/TradingBot2/docs/seasonality.md
+   Файл: /home/user/ai-quant-platform/docs/seasonality.md
    Строка: 154
    Проблема: Упоминается параметр `latency.seasonality_override_path`
    Реальный параметр: `seasonality_override_path` (в разделе latency: конфига)
@@ -23,7 +23,7 @@
 
 2. ❌ НЕПРАВИЛЬНЫЙ ПАРАМЕТР В seasonality.md (строка 258)
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   Файл: /home/user/TradingBot2/docs/seasonality.md
+   Файл: /home/user/ai-quant-platform/docs/seasonality.md
    Строка: 258
    Проблема: Упоминается параметр `latency.seasonality_hash`
    Реальный параметр: `seasonality_hash` (в разделе latency: конфига)
@@ -35,7 +35,7 @@
 
 3. ❌ НЕТОЧНОЕ ОПИСАНИЕ В seasonality.md (строка 152-154)
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   Файл: /home/user/TradingBot2/docs/seasonality.md
+   Файл: /home/user/ai-quant-platform/docs/seasonality.md
    Строка: 152-154
    Проблема: Упоминается параметр `seasonality_override` для ExecutionSimulator
    Реальные параметры:
@@ -52,7 +52,7 @@
 
 4. ⚠️  ОТСУТСТВУЕТ ДИРЕКТОРИЯ data/seasonality_source/
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   Файл: /home/user/TradingBot2/docs/seasonality_quickstart.md (строка 15)
+   Файл: /home/user/ai-quant-platform/docs/seasonality_quickstart.md (строка 15)
    Проблема: Директория не существует в репозитории
    Описание: seasonality_quickstart.md предполагает наличие этой директории
    
@@ -63,7 +63,7 @@
 
 5. ⚠️  СТОИТ УПОМЯНУТЬ LEGACY ПАРАМЕТР
    ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   Файл: /home/user/TradingBot2/docs/seasonality.md (строка 131)
+   Файл: /home/user/ai-quant-platform/docs/seasonality.md (строка 131)
    Проблема: Параметр latency_seasonality_path поддерживается но не упомянут
    Описание: Есть оба параметра: seasonality_path и latency_seasonality_path
    
@@ -146,12 +146,12 @@ use_seasonality               ✅                 | ✅         | ДА
 
 1. SEASONALITY_AUDIT_REPORT.md
    ▸ Полный подробный отчет со всеми деталями проверки
-   ▸ Расположение: /home/user/TradingBot2/SEASONALITY_AUDIT_REPORT.md
+   ▸ Расположение: /home/user/ai-quant-platform/SEASONALITY_AUDIT_REPORT.md
 
 2. SEASONALITY_FIXES.md
    ▸ Пошаговое руководство по исправлению каждой проблемы
    ▸ С точными текстами для замены
-   ▸ Расположение: /home/user/TradingBot2/SEASONALITY_FIXES.md
+   ▸ Расположение: /home/user/ai-quant-platform/SEASONALITY_FIXES.md
 
 ───────────────────────────────────────────────────────────────────────────────
 РЕКОМЕНДУЕМЫЙ ПОРЯДОК ИСПРАВЛЕНИЙ

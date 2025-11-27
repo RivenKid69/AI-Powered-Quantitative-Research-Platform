@@ -3,9 +3,9 @@ requires = ["setuptools", "wheel", "cython", "numpy"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "tradingbot"
+name = "ai-quant-platform"
 version = "0.1.0"
-description = "Cython/C++ extensions: LOB and microstructure generator"
+description = "AI-Powered Quantitative Research Platform - Cython/C++ extensions: LOB and microstructure generator"
 dependencies = [
     "numpy>=1.24.0",
     "optuna>=3.0.0,<4.0.0",

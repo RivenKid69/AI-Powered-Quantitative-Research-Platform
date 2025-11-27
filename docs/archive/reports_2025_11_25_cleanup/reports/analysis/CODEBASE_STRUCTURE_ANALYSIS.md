@@ -1,7 +1,7 @@
-# TradingBot2 Codebase Comprehensive Structure Analysis
+# AI-Powered Quantitative Research Platform Codebase Comprehensive Structure Analysis
 
 ## Project Overview
-TradingBot2 is a complex trading bot system written in Python with Rust/C++ integrations. It's a medium-frequency algorithmic trading system with components for simulation, backtesting, live trading, and machine learning model training. The codebase uses a layered architecture with dependency injection patterns.
+AI-Powered Quantitative Research Platform is a complex trading bot system written in Python with Rust/C++ integrations. It's a medium-frequency algorithmic trading system with components for simulation, backtesting, live trading, and machine learning model training. The codebase uses a layered architecture with dependency injection patterns.
 
 **Total Python Files**: 292 in root + 119 in subdirectories = ~411 total
 **Total Lines of Code**: ~116,894 lines (root level alone)
@@ -356,7 +356,7 @@ Test naming patterns:
 ### Primary Configuration Paths
 
 ```
-/home/user/TradingBot2/configs/
+/home/user/AI-Powered Quantitative Research Platform/configs/
 ├── config_sim.yaml          # Simulation run config (20KB)
 ├── config_live.yaml         # Live trading config (6KB)
 ├── config_train.yaml        # Training config (17KB)

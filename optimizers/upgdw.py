@@ -3,7 +3,7 @@ UPGDW Optimizer (UPGD with Decoupled Weight Decay)
 
 Implements UPGD with AdamW-style decoupled weight decay for better regularization.
 
-This is the recommended optimizer for the TradingBot2 project as it:
+This is the recommended optimizer for the AI-Powered Quantitative Research Platform as it:
 1. Matches the existing AdamW optimizer interface
 2. Provides utility-based weight protection
 3. Uses decoupled weight decay (applied directly to params, not gradients)

@@ -1,5 +1,6 @@
 # Critical Fixes Quick Reference
 
+**Project**: AI-Powered Quantitative Research Platform
 **Last Updated**: 2025-11-20
 
 ---
@@ -110,7 +111,7 @@ Run this to verify fixes are working:
 
 ```bash
 # Test all three fixes
-cd TradingBot2
+cd ai-quant-platform
 python -m pytest \
     tests/test_stale_bar_temporal_causality.py \
     tests/test_normalization_cross_symbol_contamination.py \

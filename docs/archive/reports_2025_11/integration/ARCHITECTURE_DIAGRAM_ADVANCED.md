@@ -1,4 +1,4 @@
-# Advanced Features Architecture - TradingBot2
+# Advanced Features Architecture - AI-Powered Quantitative Research Platform
 
 **Last Updated**: 2025-11-21
 **Version**: 2.1

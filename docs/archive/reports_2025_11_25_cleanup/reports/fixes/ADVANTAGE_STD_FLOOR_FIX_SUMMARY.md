@@ -163,7 +163,7 @@ warn/normalization_mean_nonzero     # If |mean| > 0.1 (CRITICAL)
 ```
 Stable-Baselines3:  1e-8 floor, vulnerable
 CleanRL:            1e-8 floor, vulnerable
-TradingBot2 V2:     1e-4 floor, 10,000x safer ✅
+AI-Powered Quantitative Research Platform V2:     1e-4 floor, 10,000x safer ✅
 ```
 
 ### Impact для Production
@@ -208,4 +208,4 @@ TradingBot2 V2:     1e-4 floor, 10,000x safer ✅
 
 ---
 
-**Pull Request**: https://github.com/RivenKid69/TradingBot2/pull/new/claude/fix-ppo-advantage-floor-01YY2jAB5uFnm8dzo6wr4unA
+**Pull Request**: https://github.com/RivenKid69/AI-Powered Quantitative Research Platform/pull/new/claude/fix-ppo-advantage-floor-01YY2jAB5uFnm8dzo6wr4unA

@@ -246,7 +246,7 @@ All changes have been verified:
 
 ## 🎓 Key Takeaways for AI Assistants
 
-### When working with TradingBot2:
+### When working with AI-Powered Quantitative Research Platform:
 
 1. **Start with CLAUDE.md "Quick Reference"** (lines 339-406) for training config
 2. **Check distributional_ppo.py header** (lines 1-46) for critical fixes

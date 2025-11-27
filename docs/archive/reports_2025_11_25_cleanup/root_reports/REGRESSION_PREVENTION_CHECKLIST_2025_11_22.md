@@ -365,5 +365,5 @@ git diff <commit-hash> -- adversarial/pbt_scheduler.py
 ---
 
 **Last Updated**: 2025-11-22
-**Maintainer**: TradingBot2 Team
+**Maintainer**: AI-Powered Quantitative Research Platform Team
 **Status**: ✅ ACTIVE - Use this checklist for all future changes

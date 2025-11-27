@@ -1,5 +1,7 @@
 # CRITICAL FIXES: Reward Risk Penalty & BB Position Normalization (2025-11-23)
 
+**Project**: AI-Powered Quantitative Research Platform
+
 ## Executive Summary
 
 **Status**: ✅ **FIXES IMPLEMENTED** | ⚠️ **COMPILATION PENDING** (requires Visual C++ Build Tools)
@@ -277,7 +279,7 @@ feature_val = _clipf((price_d - bb_lower) / (bb_width + 1e-9), -1.0, 1.0)
 
 ```bash
 # 1. Navigate to project directory
-cd c:\Users\suyun\TradingBot2
+cd c:\Users\suyun\ai-quant-platform
 
 # 2. Compile Cython modules
 python setup.py build_ext --inplace

@@ -9,7 +9,7 @@
 
 ## 🎯 Executive Summary
 
-Провёл комплексный аудит и актуализацию всей документации проекта TradingBot2. Созданы новые руководства для улучшения навигации и поддержки документации.
+Провёл комплексный аудит и актуализацию всей документации проекта AI-Powered Quantitative Research Platform. Созданы новые руководства для улучшения навигации и поддержки документации.
 
 **Результат**: Документация приведена в порядок, создана clear structure для будущих обновлений.
 
@@ -91,7 +91,7 @@
 **Purpose**: Express-reference for AI assistants to quickly understand the project
 
 **Contents**:
-- What is TradingBot2 (1-minute overview)
+- What is AI-Powered Quantitative Research Platform (1-minute overview)
 - Where to find information (tiered by time needed)
 - Critical fixes summary (must-read before work)
 - Architecture in one diagram

@@ -460,7 +460,7 @@ normalized_advantages = (
 
 | Approach | Formula | Used By | Status |
 |----------|---------|---------|--------|
-| **Fixed Code** | `(x - mean) / (std + eps)` | **TradingBot2** | ✅ **IMPLEMENTED** |
+| **Fixed Code** | `(x - mean) / (std + eps)` | **AI-Powered Quantitative Research Platform** | ✅ **IMPLEMENTED** |
 | CleanRL | `(x - mean) / (std + eps)` | CleanRL | ✅ Matches |
 | Stable-Baselines3 | `(x - mean) / (std + eps)` | SB3 | ✅ Matches |
 | Adam Optimizer | `grad / (sqrt(v) + eps)` | Kingma & Ba 2015 | ✅ Same principle |

@@ -1,5 +1,5 @@
 # КРАТКОЕ РЕЗЮМЕ MEDIUM PRIORITY ПРОБЛЕМ
-## TradingBot2 Mathematical Audit
+## AI-Powered Quantitative Research Platform Mathematical Audit
 
 **Всего:** 14 проблем | **Impact:** 4-6/10 каждая
 

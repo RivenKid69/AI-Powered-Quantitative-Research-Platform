@@ -1,6 +1,6 @@
 """Quick test of critical fixes."""
 import sys
-sys.path.insert(0, '/home/user/TradingBot2')
+sys.path.insert(0, '/home/user/ai-quant-platform')
 
 print("Testing critical fixes...")
 

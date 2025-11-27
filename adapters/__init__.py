@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 adapters/__init__.py
-Multi-exchange adapter framework for TradingBot2.
+Multi-exchange adapter framework for AI-Powered Quantitative Research Platform.
 
 This package provides a unified interface for different exchanges (Binance, Alpaca, etc.)
 and asset classes (crypto, equities) while maintaining backward compatibility with

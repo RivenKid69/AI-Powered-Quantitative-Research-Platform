@@ -8,7 +8,7 @@
 
 ## Краткое резюме
 
-Проект **TradingBot2** успешно мигрирован с таймфрейма **1h** на **4h**.
+Проект **AI-Powered Quantitative Research Platform** успешно мигрирован с таймфрейма **1h** на **4h**.
 Все критичные проблемы найдены и исправлены. Проект готов к использованию на 4h интервале.
 
 **Статус миграции:** 🟢 **100% ГОТОВО**
@@ -45,7 +45,7 @@ bar_duration_sec = int(os.environ.get("BAR_DURATION_SEC", "14400"))
 ts = _to_seconds_any(df[cols[key]]) + bar_duration_sec  # 4h бар → сместим к закрытию
 ```
 
-**Файл:** `/home/user/TradingBot2/prepare_and_run.py`
+**Файл:** `/home/user/AI-Powered Quantitative Research Platform/prepare_and_run.py`
 
 ---
 
@@ -81,7 +81,7 @@ aggregate_to: ["5m", "15m", "1h", "4h"]
 --market futures --interval 4h --window-days 30 ...
 ```
 
-**Файл:** `/home/user/TradingBot2/app.py`
+**Файл:** `/home/user/AI-Powered Quantitative Research Platform/app.py`
 
 ---
 
@@ -115,7 +115,7 @@ _ADV_COLUMNS: Sequence[str] = (
 )
 ```
 
-**Файл:** `/home/user/TradingBot2/feature_pipe.py`
+**Файл:** `/home/user/AI-Powered Quantitative Research Platform/feature_pipe.py`
 
 ---
 
@@ -131,7 +131,7 @@ _ADV_COLUMNS: Sequence[str] = (
 # Derived features block (4h return and volatility proxy for 4h timeframe)
 ```
 
-**Файл:** `/home/user/TradingBot2/feature_config.py`
+**Файл:** `/home/user/AI-Powered Quantitative Research Platform/feature_config.py`
 
 ---
 
@@ -150,7 +150,7 @@ python incremental_klines_4h.py --symbols BTCUSDT,ETHUSDT
 python incremental_klines_4h.py  # загружает из data/universe/symbols.json
 ```
 
-**Файл:** `/home/user/TradingBot2/incremental_klines_4h.py` (создан)
+**Файл:** `/home/user/AI-Powered Quantitative Research Platform/incremental_klines_4h.py` (создан)
 
 ---
 
@@ -349,7 +349,7 @@ python train_model_multi_patch.py --config configs/config_train.yaml
 
 ## Заключение
 
-Миграция проекта **TradingBot2** с таймфрейма **1h** на **4h** завершена успешно.
+Миграция проекта **AI-Powered Quantitative Research Platform** с таймфрейма **1h** на **4h** завершена успешно.
 
 ### ✅ Достижения
 

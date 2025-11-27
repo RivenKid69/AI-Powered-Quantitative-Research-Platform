@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-Signal-only mode in TradingBot2 is **conceptually sound** and follows established best practices from academic literature on reinforcement learning for trading. The implementation correctly:
+Signal-only mode in AI-Powered Quantitative Research Platform is **conceptually sound** and follows established best practices from academic literature on reinforcement learning for trading. The implementation correctly:
 
 1. Uses log portfolio return as reward (academically validated)
 2. Respects CLOSE_TO_OPEN execution delay even in signal mode
@@ -153,7 +153,7 @@ Signal-only doesn't simulate capital at risk. Introducing "virtual bankruptcy" w
 
 ### Two-Phase Training Paradigm (Deng et al., 2017)
 
-| Phase | Description | TradingBot2 |
+| Phase | Description | AI-Powered Quantitative Research Platform |
 |-------|-------------|-------------|
 | Phase 1 | Signal generation (no execution) | signal_only mode |
 | Phase 2 | Execution optimization | full execution mode |

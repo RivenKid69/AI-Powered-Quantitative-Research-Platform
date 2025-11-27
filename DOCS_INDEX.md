@@ -1,4 +1,4 @@
-# TradingBot2 Documentation Index
+# AI-Powered Quantitative Research Platform - Documentation Index
 
 > **Navigation Hub** для всей документации проекта
 

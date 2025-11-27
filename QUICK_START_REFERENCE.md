@@ -1,8 +1,8 @@
-# TradingBot2 - Краткий справочник (Quick Reference)
+# AI-Powered Quantitative Research Platform - Краткий справочник (Quick Reference)
 
 ## 1. ЧТО ЭТО ТАКОЕ?
 
-**TradingBot2** - это ML-бот для среднечастотной торговли на криптовалютах и акциях.
+**AI-Powered Quantitative Research Platform** - это ML-платформа для количественных исследований и торговли на криптовалютах и акциях.
 - **Криптовалюты**: Binance Spot/Futures (24/7)
 - **Акции**: Alpaca/Polygon US Equities (NYSE hours + extended)
 - **ETFs**: SPY, QQQ, IWM, GLD, IAU, SGOL, SLV

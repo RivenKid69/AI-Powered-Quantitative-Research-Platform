@@ -166,7 +166,7 @@ ratio = var_res / (var_y + eps)  # ✅ With epsilon
 $ python -m pytest tests/test_ev_bugs_fix.py -v --tb=short
 ============================= test session starts =============================
 platform win32 -- Python 3.12.10, pytest-8.4.1, pluggy-1.6.0
-rootdir: c:\Users\suyun\TradingBot2
+rootdir: c:\Users\suyun\AI-Powered Quantitative Research Platform
 collected 19 items
 
 tests/test_ev_bugs_fix.py::TestEVBugFixes::test_ev_near_zero_variance_weighted PASSED [  5%]

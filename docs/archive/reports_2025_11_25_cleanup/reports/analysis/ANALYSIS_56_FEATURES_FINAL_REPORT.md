@@ -143,9 +143,9 @@ TOTAL: 3+4+7+2+6+3+2+5+21+2+1 = 56
 
 ### ПРОБЛЕМА 1: Отсутствие taker_buy_ratio_momentum_24h
 
-**Где:** `/home/user/TradingBot2/mediator.py:1047-1051`
+**Где:** `/home/user/ai-quant-platform/mediator.py:1047-1051`
 **Что:** mediator извлекает только 3 моментума вместо 4
-**Генерируется в:** `/home/user/TradingBot2/transformers.py:413`
+**Генерируется в:** `/home/user/ai-quant-platform/transformers.py:413`
 
 ```python
 # transformers.py ГЕНЕРИРУЕТ 4:
@@ -168,8 +168,8 @@ norm_cols[20] = ... taker_buy_ratio_momentum_12h
 ### ПРОБЛЕМА 2: "Мертвые" SMA признаки
 
 **Где:**
-- `/home/user/TradingBot2/transformers.py:606` - генерирует
-- `/home/user/TradingBot2/mediator.py:962-965` - извлекает
+- `/home/user/ai-quant-platform/transformers.py:606` - генерирует
+- `/home/user/ai-quant-platform/mediator.py:962-965` - извлекает
 
 **Что:** transformers генерирует 7 SMA, но mediator использует только 2
 
@@ -189,7 +189,7 @@ sma_240, sma_720, sma_1440, sma_10080, sma_12000
 
 ### ПРОБЛЕМА 3: Несоответствие онлайн/оффлайн имен SMA
 
-**Где:** `/home/user/TradingBot2/transformers.py:606,781`
+**Где:** `/home/user/ai-quant-platform/transformers.py:606,781`
 
 **Что:**
 - Онлайн (update): sma_240, sma_720, ... (в МИНУТАХ)
@@ -207,7 +207,7 @@ base_cols += [f"sma_{x}" for x in spec._lookbacks_prices_minutes]
 
 ### ПРОБЛЕМА 4: Неправильный комментарий в make_features.py
 
-**Где:** `/home/user/TradingBot2/make_features.py:36`
+**Где:** `/home/user/ai-quant-platform/make_features.py:36`
 
 **Текущее:**
 ```python

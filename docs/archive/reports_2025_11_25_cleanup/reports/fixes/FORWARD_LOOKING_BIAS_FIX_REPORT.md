@@ -8,7 +8,7 @@
 
 ## 📋 Executive Summary
 
-This report documents the comprehensive fix for the forward-looking bias vulnerability in the TradingBot2 pipeline. The issue allowed models to "see the future" during training when `decision_delay_ms=0`, leading to unrealistic backtests and poor live performance.
+This report documents the comprehensive fix for the forward-looking bias vulnerability in the AI-Powered Quantitative Research Platform pipeline. The issue allowed models to "see the future" during training when `decision_delay_ms=0`, leading to unrealistic backtests and poor live performance.
 
 **Key Changes:**
 - ✅ Changed `LeakConfig` default from `decision_delay_ms=0` to `8000ms`

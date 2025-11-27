@@ -2,7 +2,7 @@
 """
 Documentation Reorganization Script
 
-This script reorganizes the TradingBot2 documentation by moving files
+This script reorganizes the AI-Powered Quantitative Research Platform documentation by moving files
 from the root directory to appropriate subdirectories.
 
 Usage:
@@ -443,7 +443,7 @@ See [DOCS_INDEX.md](../../DOCS_INDEX.md) for the main documentation index.
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Reorganize TradingBot2 documentation',
+        description='Reorganize AI-Powered Quantitative Research Platform documentation',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
@@ -458,7 +458,7 @@ def main():
 
     root_dir = Path(__file__).parent.parent.resolve()
 
-    print(f"TradingBot2 Documentation Reorganization")
+    print(f"AI-Powered Quantitative Research Platform Documentation Reorganization")
     print(f"Root directory: {root_dir}")
     print(f"Mode: {'DRY RUN' if args.dry_run else 'ACTUAL EXECUTION'}\n")
 

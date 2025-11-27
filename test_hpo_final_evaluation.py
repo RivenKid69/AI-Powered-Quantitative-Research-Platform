@@ -135,7 +135,7 @@ class TestConfigurationValidation:
         from pathlib import Path
         import yaml
 
-        config_path = Path("/home/user/TradingBot2/configs/config_train.yaml")
+        config_path = Path("/home/user/ai-quant-platform/configs/config_train.yaml")
 
         if not config_path.exists():
             pytest.skip("Config file not found")
@@ -179,7 +179,7 @@ class TestConfigurationValidation:
         from pathlib import Path
         import yaml
 
-        config_path = Path("/home/user/TradingBot2/configs/config_train.yaml")
+        config_path = Path("/home/user/ai-quant-platform/configs/config_train.yaml")
 
         if not config_path.exists():
             pytest.skip("Config file not found")

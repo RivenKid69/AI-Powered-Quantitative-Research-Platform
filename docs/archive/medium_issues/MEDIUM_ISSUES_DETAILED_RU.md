@@ -1,5 +1,5 @@
 # ДЕТАЛЬНЫЙ АНАЛИЗ MEDIUM PRIORITY ПРОБЛЕМ
-## TradingBot2 Mathematical Audit - MEDIUM Issues
+## AI-Powered Quantitative Research Platform Mathematical Audit - MEDIUM Issues
 
 **Дата:** 2025-11-20
 **Всего MEDIUM issues:** 14

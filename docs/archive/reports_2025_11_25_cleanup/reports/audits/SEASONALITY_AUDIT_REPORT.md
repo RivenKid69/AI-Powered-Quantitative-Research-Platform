@@ -9,7 +9,7 @@
 ## КРИТИЧЕСКИЕ ПРОБЛЕМЫ
 
 ### 1. ❌ Несоответствие параметров конфигурации в seasonality.md (строка 154)
-**Файл:** `/home/user/TradingBot2/docs/seasonality.md`  
+**Файл:** `/home/user/AI-Powered Quantitative Research Platform/docs/seasonality.md`  
 **Строка:** 154
 
 **Проблема:**
@@ -34,7 +34,7 @@ latency:
 ---
 
 ### 2. ❌ Неправильный параметр seasonality.md (строка 258)
-**Файл:** `/home/user/TradingBot2/docs/seasonality.md`  
+**Файл:** `/home/user/AI-Powered Quantitative Research Platform/docs/seasonality.md`  
 **Строка:** 258
 
 **Проблема:**
@@ -56,7 +56,7 @@ latency:
 ---
 
 ### 3. ❌ Отсутствует параметр seasonality.md (линия 152-154)
-**Файл:** `/home/user/TradingBot2/docs/seasonality.md`  
+**Файл:** `/home/user/AI-Powered Quantitative Research Platform/docs/seasonality.md`  
 **Строка:** 152-154
 
 **Проблема:**
@@ -77,7 +77,7 @@ latency:
 ## НЕКРИТИЧЕСКИЕ ПРОБЛЕМЫ (Несоответствия, требующие уточнения)
 
 ### 4. ⚠️  Параметр seasonality_path в seasonality.md vs реальный код
-**Файл:** `/home/user/TradingBot2/docs/seasonality.md`  
+**Файл:** `/home/user/AI-Powered Quantitative Research Platform/docs/seasonality.md`  
 **Строка:** 131
 
 **Проблема:**
@@ -97,10 +97,10 @@ latency:
 ---
 
 ### 5. ⚠️  Отсутствие директории data/seasonality_source/
-**Файл:** `/home/user/TradingBot2/docs/seasonality_quickstart.md` (строка 15)  
+**Файл:** `/home/user/AI-Powered Quantitative Research Platform/docs/seasonality_quickstart.md` (строка 15)  
 **Документация упоминает:** `data/seasonality_source/latest.parquet`
 
-**Проблема:** Директория `/home/user/TradingBot2/data/seasonality_source/` не существует
+**Проблема:** Директория `/home/user/AI-Powered Quantitative Research Platform/data/seasonality_source/` не существует
 - Документация предполагает, что пользователи положат файлы сюда
 - Это нормально для runtime данных, но стоит добавить замечание о создании директории
 

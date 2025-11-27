@@ -298,4 +298,4 @@ When modifying Twin Critics implementation:
 
 ## License
 
-Same as parent project (TradingBot2)
+Same as parent project (AI-Powered Quantitative Research Platform)

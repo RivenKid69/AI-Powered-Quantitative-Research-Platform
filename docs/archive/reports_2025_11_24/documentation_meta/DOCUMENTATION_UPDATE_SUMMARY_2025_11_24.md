@@ -305,4 +305,4 @@ Documentation modernization successfully completed with:
 
 **Created**: 2025-11-24
 **Author**: Claude Code AI (Sonnet 4.5)
-**Reviewed**: TradingBot2 Development Team
+**Reviewed**: AI-Powered Quantitative Research Platform Development Team

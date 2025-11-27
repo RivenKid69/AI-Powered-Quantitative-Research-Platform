@@ -213,10 +213,10 @@ advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 - Also uses 1e-8
 - Same vulnerability
 
-### Our Approach (TradingBot2)
+### Our Approach (AI-Powered Quantitative Research Platform2)
 
 ```python
-# TradingBot2: Conservative and safe
+# AI-Powered Quantitative Research Platform2: Conservative and safe
 ADV_STD_FLOOR = 1e-4
 adv_std_clamped = max(adv_std, ADV_STD_FLOOR)
 normalized = (advantages - mean) / adv_std_clamped
@@ -271,7 +271,7 @@ warn/advantages_norm_extreme
 ## Files Structure
 
 ```
-/TradingBot2/
+/AI-Powered Quantitative Research Platform2/
 ├── distributional_ppo.py                              # Core fix (lines 6635-6693)
 ├── docs/
 │   └── ADVANTAGE_STD_FLOOR_FIX_V2.md                 # This document

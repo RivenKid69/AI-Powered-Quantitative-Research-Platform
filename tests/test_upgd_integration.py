@@ -2,7 +2,7 @@
 Integration tests for UPGD optimizer with DistributionalPPO.
 
 Tests verify that UPGD optimizers work correctly within the full
-TradingBot2 training pipeline.
+AI-Powered Quantitative Research Platform training pipeline.
 """
 
 import pytest

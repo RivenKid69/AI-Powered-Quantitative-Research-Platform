@@ -5,7 +5,7 @@
 **Статус:** ❌ ТРЕБУЕТ НЕМЕДЛЕННОГО ИСПРАВЛЕНИЯ
 
 **Где проблема:**
-- File: `/home/user/TradingBot2/mediator.py`
+- File: `/home/user/AI-Powered Quantitative Research Platform/mediator.py`
 - Lines: 1047-1051
 
 **Текущий код:**
@@ -53,8 +53,8 @@ norm_cols[20] = self._get_safe_float(row, "taker_buy_ratio_momentum_12h", 0.0)
 **Статус:** ❌ ТРЕБУЕТ НЕМЕДЛЕННОГО ИСПРАВЛЕНИЯ
 
 **Где проблема:**
-- File A: `/home/user/TradingBot2/transformers.py` строка 606
-- File B: `/home/user/TradingBot2/mediator.py` строки 962, 965
+- File A: `/home/user/AI-Powered Quantitative Research Platform/transformers.py` строка 606
+- File B: `/home/user/AI-Powered Quantitative Research Platform/mediator.py` строки 962, 965
 
 **Анализ:**
 
@@ -95,7 +95,7 @@ C) Использовать их в otros местах (если есть нео
 **Статус:** ❌ ТРЕБУЕТ НЕМЕДЛЕННОГО ИСПРАВЛЕНИЯ
 
 **Где проблема:**
-- File: `/home/user/TradingBot2/transformers.py`
+- File: `/home/user/AI-Powered Quantitative Research Platform/transformers.py`
 - Lines: 606 (онлайн) vs 781 (оффлайн)
 
 **Онлайн путь (apply_offline_features, строка 781):**
@@ -192,7 +192,7 @@ norm_cols[0-20] = различные признаки
 
 **Статус:** ❌ ТРЕБУЕТ ИСПРАВЛЕНИЯ
 
-**File:** `/home/user/TradingBot2/make_features.py`
+**File:** `/home/user/AI-Powered Quantitative Research Platform/make_features.py`
 **Line:** 36
 
 **Текущий код:**

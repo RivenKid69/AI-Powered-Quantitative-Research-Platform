@@ -8,7 +8,7 @@
 
 ## Executive Summary
 
-5 critical mathematical issues were identified and fixed in the TradingBot2 codebase. All issues could cause **gradient explosions, training instability, or silent failures** during model training.
+5 critical mathematical issues were identified and fixed in the AI-Powered Quantitative Research Platform codebase. All issues could cause **gradient explosions, training instability, or silent failures** during model training.
 
 **Impact**: Models trained before these fixes may exhibit:
 - Unexpected gradient explosions (CRITICAL #1, #3)

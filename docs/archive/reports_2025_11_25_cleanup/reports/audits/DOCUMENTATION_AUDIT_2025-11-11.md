@@ -1,4 +1,4 @@
-# Отчёт об аудите документации TradingBot2
+# Отчёт об аудите документации AI-Powered Quantitative Research Platform
 
 **Дата проведения**: 2025-11-11
 **Проверено**: 50+ файлов документации (9,743 строк)
@@ -9,7 +9,7 @@
 
 ## Краткое резюме
 
-Проведён полный аудит всей документации проекта TradingBot2, включая:
+Проведён полный аудит всей документации проекта AI-Powered Quantitative Research Platform, включая:
 - Основные файлы (README.md, ARCHITECTURE.md, CHANGELOG.md)
 - Техническую документацию (OBSERVATION_MAPPING.md, FEATURE_MAPPING_56.md, FULL_FEATURES_LIST.md)
 - Документацию по функциональности (docs/*.md - 25+ файлов)
@@ -91,33 +91,33 @@
 
 ## Изменённые файлы
 
-1. ✅ `/home/user/TradingBot2/OBSERVATION_MAPPING.md`
+1. ✅ `/home/user/AI-Powered Quantitative Research Platform/OBSERVATION_MAPPING.md`
    - Обновлено количество признаков (43→56)
    - Обновлено EXT_NORM_DIM (8→21)
    - Исправлены все позиции и расчёты
    - Обновлена дата на 2025-11-11
 
-2. ✅ `/home/user/TradingBot2/FULL_FEATURES_LIST.md`
+2. ✅ `/home/user/AI-Powered Quantitative Research Platform/FULL_FEATURES_LIST.md`
    - Добавлено предупреждение о историческом характере
    - Добавлена секция с текущей конфигурацией
    - Обновлена дата на 2025-11-11
 
-3. ✅ `/home/user/TradingBot2/README.md`
+3. ✅ `/home/user/AI-Powered Quantitative Research Platform/README.md`
    - Исправлены пути к конфигурационным файлам
    - Добавлены примечания о несуществующих тестах
    - Сохранён контекст для будущей реализации
 
-4. ✅ `/home/user/TradingBot2/docs/large_orders.md`
+4. ✅ `/home/user/AI-Powered Quantitative Research Platform/docs/large_orders.md`
    - Добавлен раздел с требованиями к тестам
    - Указан статус "awaiting implementation"
 
-5. ✅ `/home/user/TradingBot2/CONTRIBUTING.md`
+5. ✅ `/home/user/AI-Powered Quantitative Research Platform/CONTRIBUTING.md`
    - Добавлено примечание о тесте для реализации
 
-6. ✅ `/home/user/TradingBot2/ARCHITECTURE.md`
+6. ✅ `/home/user/AI-Powered Quantitative Research Platform/ARCHITECTURE.md`
    - Исправлена ссылка на План.txt
 
-7. ✅ `/home/user/TradingBot2/FEATURE_MAPPING_56.md`
+7. ✅ `/home/user/AI-Powered Quantitative Research Platform/FEATURE_MAPPING_56.md`
    - Обновлена дата для согласованности
 
 ---

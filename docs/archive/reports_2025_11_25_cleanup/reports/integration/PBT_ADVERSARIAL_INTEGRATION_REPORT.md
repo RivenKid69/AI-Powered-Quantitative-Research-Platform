@@ -2,7 +2,7 @@
 
 ## Резюме
 
-Проведена полная проверка и валидация интеграции Population-Based Training (PBT) + Adversarial Training в проекте TradingBot2. Все компоненты протестированы, покрыты тестами на 100%, и **включены по умолчанию**.
+Проведена полная проверка и валидация интеграции Population-Based Training (PBT) + Adversarial Training в проекте AI-Powered Quantitative Research Platform. Все компоненты протестированы, покрыты тестами на 100%, и **включены по умолчанию**.
 
 ## Компоненты
 

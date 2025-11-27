@@ -15,7 +15,7 @@
 КРИТИЧНАЯ ОШИБКА #1: Несоответствие имен SMA в mediator.py
 ──────────────────────────────────────────────────────────
 
-ФАЙЛ:     /home/user/TradingBot2/mediator.py
+ФАЙЛ:     /home/user/AI-Powered Quantitative Research Platform/mediator.py
 МЕТОД:    _extract_technical_indicators (строки 957-1010)
 СТРОКИ:   960, 963
 

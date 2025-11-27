@@ -4,7 +4,7 @@ This directory contains historical reports, audits, and analyses from the intens
 
 ## Purpose
 
-These reports document the discovery and resolution of critical bugs in the TradingBot2 system. While the fixes are still active and documented in the main documentation, these detailed reports are archived for historical reference.
+These reports document the discovery and resolution of critical bugs in the AI-Powered Quantitative Research Platform system. While the fixes are still active and documented in the main documentation, these detailed reports are archived for historical reference.
 
 ## Organization
 

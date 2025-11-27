@@ -1,4 +1,4 @@
-# Полный список всех признаков в TradingBot2
+# Полный список всех признаков в AI-Powered Quantitative Research Platform
 
 **⚠️ ВАЖНО: Этот документ описывает ИСТОРИЧЕСКУЮ конфигурацию. Текущее значение N_FEATURES = 56 (EXT_NORM_DIM=21, MAX_NUM_TOKENS=1). См. `feature_config.py` для актуальных значений.**
 

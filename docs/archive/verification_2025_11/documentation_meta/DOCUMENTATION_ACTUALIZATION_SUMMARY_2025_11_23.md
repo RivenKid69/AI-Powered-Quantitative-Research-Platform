@@ -2,7 +2,7 @@
 
 ## Overview
 
-Complete documentation cleanup and actualization performed for TradingBot2 project.
+Complete documentation cleanup and actualization performed for AI-Powered Quantitative Research Platform project.
 
 ## Summary Statistics
 

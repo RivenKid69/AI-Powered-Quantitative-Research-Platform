@@ -10,7 +10,7 @@ import sys
 import torch
 
 # Import the implementation
-sys.path.insert(0, '/home/user/TradingBot2')
+sys.path.insert(0, '/home/user/ai-quant-platform')
 from distributional_ppo import DistributionalPPO
 
 

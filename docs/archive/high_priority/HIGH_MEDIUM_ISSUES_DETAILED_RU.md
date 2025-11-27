@@ -1,5 +1,5 @@
 # ДЕТАЛЬНЫЙ АНАЛИЗ HIGH И MEDIUM ПРОБЛЕМ
-## TradingBot2 Mathematical Audit
+## AI-Powered Quantitative Research Platform Mathematical Audit
 
 **Дата:** 2025-11-20
 **Статус:** Все HIGH issues уже исправлены, нужны regression tests
@@ -897,7 +897,7 @@ Shaped reward: r'(s, a, s') = r(s, a, s') + γ·Φ(s') - Φ(s)
 Свойство: Optimal policy π* не изменяется под potential-based shaping!
 ```
 
-**Potential Function в TradingBot2:**
+**Potential Function в AI-Powered Quantitative Research Platform:**
 ```python
 Φ(s) = potential_shaping_coef · tanh(risk_penalty + drawdown_penalty)
 

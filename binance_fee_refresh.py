@@ -31,7 +31,7 @@ SCHEMA_VERSION = 1
 DEFAULT_VIP_TIER_LABEL = "VIP 0"
 DEFAULT_BNB_DISCOUNT_RATE = 0.25
 DEFAULT_UPDATE_THRESHOLD_DAYS = 30
-USER_AGENT = "TradingBot fee_refresh/1.0"
+USER_AGENT = "AI-Powered Quantitative Research Platform fee_refresh/1.0"
 
 
 def ensure_aware(dt: _dt.datetime) -> _dt.datetime:

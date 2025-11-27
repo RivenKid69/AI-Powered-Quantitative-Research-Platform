@@ -1,6 +1,6 @@
-# TradingBot2
+# AI-Powered Quantitative Research Platform
 
-**ML-бот для среднечастотной торговли** на криптовалютах и акциях с использованием **Reinforcement Learning (Distributional PPO)** для принятия торговых решений.
+**ML-платформа для количественных исследований и торговли** на криптовалютах и акциях с использованием **Reinforcement Learning (Distributional PPO)** для принятия торговых решений.
 
 ---
 
@@ -459,7 +459,7 @@ CLI, чтобы избавиться от предупреждений. Пере
 Простой пример ежедневного обновления через `cron`:
 
 ```cron
-15 4 * * * /bin/bash -lc 'cd /opt/tradingbot && python scripts/fetch_binance_filters.py --universe --out data/binance_filters.json'
+15 4 * * * /bin/bash -lc 'cd /opt/ai-quant-platform && python scripts/fetch_binance_filters.py --universe --out data/binance_filters.json'
 ```
 
 Скрипт `scripts/validate_seasonality.py` воспроизводит почасовое поведение

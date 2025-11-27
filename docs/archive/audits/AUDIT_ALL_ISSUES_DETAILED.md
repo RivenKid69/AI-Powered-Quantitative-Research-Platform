@@ -1,5 +1,5 @@
 # ПОЛНЫЙ СПИСОК ВСЕХ НАЙДЕННЫХ ПРОБЛЕМ
-## Математический аудит TradingBot2
+## Математический аудит AI-Powered Quantitative Research Platform
 
 **Дата:** 2025-11-20
 **Всего проблем:** 36 (3 CRITICAL, 5 HIGH, 14 MEDIUM, 14 LOW)

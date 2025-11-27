@@ -10,7 +10,7 @@
 
 ### 1. ❌ permissions.md - Отсутствует .github/workflows/
 
-**Документ:** `/home/user/TradingBot2/docs/permissions.md`  
+**Документ:** `/home/user/ai-quant-platform/docs/permissions.md`  
 **Проблема:** Документ ссылается на `.github/workflows/` для CI/CD workflows, но директория не существует.
 
 **Строка в документе:**
@@ -20,7 +20,7 @@
 
 **Проверка:**
 ```bash
-ls -la /home/user/TradingBot2/.github/
+ls -la /home/user/ai-quant-platform/.github/
 # Результат: директория не найдена
 ```
 
@@ -33,7 +33,7 @@ ls -la /home/user/TradingBot2/.github/
 
 ### 2. ❌ permissions.md - Отсутствует CODEOWNERS
 
-**Документ:** `/home/user/TradingBot2/docs/permissions.md`  
+**Документ:** `/home/user/ai-quant-platform/docs/permissions.md`  
 **Проблема:** Документ ссылается на `CODEOWNERS` файл для управления правами доступа, но файл не существует.
 
 **Строка в документе:**
@@ -43,7 +43,7 @@ Ownership is enforced via the repository's `CODEOWNERS` file.
 
 **Проверка:**
 ```bash
-ls -la /home/user/TradingBot2/CODEOWNERS
+ls -la /home/user/ai-quant-platform/CODEOWNERS
 # Результат: файл не найден
 ```
 
@@ -58,7 +58,7 @@ ls -la /home/user/TradingBot2/CODEOWNERS
 
 ### 3. ⚠️ large_orders.md - Неправильные пути к тестам
 
-**Документ:** `/home/user/TradingBot2/docs/large_orders.md`  
+**Документ:** `/home/user/ai-quant-platform/docs/large_orders.md`  
 **Проблема:** Документ ссылается на тесты в директории `tests/`, но они находятся в корне проекта.
 
 **Строка в документе (линия 62):**
@@ -68,8 +68,8 @@ and `tests/test_executor_threshold.py`
 ```
 
 **Фактическое местоположение:**
-- ✓ `/home/user/TradingBot2/test_execution_determinism.py` (существует)
-- ✓ `/home/user/TradingBot2/test_executor_threshold.py` (существует)
+- ✓ `/home/user/ai-quant-platform/test_execution_determinism.py` (существует)
+- ✓ `/home/user/ai-quant-platform/test_executor_threshold.py` (существует)
 
 **Влияние:** Низко - тесты существуют, просто в другом месте.  
 **Рекомендация:**
@@ -80,7 +80,7 @@ and `tests/test_executor_threshold.py`
 
 ### 4. ⚠️ data_degradation.md - Неправильное имя класса
 
-**Документ:** `/home/user/TradingBot2/docs/data_degradation.md`  
+**Документ:** `/home/user/ai-quant-platform/docs/data_degradation.md`  
 **Проблема:** Документация упоминает публичный класс `LatencyQueue`, а в коде это приватный класс `_LatencyQueue`.
 
 **Строка в документе (линия 57-58):**
@@ -91,7 +91,7 @@ Components log degradation statistics on shutdown. Look for messages
 ```
 
 **Фактическое имя класса:**
-- Класс: `_LatencyQueue` в `/home/user/TradingBot2/execution_sim.py` (строка 50)
+- Класс: `_LatencyQueue` в `/home/user/ai-quant-platform/execution_sim.py` (строка 50)
 - Лог-сообщение содержит строку "LatencyQueue degradation" (строка 1022)
 
 **Влияние:** Низко - это просто лог-сообщение, содержит корректный текст для поиска.  
@@ -103,7 +103,7 @@ Components log degradation statistics on shutdown. Look for messages
 
 ### 5. ⚠️ dynamic_spread.md - Отсутствуют рекомендуемые директории
 
-**Документ:** `/home/user/TradingBot2/docs/dynamic_spread.md`  
+**Документ:** `/home/user/ai-quant-platform/docs/dynamic_spread.md`  
 **Проблема:** Документация предлагает хранить данные в директориях, которые не созданы.
 
 **Строки в документе:**
@@ -111,13 +111,13 @@ Components log degradation statistics on shutdown. Look for messages
 - Линия 75-76: "Keep the raw dataset under `data/seasonality_source/`"
 
 **Фактическое состояние:**
-- `/home/user/TradingBot2/data/seasonality_source/` - НЕ СУЩЕСТВУЕТ
-- `/home/user/TradingBot2/data/slippage/` - НЕ СУЩЕСТВУЕТ
+- `/home/user/ai-quant-platform/data/seasonality_source/` - НЕ СУЩЕСТВУЕТ
+- `/home/user/ai-quant-platform/data/slippage/` - НЕ СУЩЕСТВУЕТ
 
 **Влияние:** Низко - это рекомендации для пользователей, директории создаются при необходимости.  
 **Проверка:**
 ```bash
-ls -la /home/user/TradingBot2/data/ | grep -E "seasonality|slippage"
+ls -la /home/user/ai-quant-platform/data/ | grep -E "seasonality|slippage"
 # Результат: директории не найдены
 ```
 
