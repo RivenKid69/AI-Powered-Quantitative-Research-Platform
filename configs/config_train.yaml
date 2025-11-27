@@ -3,6 +3,27 @@ run_id: default-run
 logs_dir: logs
 artifacts_dir: artifacts
 seasonality_log_level: INFO
+
+# =============================================================================
+# ASSET CLASS CONFIGURATION (Phase 4.5 Unification)
+# =============================================================================
+# asset_class: crypto | equity
+#   - crypto: 24/7 trading, Binance-style maker/taker fees, higher slippage
+#   - equity: NYSE hours (9:30-16:00 ET), commission-free with regulatory fees
+#
+# data_vendor: binance | alpaca | polygon
+#   - binance: Crypto data from Binance
+#   - alpaca: US equities via Alpaca Markets
+#   - polygon: US equities via Polygon.io
+#
+# These settings auto-configure:
+#   - FeeProvider (CryptoFeeProvider / EquityFeeProvider)
+#   - SlippageProvider (crypto / equity profile)
+#   - TradingHoursAdapter (24/7 or NYSE calendar)
+# =============================================================================
+asset_class: crypto
+data_vendor: binance
+
 execution_profile: MKT_OPEN_NEXT_4H  # Changed from H1 to 4H for 4-hour timeframe
 execution_params:
   limit_offset_bps: 0.0

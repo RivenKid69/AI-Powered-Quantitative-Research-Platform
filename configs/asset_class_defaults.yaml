@@ -1,0 +1,264 @@
+# =============================================================================
+# ASSET CLASS DEFAULTS CONFIGURATION (Phase 4.5 Unification)
+# =============================================================================
+#
+# This file provides unified defaults for different asset classes. It serves as
+# a reference for switching between crypto and equity trading configurations.
+#
+# Usage in main configs:
+#   asset_class: crypto  # or equity
+#   data_vendor: binance  # or alpaca, polygon
+#
+# The system auto-configures based on asset_class:
+#   - FeeProvider: CryptoFeeProvider / EquityFeeProvider
+#   - SlippageProvider: Crypto (5bps, k=0.1) / Equity (2bps, k=0.05)
+#   - TradingHoursAdapter: 24/7 or NYSE calendar
+#
+# =============================================================================
+
+# =============================================================================
+# CRYPTO DEFAULTS
+# =============================================================================
+# Suitable for: Binance, Coinbase, Kraken, etc.
+# Characteristics:
+#   - 24/7 trading (no trading hours restrictions)
+#   - Maker/taker fee structure (typically 2-10 bps)
+#   - Higher volatility and wider spreads
+#   - Liquidity seasonality by hour-of-week
+# =============================================================================
+crypto:
+  # Core settings
+  asset_class: crypto
+  data_vendor: binance
+  market: spot  # or futures
+
+  # Trading hours: 24/7
+  session:
+    calendar: crypto_24x7
+    pre_open_keepout_bars: 0
+    post_close_keepout_bars: 0
+    extended_hours: true  # N/A for crypto, always true
+
+  # Fees: Maker/Taker model (Binance-style)
+  fees:
+    structure: maker_taker
+    maker_bps: 2.0            # Default maker fee (VIP0 with BNB)
+    taker_bps: 4.0            # Default taker fee (VIP0 with BNB)
+    use_bnb_discount: true
+    regulatory:
+      enabled: false          # No regulatory fees for crypto
+    path: "data/fees/fees_by_symbol.json"
+
+  # Slippage: Higher impact model
+  slippage:
+    profile: crypto           # Reference: slippage.yaml profiles.crypto
+    k: 0.10                   # Impact coefficient (Almgren-Chriss)
+    default_spread_bps: 5.0   # Default half-spread
+    min_slippage_bps: 1.0
+    max_slippage_bps: 500.0
+
+  # Execution
+  execution:
+    fill_policy: next_open_market
+    timeframe_ms: 14400000    # 4H bars
+    use_seasonality: true
+
+  # Liquidity
+  liquidity:
+    min_adv_usd: 0            # No minimum
+    min_bar_quote_volume: 0
+
+  # No-trade windows (disabled by default for crypto)
+  no_trade:
+    enabled: false
+    enforce_trading_hours: false
+
+# =============================================================================
+# US EQUITY DEFAULTS
+# =============================================================================
+# Suitable for: Alpaca, Polygon, Interactive Brokers
+# Characteristics:
+#   - NYSE/NASDAQ hours: 9:30-16:00 ET
+#   - Commission-free with regulatory fees (SEC/TAF on sells)
+#   - Tighter spreads, lower volatility
+#   - Trading halts and circuit breakers
+# =============================================================================
+equity:
+  # Core settings
+  asset_class: equity
+  data_vendor: alpaca         # or polygon
+  market: equity
+
+  # Trading hours: NYSE calendar
+  session:
+    calendar: us_equity       # NYSE 9:30-16:00 ET
+    pre_open_keepout_bars: 0  # Optional: skip first N bars after open
+    post_close_keepout_bars: 0
+    extended_hours: false     # Pre-market (4:00-9:30) and after-hours (16:00-20:00)
+
+  # Fees: Commission-free with regulatory fees
+  fees:
+    structure: flat           # Commission-free
+    maker_bps: 0.0
+    taker_bps: 0.0
+    regulatory:
+      enabled: true
+      sec_fee_per_million: 27.80    # SEC Section 31 fee (~$0.0000278/dollar)
+      taf_fee_per_share: 0.000166   # FINRA TAF (~$0.000166/share)
+      taf_fee_cap: 8.30             # TAF cap per trade
+
+  # Slippage: Lower impact model
+  slippage:
+    profile: equity           # Reference: slippage.yaml profiles.equity
+    k: 0.05                   # Impact coefficient (lower than crypto)
+    default_spread_bps: 2.0   # Tighter spreads
+    min_slippage_bps: 0.5     # Penny tick protection
+    max_slippage_bps: 200.0
+
+  # Execution
+  execution:
+    fill_policy: next_open_market
+    timeframe_ms: 14400000    # 4H bars
+    use_seasonality: false    # No hour-of-week seasonality
+
+  # Liquidity
+  liquidity:
+    min_adv_usd: 1000000      # $1M minimum ADV for tradeable stocks
+    min_bar_quote_volume: 10000
+
+  # Spread limits (stocks have tighter spreads)
+  spreads:
+    max_spread_bps: 50        # 0.5% max spread
+
+  # No-trade windows
+  no_trade:
+    enabled: true
+    policy: ignore            # ignore | hold | flatten
+    enforce_trading_hours: true
+
+# =============================================================================
+# CRYPTO FUTURES DEFAULTS
+# =============================================================================
+# Suitable for: Binance Futures, FTX (RIP), Bybit
+# Characteristics:
+#   - 24/7 trading (like spot)
+#   - Similar fee structure but often lower
+#   - Funding rate considerations
+#   - Higher leverage available
+# =============================================================================
+crypto_futures:
+  # Core settings
+  asset_class: crypto
+  market: futures
+  data_vendor: binance
+
+  # Trading hours: 24/7
+  session:
+    calendar: crypto_24x7
+    extended_hours: true
+
+  # Fees: Similar to spot, often with volume discounts
+  fees:
+    structure: maker_taker
+    maker_bps: 2.0
+    taker_bps: 4.0
+    funding_rate_enabled: true
+
+  # Slippage: Slightly tighter than spot due to higher volume
+  slippage:
+    profile: crypto_futures
+    k: 0.09
+    default_spread_bps: 4.0
+    min_slippage_bps: 0.5
+    max_slippage_bps: 500.0
+
+# =============================================================================
+# PROVIDER AUTO-SELECTION MAPPING
+# =============================================================================
+# This section documents how asset_class maps to execution providers.
+# Used by execution_providers.create_execution_provider() and Mediator.
+# =============================================================================
+provider_mapping:
+  crypto:
+    fee_provider: CryptoFeeProvider
+    slippage_provider: StatisticalSlippageProvider
+    slippage_profile: crypto
+    trading_hours_adapter: null  # 24/7, no adapter needed
+    fill_provider: OHLCVFillProvider
+
+  equity:
+    fee_provider: EquityFeeProvider
+    slippage_provider: StatisticalSlippageProvider
+    slippage_profile: equity
+    trading_hours_adapter: AlpacaTradingHoursAdapter  # or PolygonTradingHoursAdapter
+    fill_provider: OHLCVFillProvider
+
+  crypto_futures:
+    fee_provider: CryptoFeeProvider
+    slippage_provider: StatisticalSlippageProvider
+    slippage_profile: crypto_futures
+    trading_hours_adapter: null
+    fill_provider: OHLCVFillProvider
+
+# =============================================================================
+# DATA VENDOR MAPPING
+# =============================================================================
+# Maps data_vendor to appropriate adapters and data sources.
+# =============================================================================
+data_vendor_mapping:
+  binance:
+    market_data_adapter: BinanceMarketDataAdapter
+    exchange_info_adapter: BinanceExchangeInfoAdapter
+    default_asset_class: crypto
+    api_key_env: BINANCE_API_KEY
+    api_secret_env: BINANCE_API_SECRET
+
+  alpaca:
+    market_data_adapter: AlpacaMarketDataAdapter
+    exchange_info_adapter: AlpacaExchangeInfoAdapter
+    order_execution_adapter: AlpacaOrderExecutionAdapter
+    default_asset_class: equity
+    api_key_env: ALPACA_API_KEY
+    api_secret_env: ALPACA_API_SECRET
+    feeds:
+      - iex     # Free, 15-min delayed
+      - sip     # Paid, real-time
+
+  polygon:
+    market_data_adapter: PolygonMarketDataAdapter
+    exchange_info_adapter: PolygonExchangeInfoAdapter
+    default_asset_class: equity
+    api_key_env: POLYGON_API_KEY
+
+# =============================================================================
+# VALIDATION RULES
+# =============================================================================
+# Validation rules to prevent misconfigurations.
+# =============================================================================
+validation:
+  # asset_class + data_vendor compatibility
+  compatible_combinations:
+    crypto:
+      - binance
+    equity:
+      - alpaca
+      - polygon
+    crypto_futures:
+      - binance
+
+  # session.calendar + asset_class compatibility
+  calendar_compatibility:
+    crypto:
+      - crypto_24x7
+    equity:
+      - us_equity
+      - us_equity_extended
+    crypto_futures:
+      - crypto_24x7
+
+  # Warning conditions
+  warnings:
+    - condition: "asset_class == 'equity' and session.calendar == 'crypto_24x7'"
+      message: "Equity asset_class with 24/7 calendar may not reflect real market hours"
+    - condition: "asset_class == 'crypto' and fees.regulatory.enabled"
+      message: "Crypto does not have SEC/TAF regulatory fees"

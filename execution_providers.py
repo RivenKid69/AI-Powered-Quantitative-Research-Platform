@@ -1103,7 +1103,9 @@ class EquityFeeProvider:
             Fee amount in USD
         """
         # Commission-free for buys
-        if str(side).upper() != "SELL":
+        # Handle both string and OrderSide enum
+        side_str = side.value if isinstance(side, OrderSide) else str(side)
+        if side_str.upper() != "SELL":
             return 0.0
 
         if not self.include_regulatory:

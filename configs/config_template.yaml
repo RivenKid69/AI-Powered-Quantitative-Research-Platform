@@ -4,6 +4,29 @@ run_id: default-run
 logs_dir: logs
 artifacts_dir: artifacts
 seasonality_log_level: INFO
+
+# =============================================================================
+# ASSET CLASS CONFIGURATION (Phase 4.5 Unification)
+# =============================================================================
+# See configs/asset_class_defaults.yaml for detailed profiles and mappings.
+#
+# asset_class: crypto | equity
+#   - crypto: 24/7 trading, Binance-style maker/taker fees, higher slippage
+#   - equity: NYSE hours (9:30-16:00 ET), commission-free with regulatory fees
+#
+# data_vendor: binance | alpaca | polygon
+#   - binance: Crypto data from Binance
+#   - alpaca: US equities via Alpaca Markets
+#   - polygon: US equities via Polygon.io
+#
+# Auto-configured based on asset_class:
+#   - FeeProvider (CryptoFeeProvider / EquityFeeProvider)
+#   - SlippageProvider (crypto / equity profile)
+#   - TradingHoursAdapter (24/7 or NYSE calendar)
+# =============================================================================
+asset_class: crypto
+data_vendor: binance
+
 # Rate limiter configuration for outbound signals
 # max_signals_per_sec: 0 disables limiting
 max_signals_per_sec: 0.0
