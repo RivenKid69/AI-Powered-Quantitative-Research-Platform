@@ -600,8 +600,15 @@ cdef void build_observation_vector_c(
     feature_idx += 1
 
     # --- External normalised columns --------------------------------------
-    # Process 21 external features (cvd, garch, yang_zhang, returns, taker_buy_ratio, etc.)
-    # ISSUE #2 FIX (Phase 2 - COMPLETE): Now write validity flags to observation vector
+    # Process 28 external features:
+    # - Indices 0-20:  Crypto features (cvd, garch, yang_zhang, returns, taker_buy_ratio)
+    # - Indices 21-27: Stock features (vix, market_regime, rs_spy, rs_qqq, sector_momentum)
+    #
+    # Phase 5 (2025-11-27): Expanded from 21 to 28 features for stock support.
+    # Loop uses norm_cols_values.shape[0] so it automatically handles both sizes.
+    # For crypto, indices 21-27 will have validity=False (missing data).
+    #
+    # ISSUE #2 FIX (Phase 2 - COMPLETE): Validity flags written to observation vector
     # to enable model to distinguish missing data (NaN) from zero values.
     # Validity flags are written AFTER token metadata (following FEATURES_LAYOUT order).
     for i in range(norm_cols_values.shape[0]):

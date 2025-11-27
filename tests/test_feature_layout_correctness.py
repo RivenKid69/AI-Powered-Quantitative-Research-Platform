@@ -25,10 +25,13 @@ def test_feature_layout_matches_obs_builder():
     from feature_config import FEATURES_LAYOUT
 
     # Build observation with distinctive values for each expected block
-    norm_cols = np.array([100.0 + i for i in range(21)], dtype=np.float32)
-    out = np.zeros(63, dtype=np.float32)
+    # Phase 5: norm_cols expanded from 21 to 28 for stock features
+    norm_cols = np.array([100.0 + i for i in range(28)], dtype=np.float32)
+    norm_cols_validity = np.ones(28, dtype=np.uint8)  # All valid for testing
+    out = np.zeros(99, dtype=np.float32)  # Updated from 63 to 99 for Phase 5
 
     # Set distinctive values for verification
+    # Phase 5: Added signal_pos and enable_validity_flags parameters
     build_observation_vector(
         price=50000.0,           # Will be at index 0
         prev_price=49900.0,      # Used for ret_bar at index 21
@@ -43,15 +46,16 @@ def test_feature_layout_matches_obs_builder():
         atr=100.0,               # Will be at index 15
         cci=5.0,                 # Will be at index 17
         obv=1000.0,              # Will be at index 19
-        bb_lower=49000.0,        # Used for bb_position at index 32
-        bb_upper=51000.0,        # Used for bb_position at index 32
-        is_high_importance=1.0,  # Will be at index 34
-        time_since_event=5.0,    # Will be at index 35
-        fear_greed_value=50.0,   # Will be at index 37
+        bb_lower=49000.0,        # Used for bb_position at index 33
+        bb_upper=51000.0,        # Used for bb_position at index 33
+        is_high_importance=1.0,  # Will be at index 35
+        time_since_event=5.0,    # Will be at index 36
+        fear_greed_value=50.0,   # Will be at index 38
         has_fear_greed=True,
         risk_off_flag=False,
         cash=10000.0,            # Will be at index 23
         units=0.0,
+        signal_pos=0.0,          # Will be at index 29
         last_vol_imbalance=0.0,
         last_trade_intensity=0.0,
         last_realized_spread=0.0,
@@ -60,6 +64,8 @@ def test_feature_layout_matches_obs_builder():
         max_num_tokens=1,
         num_tokens=1,
         norm_cols_values=norm_cols,
+        norm_cols_validity=norm_cols_validity,
+        enable_validity_flags=True,
         out_features=out,
     )
 
@@ -113,63 +119,71 @@ def test_feature_layout_matches_obs_builder():
     # vol_proxy = tanh(log1p(100 / 50000)) ≈ tanh(log1p(0.002)) ≈ tanh(0.002) ≈ 0.002
     assert abs(out[22]) < 0.01, f"vol_proxy at index 22 (got {out[22]})"
 
-    # Block 12: Agent (6) - indices 23-28
+    # Block 12: Agent (7) - indices 23-29 (Phase 5: added signal_pos at index 29)
     assert out[23] == 1.0, "cash_ratio at index 23 (all cash, no position)"
     assert out[24] == 0.0, "position_ratio at index 24 (no position)"
     assert out[25] == 0.0, "vol_imbalance at index 25"
     assert out[26] == 0.0, "trade_intensity at index 26"
     assert out[27] == 0.0, "realized_spread at index 27"
     assert out[28] == 0.0, "agent_fill_ratio at index 28"
+    assert out[29] == 0.0, "signal_pos at index 29"  # Phase 5: new signal_pos
 
-    # Block 13: Microstructure (3) - indices 29-31
+    # Block 13: Microstructure (3) - indices 30-32 (shifted +1 due to signal_pos)
     # price_momentum uses momentum (15.0) / (price * 0.01) = 15 / 500 = 0.03
-    assert abs(out[29] - np.tanh(0.03)) < 0.01, f"price_momentum at index 29 (got {out[29]})"
+    assert abs(out[30] - np.tanh(0.03)) < 0.01, f"price_momentum at index 30 (got {out[30]})"
     # bb_squeeze = (51000 - 49000) / 50000 = 2000 / 50000 = 0.04
-    assert abs(out[30] - np.tanh(0.04)) < 0.01, f"bb_squeeze at index 30 (got {out[30]})"
+    assert abs(out[31] - np.tanh(0.04)) < 0.01, f"bb_squeeze at index 31 (got {out[31]})"
     # trend_strength = (macd - macd_signal) / (price * 0.01) = (10 - 8) / 500 = 0.004
-    assert abs(out[31] - np.tanh(0.004)) < 0.01, f"trend_strength at index 31 (got {out[31]})"
+    assert abs(out[32] - np.tanh(0.004)) < 0.01, f"trend_strength at index 32 (got {out[32]})"
 
-    # Block 14: BB Context (2) - indices 32-33
+    # Block 14: BB Context (2) - indices 33-34 (shifted +1)
     # bb_position = (50000 - 49000) / (51000 - 49000) = 1000 / 2000 = 0.5
-    assert abs(out[32] - 0.5) < 0.01, f"bb_position at index 32 (got {out[32]})"
+    assert abs(out[33] - 0.5) < 0.01, f"bb_position at index 33 (got {out[33]})"
     # bb_width_norm = (51000 - 49000) / 50000 = 2000 / 50000 = 0.04
-    assert abs(out[33] - 0.04) < 0.01, f"bb_width_norm at index 33 (got {out[33]})"
+    assert abs(out[34] - 0.04) < 0.01, f"bb_width_norm at index 34 (got {out[34]})"
 
-    # Block 15: Metadata (5) - indices 34-38
-    assert out[34] == 1.0, "is_high_importance at index 34"
-    assert abs(out[35] - np.tanh(5.0 / 24.0)) < 0.01, f"time_since_event at index 35 (got {out[35]})"
-    assert out[36] == 0.0, "risk_off_flag at index 36"
-    assert abs(out[37] - 0.5) < 0.01, f"fear_greed_value at index 37 (50/100 = 0.5, got {out[37]})"
-    assert out[38] == 1.0, "fear_greed_indicator at index 38"
+    # Block 15: Metadata (5) - indices 35-39 (shifted +1)
+    assert out[35] == 1.0, "is_high_importance at index 35"
+    assert abs(out[36] - np.tanh(5.0 / 24.0)) < 0.01, f"time_since_event at index 36 (got {out[36]})"
+    assert out[37] == 0.0, "risk_off_flag at index 37"
+    assert abs(out[38] - 0.5) < 0.01, f"fear_greed_value at index 38 (50/100 = 0.5, got {out[38]})"
+    assert out[39] == 1.0, "fear_greed_indicator at index 39"
 
-    # Block 16: External (21) - indices 39-59
+    # Block 16: External (28) - indices 40-67 (Phase 5: expanded from 21 to 28)
     # norm_cols go through tanh(value) then clip to [-3, 3]
-    for i in range(21):
+    for i in range(28):
         expected_val = np.tanh(100.0 + i)
-        assert abs(out[39 + i] - expected_val) < 0.01, \
-            f"external[{i}] at index {39+i} (expected {expected_val}, got {out[39+i]})"
+        assert abs(out[40 + i] - expected_val) < 0.01, \
+            f"external[{i}] at index {40+i} (expected {expected_val}, got {out[40+i]})"
 
-    # Block 17: Token metadata (2) - indices 60-61
-    assert abs(out[60] - 1.0) < 0.01, f"num_tokens_norm at index 60 (got {out[60]})"
-    assert abs(out[61] - 0.0) < 0.01, f"token_id_norm at index 61 (got {out[61]})"
+    # Block 17: Token metadata (2) - indices 68-69 (Phase 5: shifted due to expanded external)
+    assert abs(out[68] - 1.0) < 0.01, f"num_tokens_norm at index 68 (got {out[68]})"
+    assert abs(out[69] - 0.0) < 0.01, f"token_id_norm at index 69 (got {out[69]})"
 
-    # Block 18: Token one-hot (1) - index 62
-    assert out[62] == 1.0, "token one-hot at index 62"
+    # Block 18: Token one-hot (1) - index 70
+    assert out[70] == 1.0, "token one-hot at index 70"
+
+    # Block 19: External validity (28) - indices 71-98 (Phase 5: added)
+    for i in range(28):
+        assert out[71 + i] == 1.0, f"external_validity[{i}] at index {71+i} should be 1.0 (valid)"
 
 
 def test_feature_config_has_correct_total_size():
     """
-    Verify FEATURES_LAYOUT sums to 84 features.
+    Verify FEATURES_LAYOUT sums to 99 features.
 
     This test ensures compute_n_features() works correctly regardless of block order.
-    Note: Feature count updated from 63 to 84 in latest version.
+    Note: Feature count updated from 84 to 99 in Phase 5 (stock features).
+    - Added 7 stock-specific features (VIX, market regime, RS, sector momentum)
+    - external block: 21 → 28
+    - external_validity block: 21 → 28
     """
     from feature_config import FEATURES_LAYOUT, N_FEATURES
 
     total = sum(block['size'] for block in FEATURES_LAYOUT)
 
-    assert total == 84, f"FEATURES_LAYOUT total size = {total}, expected 84"
-    assert N_FEATURES == 84, f"N_FEATURES = {N_FEATURES}, expected 84"
+    assert total == 99, f"FEATURES_LAYOUT total size = {total}, expected 99"
+    assert N_FEATURES == 99, f"N_FEATURES = {N_FEATURES}, expected 99"
 
 
 def test_feature_config_block_order_documentation():
@@ -182,21 +196,25 @@ def test_feature_config_block_order_documentation():
     from feature_config import FEATURES_LAYOUT
 
     # Expected order from obs_builder.pyx (actual implementation)
-    # Note: Feature count updated from 63 to 84 in latest version
+    # Phase 5 (2025-11-27): Updated for stock-specific features
+    # - agent: 6 → 7 (added signal_pos)
+    # - external: 21 → 28 (added 7 stock features: VIX, market_regime, RS, sector)
+    # - external_validity: 21 → 28
+    # - Total: 84 → 99
     expected_order = [
         ("bar", 3),              # 0-2
         ("ma5", 2),              # 3-4
         ("ma20", 2),             # 5-6
         ("indicators", 14),      # 7-20 (rsi, macd, momentum, atr, cci, obv + flags)
         ("derived", 2),          # 21-22 (ret_bar, vol_proxy)
-        ("agent", 6),            # 23-28
-        ("microstructure", 3),   # 29-31
-        ("bb_context", 2),       # 32-33
-        ("metadata", 5),         # 34-38
-        ("external", 21),        # 39-59
-        ("external_validity", 21),  # 60-80 (NEW: validity flags for external features)
-        ("token_meta", 2),       # 81-82
-        ("token", 1),            # 83
+        ("agent", 7),            # 23-29 (added signal_pos at index 29)
+        ("microstructure", 3),   # 30-32
+        ("bb_context", 2),       # 33-34
+        ("metadata", 5),         # 35-39
+        ("external", 28),        # 40-67 (21 crypto + 7 stock features)
+        ("external_validity", 28),  # 68-95 (validity flags for external features)
+        ("token_meta", 2),       # 96-97
+        ("token", 1),            # 98
     ]
 
     # Current feature_config.py order

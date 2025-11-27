@@ -28,7 +28,26 @@ DEFAULT_TANH_CLIP = 0.999
 OBS_EPS = 1e-8
 # Default maximum sizes
 MAX_NUM_TOKENS = 1  # Changed from 16 to match mediator and lob_state_cython
-EXT_NORM_DIM = 21  # Expanded from 16 to 21 to include all technical features (including taker_buy_ratio derivatives)
+# EXT_NORM_DIM: External normalized features dimension
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 5 (2025-11-27): Expanded from 21 to 28 for stock-specific features
+#
+# Indices 0-20:  Original crypto features (cvd, garch, yang_zhang, returns, taker_buy_ratio)
+# Indices 21-27: NEW stock-specific features (backward compatible - validity=False for crypto)
+#   [21] vix_normalized     - VIX index value (normalized via tanh)
+#   [22] vix_regime         - VIX regime indicator (0-1 scale: low/normal/elevated/extreme)
+#   [23] market_regime      - Bull/Bear/Sideways indicator (-1 to 1)
+#   [24] rs_spy_20d         - 20-day relative strength vs SPY
+#   [25] rs_spy_50d         - 50-day relative strength vs SPY
+#   [26] rs_qqq_20d         - 20-day relative strength vs QQQ
+#   [27] sector_momentum    - Sector momentum relative to market
+#
+# Backward Compatibility:
+# - Crypto data won't have stock features → validity flags = False
+# - Default values are sensible (0.0)
+# - No changes to existing crypto observation building
+# ═══════════════════════════════════════════════════════════════════════════════
+EXT_NORM_DIM = 28  # 21 crypto + 7 stock-specific features
 
 # Initialize feature layout (to be populated by make_layout)
 FEATURES_LAYOUT = []

@@ -1407,19 +1407,32 @@ class Mediator:
         - SMA: sma_12000 (50 bars = 12000 минут = 200h) instead of sma_60 (60 minutes)
         - Taker Buy Ratio Momentum: 4h/8h/12h (1/2/3 bars) instead of 1h
 
-        АРХИТЕКТУРНОЕ РЕШЕНИЕ: EXT_NORM_DIM = 21 (используется подмножество)
-        transformers.py генерирует БОЛЬШЕ признаков чем используется здесь:
-        - Генерируется 4 окна taker_buy_ratio_momentum, используется 3 (4h,8h,12h)
-        - Генерируется ret_7d, но используется только ret_4h, ret_12h, ret_24h
-        - Причина: баланс между гибкостью генерации и компактностью observation
-        - Это стандартная практика (sklearn fit на всех признаках, predict на подмножестве)
+        АРХИТЕКТУРНОЕ РЕШЕНИЕ: EXT_NORM_DIM = 28 (Phase 5 expansion)
+        - Indices 0-20: Original crypto features (cvd, garch, yang_zhang, returns, taker_buy_ratio)
+        - Indices 21-27: NEW stock-specific features (backward compatible)
+          [21] vix_normalized     - VIX index value (normalized via tanh)
+          [22] vix_regime         - VIX regime indicator (0-1 scale)
+          [23] market_regime      - Bull/Bear/Sideways indicator (-1 to 1)
+          [24] rs_spy_20d         - 20-day relative strength vs SPY
+          [25] rs_spy_50d         - 50-day relative strength vs SPY
+          [26] rs_qqq_20d         - 20-day relative strength vs QQQ
+          [27] sector_momentum    - Sector momentum relative to market
+
+        Backward Compatibility:
+        - Crypto data won't have stock features → validity flags = False
+        - Default values are sensible (0.0)
+        - No changes to existing crypto observation building
 
         Returns:
-            values: (21,) float32 array - feature values (NaN→0.0 fallback)
-            validity: (21,) bool array - True if feature was valid, False if NaN/Inf/None
+            values: (28,) float32 array - feature values (NaN→0.0 fallback)
+            validity: (28,) bool array - True if feature was valid, False if NaN/Inf/None
         """
-        norm_cols_values = np.zeros(21, dtype=np.float32)
-        norm_cols_validity = np.ones(21, dtype=bool)  # Assume valid by default
+        norm_cols_values = np.zeros(28, dtype=np.float32)
+        norm_cols_validity = np.zeros(28, dtype=bool)  # Default to invalid for all
+
+        # =======================================================================
+        # INDICES 0-20: ORIGINAL CRYPTO FEATURES (unchanged)
+        # =======================================================================
 
         # Map technical indicators from prepare_and_run.py to norm_cols
         # Original 8 features (adapted for 4h)
@@ -1443,14 +1456,57 @@ class Mediator:
         norm_cols_values[15], norm_cols_validity[15] = self._get_safe_float_with_validity(row, "taker_buy_ratio_sma_24h", 0.0)  # 6 bars
 
         # Additional 5 features for complete taker_buy_ratio coverage
-        # Note: This brings norm_cols from 16 to 21 (not related to observation size 56->62)
         norm_cols_values[16], norm_cols_validity[16] = self._get_safe_float_with_validity(row, "taker_buy_ratio_sma_8h", 0.0)  # 2 bars
         norm_cols_values[17], norm_cols_validity[17] = self._get_safe_float_with_validity(row, "taker_buy_ratio_sma_16h", 0.0)  # 4 bars
         norm_cols_values[18], norm_cols_validity[18] = self._get_safe_float_with_validity(row, "taker_buy_ratio_momentum_4h", 0.0)  # 1 bar
         norm_cols_values[19], norm_cols_validity[19] = self._get_safe_float_with_validity(row, "taker_buy_ratio_momentum_8h", 0.0)  # 2 bars
         norm_cols_values[20], norm_cols_validity[20] = self._get_safe_float_with_validity(row, "taker_buy_ratio_momentum_12h", 0.0)  # 3 bars
-        # NOTE: taker_buy_ratio_momentum_24h генерируется transformers.py, но НЕ используется
-        # в observation для компактности (21 external признаков вместо 22)
+
+        # =======================================================================
+        # INDICES 21-27: STOCK-SPECIFIC FEATURES (Phase 5 - 2025-11-27)
+        # =======================================================================
+        # These features are analogous to Fear & Greed for crypto.
+        # For crypto data, these columns won't exist → validity=False (default)
+        # This maintains 100% backward compatibility.
+
+        # [21] VIX normalized value (tanh transformation applied in stock_features.py)
+        # Range: approximately [-1, 1], centered at VIX=20
+        norm_cols_values[21], norm_cols_validity[21] = self._get_safe_float_with_validity(
+            row, "vix_normalized", 0.0, min_value=-3.0, max_value=3.0
+        )
+
+        # [22] VIX regime (0-1 scale: 0=low/complacency, 0.5=normal, 1=extreme fear)
+        norm_cols_values[22], norm_cols_validity[22] = self._get_safe_float_with_validity(
+            row, "vix_regime", 0.5, min_value=0.0, max_value=1.0
+        )
+
+        # [23] Market regime (-1=bear, 0=sideways, 1=bull)
+        # Based on SPY SMA crossover and VIX level
+        norm_cols_values[23], norm_cols_validity[23] = self._get_safe_float_with_validity(
+            row, "market_regime", 0.0, min_value=-1.0, max_value=1.0
+        )
+
+        # [24] Relative strength vs SPY (20-day)
+        # Normalized via tanh, approximately [-1, 1]
+        norm_cols_values[24], norm_cols_validity[24] = self._get_safe_float_with_validity(
+            row, "rs_spy_20d", 0.0, min_value=-3.0, max_value=3.0
+        )
+
+        # [25] Relative strength vs SPY (50-day)
+        norm_cols_values[25], norm_cols_validity[25] = self._get_safe_float_with_validity(
+            row, "rs_spy_50d", 0.0, min_value=-3.0, max_value=3.0
+        )
+
+        # [26] Relative strength vs QQQ (20-day)
+        norm_cols_values[26], norm_cols_validity[26] = self._get_safe_float_with_validity(
+            row, "rs_qqq_20d", 0.0, min_value=-3.0, max_value=3.0
+        )
+
+        # [27] Sector momentum relative to market
+        # Normalized via tanh, approximately [-1, 1]
+        norm_cols_values[27], norm_cols_validity[27] = self._get_safe_float_with_validity(
+            row, "sector_momentum", 0.0, min_value=-3.0, max_value=3.0
+        )
 
         # NOTE: Normalization (tanh, clip) is applied in obs_builder.pyx when available.
         # In legacy fallback mode (when obs_builder is not available), normalization
