@@ -1,51 +1,51 @@
 # TradingBot2
 
-**Высокочастотный торговый бот** для криптовалют (Binance spot/futures) с использованием **Reinforcement Learning (PPO)** для принятия торговых решений.
+**ML-бот для среднечастотной торговли** на криптовалютах и акциях с использованием **Reinforcement Learning (Distributional PPO)** для принятия торговых решений.
 
 ---
 
-## 🎯 Статус Проекта (2025-11-24)
+## 🎯 Статус Проекта (2025-11-27)
 
-**Версия**: 2.3
+**Версия**: 4.0 (Multi-Asset Support)
 **Статус**: ✅ **Production Ready**
-**Последнее обновление**: 2025-11-24
+**Последнее обновление**: 2025-11-27
+
+### Поддерживаемые рынки
+
+| Рынок | Адаптер | Статус |
+|-------|---------|--------|
+| **Crypto** (Binance Spot/Futures) | `adapters/binance/` | ✅ Production |
+| **US Equities** (Alpaca) | `adapters/alpaca/` | ✅ Production |
+| **US Equities Data** (Polygon) | `adapters/polygon/` | ✅ Production |
 
 ### ✅ Последние Критические Исправления
 
-- 🔴 **Twin Critics Loss Aggregation** (2025-11-24) - **FIXED** ✅
-  - 25% underestimation in mixed clipping cases corrected
-  - Loss aggregation now applies max() per-critic, then averages
-  - Test Coverage: 8/8 tests (100% pass rate)
-  - Models trained before 2025-11-24 → consider retraining for 25% improvement
+- 🔴 **VGS v3.2** (2025-11-27) - **FIXED** ✅
+  - `min_scaling_factor=0.1` и `variance_cap=50.0` предотвращают блокировку обучения
+  - Исправлена проблема EV≈0, Twin Critics loss +327%, grad norm -82%
 
-- 🔴 **Data Leakage in Features Pipeline** (2025-11-23) - **FIXED** ⚠️ **REQUIRES MODEL RETRAINING**
-  - **CRITICAL**: ALL technical indicators (RSI, MACD, BB, ATR, etc.) were NOT shifted
-  - Models had access to FUTURE information → inflated backtest results
-  - **ACTION REQUIRED**: ALL models trained before 2025-11-23 MUST be retrained
-  - See [DATA_LEAKAGE_MIGRATION_GUIDE.md](DATA_LEAKAGE_MIGRATION_GUIDE.md) for migration steps
-  - Test Coverage: 47 tests (46/47 passed, 98% pass rate)
+- 🔴 **Twin Critics Categorical VF Clipping** (2025-11-26) - **FIXED** ✅
+  - `_project_distribution` был identity stub → proper C51 projection
+  - Yang-Zhang RS denominator: used (n-1) instead of n → +11% inflation removed
 
-- 🔴 **Reward & Feature Normalization** (2025-11-23) - **2 BUGS FIXED** ✅
-  - Risk penalty normalization: now uses baseline capital (prevented reward explosion)
-  - Bollinger Bands clipping: symmetric [-1,1] instead of asymmetric [0,1]
+- 🔴 **UPGDW Min-Max Normalization** (2025-11-26) - **FIXED** ✅
+  - Negative utilities no longer invert weight protection
 
-- 🔴 **VGS v3.1** (2025-11-23) - **CRITICAL FIX** ✅
-  - E[g²] computation bug corrected (10,000x improvement for large parameters)
-  - Test Coverage: 7/7 tests (100% pass rate)
+- 🔴 **Signal Position in Observation** (2025-11-26) - **FIXED** ✅
+  - Temporal mismatch: market data t+1, position t → теперь оба t+1
 
-- 🔴 **SA-PPO** (2025-11-23) - **2 BUGS FIXED** ✅
-  - Epsilon schedule: hardcoded max_updates corrected
-  - KL divergence: Monte Carlo → analytical formula (10x faster, 100x more accurate)
-  - Test Coverage: 16/16 tests (100% pass rate)
+- 🔴 **LongOnlyActionWrapper** (2025-11-25) - **FIXED** ✅
+  - Минимальная позиция была 50% вместо 0% → policy теперь использует tanh
 
-- 🔴 **GAE Overflow Protection** (2025-11-23) - **FIXED** ✅
-  - Defensive clamping prevents float32 overflow with extreme rewards
-  - Test Coverage: 11/11 tests (100% pass rate)
+- 🔴 **Step Observation Timing** (2025-11-25) - **FIXED** ✅
+  - Obs из той же row что reset() → теперь Gymnasium-compliant
 
-- 🎯 **Twin Critics VF Clipping** (2025-11-22) - **VERIFIED CORRECT** ✅
-  - Comprehensive verification (49/50 tests, 98% pass rate)
+- 🔴 **Data Leakage** (2025-11-23) - **FIXED** ⚠️ **REQUIRES RETRAINING**
+  - ALL technical indicators were NOT shifted → look-ahead bias removed
 
-**Test Coverage**: **180+ новых тестов** для критических исправлений (98%+ проходят ✅)
+**⚠️ Переобучите модели**, если они обучены до 2025-11-26.
+
+**Test Coverage**: **215+ тестов** (97%+ pass rate)
 
 ---
 
@@ -131,8 +131,12 @@ python train_model_multi_patch.py --config configs/config_train.yaml
 # Обучение (PBT + Adversarial)
 python train_model_multi_patch.py --config configs/config_pbt_adversarial.yaml
 
-# Live trading
+# Live trading (Crypto)
 python script_live.py --config configs/config_live.yaml
+
+# Live trading (Stocks - Alpaca)
+python script_live.py --config configs/config_live_alpaca.yaml --paper
+python script_live.py --config configs/config_live_alpaca.yaml --extended-hours
 
 # Evaluation
 python script_eval.py --config configs/config_eval.yaml --all-profiles
@@ -140,6 +144,18 @@ python script_eval.py --config configs/config_eval.yaml --all-profiles
 # Тестирование
 pytest tests/                          # Все тесты
 pytest tests/test_critical*.py -v     # Критические тесты
+```
+
+### Stock Data Commands
+
+```bash
+# Скачать данные по акциям
+python scripts/download_stock_data.py \
+    --symbols AAPL MSFT GOOGL AMZN NVDA META TSLA SPY QQQ IWM GLD IAU SGOL SLV \
+    --start 2020-01-01 --timeframe 1h --resample 4h
+
+# Получить universe акций
+python scripts/fetch_alpaca_universe.py --popular
 ```
 
 ### Обновление Данных

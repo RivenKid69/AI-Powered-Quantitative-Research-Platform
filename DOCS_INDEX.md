@@ -4,20 +4,23 @@
 
 ---
 
-## 📊 Статус проекта (2025-11-25)
+## 📊 Статус проекта (2025-11-27)
 
 **Production Ready** - Все критические исправления применены и протестированы.
 
-| Компонент | Статус |
-|-----------|--------|
-| AdaptiveUPGD Optimizer | ✅ Production |
-| Twin Critics + VF Clipping | ✅ Production |
-| VGS v3.1 | ✅ Production |
-| PBT | ✅ Production |
-| SA-PPO | ✅ Production |
-| Data Leakage Prevention | ✅ Production |
+| Компонент | Статус | Версия |
+|-----------|--------|--------|
+| AdaptiveUPGD Optimizer | ✅ Production | — |
+| Twin Critics + VF Clipping | ✅ Production | — |
+| VGS | ✅ Production | v3.2 |
+| PBT | ✅ Production | — |
+| SA-PPO | ✅ Production | — |
+| Data Leakage Prevention | ✅ Production | — |
+| **Multi-Asset (Stocks)** | ✅ Production | Phase 3 |
+| **Execution Providers** | ✅ Production | Phase 4 (L2) |
+| **Live Trading Improvements** | ✅ Production | Phase 9 |
 
-**⚠️ Переобучите модели**, если они обучены до 2025-11-25.
+**⚠️ Переобучите модели**, если они обучены до 2025-11-26.
 
 ---
 
@@ -59,6 +62,20 @@
 | [docs/UPGD_INTEGRATION.md](docs/UPGD_INTEGRATION.md) | ⭐ UPGD optimizer integration |
 | [docs/twin_critics.md](docs/twin_critics.md) | ⭐ Twin critics architecture |
 
+### Multi-Asset Support (Phase 2-4, 9)
+
+| Файл | Описание |
+|------|----------|
+| [CLAUDE.md#multi-exchange-support](CLAUDE.md) | ⭐ Multi-exchange adapters (Binance, Alpaca, Polygon) |
+| [CLAUDE.md#stock-training-backtest](CLAUDE.md) | Stock training & backtest pipeline |
+| [CLAUDE.md#execution-providers](CLAUDE.md) | Execution providers (L2 simulation) |
+| [CLAUDE.md#live-trading-improvements](CLAUDE.md) | Live trading improvements (Phase 9) |
+
+**Supported Assets:**
+- **Crypto**: Binance Spot/Futures (24/7)
+- **Stocks**: Alpaca/Polygon US Equities (market hours + extended)
+- **ETFs**: SPY, QQQ, IWM, GLD, IAU, SGOL, SLV
+
 ### Seasonality Framework
 
 | Файл | Описание |
@@ -84,6 +101,7 @@
 
 ```
 docs/archive/
+├── reports_2025_11_27/           # Отчёты 27 ноября (EV analysis, Signal-Only)
 ├── reports_2025_11_25_cleanup/   # Основные архивированные отчёты
 │   ├── root_reports/             # Критические исправления
 │   ├── reports/
@@ -160,11 +178,13 @@ pytest tests/test_data_leakage*.py -v  # Data Leakage
 | Быстрый старт | [QUICK_START_REFERENCE.md](QUICK_START_REFERENCE.md) |
 | Twin Critics | [docs/twin_critics.md](docs/twin_critics.md) |
 | UPGD Optimizer | [docs/UPGD_INTEGRATION.md](docs/UPGD_INTEGRATION.md) |
+| Multi-Asset (Stocks) | [CLAUDE.md](CLAUDE.md) (см. Phase 2-4, 9) |
+| Live Trading | [CLAUDE.md](CLAUDE.md) (см. Phase 9) |
 | Seasonality | [docs/seasonality.md](docs/seasonality.md) |
 | Исторические отчёты | `docs/archive/` |
 
 ---
 
-**Last Updated**: 2025-11-25
+**Last Updated**: 2025-11-27
 **Status**: ✅ Production Ready
-**Version**: 3.0 (post-cleanup)
+**Version**: 4.0 (Multi-Asset Support + VGS v3.2)

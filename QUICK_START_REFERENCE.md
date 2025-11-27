@@ -2,9 +2,11 @@
 
 ## 1. ЧТО ЭТО ТАКОЕ?
 
-**TradingBot2** - это ML-бот для среднечастотной торговли на криптовалютах (Binance).
+**TradingBot2** - это ML-бот для среднечастотной торговли на криптовалютах и акциях.
+- **Криптовалюты**: Binance Spot/Futures (24/7)
+- **Акции**: Alpaca/Polygon US Equities (NYSE hours + extended)
+- **ETFs**: SPY, QQQ, IWM, GLD, IAU, SGOL, SLV
 - Язык: Python + Cython + C++
-- Объем: ~410 файлов, ~117K строк кода
 - Архитектура: Слойная (Core → Impl → Service → Scripts)
 
 ---
@@ -27,12 +29,27 @@ python script_backtest.py --config configs/config_sim.yaml
 📁 **Сервис**: `service_backtest.py`
 📁 **Симулятор**: `execution_sim.py`
 
-### ЛАЙВ-ТОРГОВЛЯ / ИНФОРЕНС
+### ЛАЙВ-ТОРГОВЛЯ / ИНФОРЕНС (CRYPTO)
 ```bash
 python script_live.py --config configs/config_live.yaml
 ```
 📁 **Главный файл**: `script_live.py`
 📁 **Сервис**: `service_signal_runner.py` (ГЛАВНЫЙ)
+
+### ЛАЙВ-ТОРГОВЛЯ / ИНФОРЕНС (STOCKS)
+```bash
+# Paper trading (Alpaca sandbox)
+python script_live.py --config configs/config_live_alpaca.yaml --paper
+
+# Live trading (real money)
+python script_live.py --config configs/config_live_alpaca.yaml --live
+
+# Extended hours trading
+python script_live.py --config configs/config_live_alpaca.yaml --extended-hours
+```
+📁 **Главный файл**: `script_live.py` (unified entry point)
+📁 **Position Sync**: `services/position_sync.py`
+📁 **Session Router**: `services/session_router.py`
 
 ### РАСЧЕТ МЕТРИК
 ```bash
@@ -41,12 +58,27 @@ python script_eval.py --config configs/config_eval.yaml
 📁 **Главный файл**: `script_eval.py`
 📁 **Метрики**: Sharpe, Sortino, MDD, CVaR, Hit-rate, PnL
 
-### ЗАГРУЗКА ДАННЫХ
+### ЗАГРУЗКА ДАННЫХ (CRYPTO)
 ```bash
 python ingest_orchestrator.py --symbols BTCUSDT,ETHUSDT --interval 1m
 ```
 📁 **Главный файл**: `ingest_orchestrator.py`
 📁 **Источники**: `binance_public.py`, `binance_ws.py`
+
+### ЗАГРУЗКА ДАННЫХ (STOCKS)
+```bash
+# Скачать все поддерживаемые символы
+python scripts/download_stock_data.py \
+    --symbols AAPL MSFT GOOGL AMZN NVDA META TSLA SPY QQQ IWM GLD IAU SGOL SLV \
+    --start 2020-01-01 --timeframe 1h --resample 4h
+
+# Только precious metals
+python scripts/download_stock_data.py \
+    --symbols GLD IAU SGOL SLV \
+    --start 2020-01-01 --timeframe 1h --resample 4h
+```
+📁 **Главный файл**: `scripts/download_stock_data.py`
+📁 **Данные сохраняются в**: `data/raw_stocks/*.parquet`
 
 ### ПОЛНЫЙ ЦИКЛ
 ```bash
@@ -408,7 +440,8 @@ python script_live.py --config configs/config_live.yaml
 
 ---
 
-**Дата**: 2025-11-11
-**Статус**: Активно разрабатывается
+**Дата**: 2025-11-27
+**Статус**: ✅ Production Ready (Multi-Asset Support)
 **Основной язык**: Python + Cython + C++
+**Поддерживаемые рынки**: Crypto (Binance), US Equities (Alpaca/Polygon)
 

@@ -1,6 +1,16 @@
 # Архитектура проекта
 
+> **Last Updated**: 2025-11-27 | **Version**: 4.0 (Multi-Asset Support)
+
 В репозитории используется слойная структура. Имена файлов и модулей начинаются с префиксов, отражающих их принадлежность к слою.
+
+## Поддерживаемые рынки
+
+| Рынок | Адаптер | Статус |
+|-------|---------|--------|
+| Crypto (Binance Spot/Futures) | `adapters/binance/` | ✅ Production |
+| US Equities (Alpaca) | `adapters/alpaca/` | ✅ Production |
+| US Equities Data (Polygon) | `adapters/polygon/` | ✅ Production |
 
 ## Слои
 
@@ -298,4 +308,59 @@ python check_feature_parity.py --data path/to/prices.csv --threshold 1e-6
 ```
 
 Скрипт вычисляет признаки обоими способами и сообщает о строках, где абсолютное различие превышает `--threshold`. При отсутствии расхождений выводится подтверждение паритета.
+
+## Multi-Asset Adapters
+
+Проект поддерживает торговлю на нескольких рынках через унифицированную систему адаптеров.
+
+### Структура адаптеров
+
+```
+adapters/
+├── base.py               # Абстрактные базовые классы
+├── models.py             # Exchange-agnostic модели данных
+├── registry.py           # Фабрика + регистрация адаптеров
+├── config.py             # Pydantic конфигурация
+├── websocket_base.py     # Production-grade async WebSocket
+├── binance/              # Binance (crypto)
+│   ├── market_data.py
+│   ├── fees.py
+│   ├── trading_hours.py
+│   └── exchange_info.py
+├── alpaca/               # Alpaca (stocks)
+│   ├── market_data.py
+│   ├── fees.py
+│   ├── trading_hours.py
+│   ├── exchange_info.py
+│   └── order_execution.py
+└── polygon/              # Polygon.io (stocks data)
+    ├── market_data.py
+    ├── trading_hours.py
+    └── exchange_info.py
+```
+
+### Execution Providers (L2)
+
+Симуляция исполнения унифицирована через `execution_providers.py`:
+
+| Level | Модель | Описание |
+|-------|--------|----------|
+| L1 | Constant | Фиксированный spread/fee (placeholder) |
+| **L2** | Statistical | √participation impact (Almgren-Chriss) |
+| L3 | LOB | Full order book simulation (planned) |
+
+### Live Trading (Phase 9)
+
+Unified entry point: `script_live.py`
+
+```bash
+# Crypto (Binance)
+python script_live.py --config configs/config_live.yaml
+
+# Stocks (Alpaca)
+python script_live.py --config configs/config_live_alpaca.yaml --paper
+python script_live.py --config configs/config_live_alpaca.yaml --extended-hours
+```
+
+Подробная документация: см. [CLAUDE.md](CLAUDE.md) (Phase 2-4, 9).
 
