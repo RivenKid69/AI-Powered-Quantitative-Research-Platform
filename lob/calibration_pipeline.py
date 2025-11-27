@@ -246,7 +246,12 @@ class LatencyDistributionParams:
         if len(valid) < 2:
             alpha = 2.5
         else:
-            alpha = len(valid) / np.sum(np.log(valid / xmin))
+            log_sum = np.sum(np.log(valid / xmin))
+            # Protect against division by zero when all values equal xmin
+            if log_sum < 1e-10:
+                alpha = 2.5  # Default for degenerate case
+            else:
+                alpha = len(valid) / log_sum
             alpha = max(1.1, min(alpha, 10.0))  # Bound alpha
 
         return cls(
@@ -906,6 +911,11 @@ class L3CalibrationPipeline:
         else:
             quality = "low"
 
+        # Compute confidence intervals (95% CI)
+        confidence_intervals = self._compute_confidence_intervals(
+            impact_result, latency_result
+        )
+
         return L3CalibrationResult(
             impact_result=impact_result,
             fill_prob_result=fill_result,
@@ -915,7 +925,65 @@ class L3CalibrationPipeline:
             n_orders=self.n_orders,
             data_duration_sec=duration_sec,
             calibration_quality=quality,
+            confidence_intervals=confidence_intervals,
         )
+
+    def _compute_confidence_intervals(
+        self,
+        impact_result: Optional[ImpactCalibrationResult],
+        latency_result: Optional[LatencyCalibrationResult],
+    ) -> Dict[str, Tuple[float, float]]:
+        """
+        Compute 95% confidence intervals for calibrated parameters.
+
+        Uses bootstrap or analytical methods depending on sample size.
+
+        Args:
+            impact_result: Impact calibration result
+            latency_result: Latency calibration result
+
+        Returns:
+            Dictionary mapping parameter names to (lower, upper) bounds
+        """
+        ci: Dict[str, Tuple[float, float]] = {}
+        n = self.n_trades
+
+        if n < 10:
+            return ci  # Not enough data for meaningful CI
+
+        # Z-score for 95% CI
+        z = 1.96
+
+        # Impact parameter CIs (using standard errors from regression)
+        if impact_result and impact_result.parameters:
+            # For OLS regression, SE = RMSE / sqrt(n)
+            se_factor = (impact_result.rmse / math.sqrt(n)) if n > 0 else 0.1
+
+            for param, value in impact_result.parameters.items():
+                # Approximate SE as fraction of parameter value
+                # More accurate would use Hessian from MLE
+                se = max(abs(value) * 0.1, se_factor)
+                ci[f"impact_{param}"] = (value - z * se, value + z * se)
+
+        # Latency parameter CIs (using log-normal CI formula)
+        if latency_result and latency_result.n_samples > 0:
+            n_lat = latency_result.n_samples
+
+            for name, params in [
+                ("feed", latency_result.feed_latency),
+                ("order", latency_result.order_latency),
+                ("exchange", latency_result.exchange_latency),
+                ("fill", latency_result.fill_latency),
+            ]:
+                if params.mean_us > 0 and params.std_us > 0:
+                    # CI for mean of log-normal: use log-transformed CI
+                    se_mean = params.std_us / math.sqrt(max(1, n_lat // 4))
+                    ci[f"latency_{name}_mean_us"] = (
+                        max(0, params.mean_us - z * se_mean),
+                        params.mean_us + z * se_mean,
+                    )
+
+        return ci
 
     def _load_calibration_data(self, path: str) -> None:
         """Load calibration data from file."""

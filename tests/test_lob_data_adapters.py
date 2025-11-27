@@ -613,5 +613,84 @@ invalid_line
         assert len(snapshot.asks) == 0
 
 
+# ==============================================================================
+# Test Bug Fixes (Stage 8 Review)
+# ==============================================================================
+
+
+class TestBugFixes:
+    """Tests for bug fixes from Stage 8 code review."""
+
+    def test_build_orderbook_with_initial_snapshot(
+        self, lobster_message_file: Path, lobster_orderbook_file: Path
+    ) -> None:
+        """Test build_orderbook_from_messages with orderbook_path (Bug #1 fix)."""
+        adapter = LOBSTERAdapter(
+            symbol="TEST",
+            config={"price_multiplier": 0.0001},
+        )
+
+        # This should work now after the fix (was using bid_levels instead of bids)
+        book = adapter.build_orderbook_from_messages(
+            message_path=lobster_message_file,
+            orderbook_path=lobster_orderbook_file,
+        )
+
+        assert isinstance(book, OrderBook)
+        # Should have orders from both initial snapshot and messages
+        assert book.best_bid is not None or book.best_ask is not None
+
+    def test_load_orderbook_from_file_binance(
+        self, tmp_path: Path, binance_depth_data: Dict[str, Any]
+    ) -> None:
+        """Test load_orderbook_from_file with Binance data (Bug #1 fix)."""
+        # Create depth file
+        file_path = tmp_path / "depth.json"
+        file_path.write_text(json.dumps(binance_depth_data))
+
+        # This should work now after the fix (was using bid_levels/ask_levels)
+        book = load_orderbook_from_file(str(file_path), source_type="binance", symbol="TEST")
+
+        assert isinstance(book, OrderBook)
+        assert book.best_bid is not None
+        assert book.best_ask is not None
+        # Verify bids and asks are loaded
+        assert book.best_bid == pytest.approx(100.00, rel=0.01)
+        assert book.best_ask == pytest.approx(100.05, rel=0.01)
+
+    def test_depth_level_is_dataclass_not_dict(self) -> None:
+        """Verify DepthLevel is a dataclass and accessed via attributes."""
+        level = DepthLevel(price=100.0, qty=50.0, order_count=3)
+
+        # Access via attributes, not dict keys
+        assert level.price == 100.0
+        assert level.qty == 50.0
+        assert level.order_count == 3
+
+        # Verify it's NOT a dict
+        assert not isinstance(level, dict)
+        with pytest.raises(TypeError):
+            _ = level["price"]  # type: ignore
+
+    def test_depth_snapshot_has_bids_asks_not_levels(self) -> None:
+        """Verify DepthSnapshot uses 'bids'/'asks' not 'bid_levels'/'ask_levels'."""
+        snapshot = DepthSnapshot(
+            timestamp_ns=1000000000,
+            symbol="TEST",
+            bids=[DepthLevel(100.0, 50.0)],
+            asks=[DepthLevel(101.0, 40.0)],
+        )
+
+        # Has bids/asks
+        assert hasattr(snapshot, "bids")
+        assert hasattr(snapshot, "asks")
+        assert len(snapshot.bids) == 1
+        assert len(snapshot.asks) == 1
+
+        # Does NOT have bid_levels/ask_levels
+        assert not hasattr(snapshot, "bid_levels")
+        assert not hasattr(snapshot, "ask_levels")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

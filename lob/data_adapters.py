@@ -483,22 +483,22 @@ class LOBSTERAdapter(BaseLOBAdapter):
         if orderbook_path:
             snapshot = self.parse_orderbook_file(orderbook_path)
             # Reconstruct book from snapshot
-            for level in snapshot.bid_levels:
+            for level in snapshot.bids:
                 order = LimitOrder(
-                    order_id=f"init_bid_{level['price']}",
-                    price=level["price"],
-                    qty=level["qty"],
-                    remaining_qty=level["qty"],
+                    order_id=f"init_bid_{level.price}",
+                    price=level.price,
+                    qty=level.qty,
+                    remaining_qty=level.qty,
                     timestamp_ns=snapshot.timestamp_ns,
                     side=Side.BUY,
                 )
                 book.add_limit_order(order)
-            for level in snapshot.ask_levels:
+            for level in snapshot.asks:
                 order = LimitOrder(
-                    order_id=f"init_ask_{level['price']}",
-                    price=level["price"],
-                    qty=level["qty"],
-                    remaining_qty=level["qty"],
+                    order_id=f"init_ask_{level.price}",
+                    price=level.price,
+                    qty=level.qty,
+                    remaining_qty=level.qty,
                     timestamp_ns=snapshot.timestamp_ns,
                     side=Side.SELL,
                 )
@@ -1191,22 +1191,22 @@ def load_orderbook_from_file(
         snapshot = adapter.load_snapshot(path)
         # Convert snapshot to OrderBook
         book = OrderBook()
-        for level in snapshot.bid_levels:
+        for level in snapshot.bids:
             order = LimitOrder(
-                order_id=f"bid_{level['price']}",
-                price=level["price"],
-                qty=level["qty"],
-                remaining_qty=level["qty"],
+                order_id=f"bid_{level.price}",
+                price=level.price,
+                qty=level.qty,
+                remaining_qty=level.qty,
                 timestamp_ns=snapshot.timestamp_ns,
                 side=Side.BUY,
             )
             book.add_limit_order(order)
-        for level in snapshot.ask_levels:
+        for level in snapshot.asks:
             order = LimitOrder(
-                order_id=f"ask_{level['price']}",
-                price=level["price"],
-                qty=level["qty"],
-                remaining_qty=level["qty"],
+                order_id=f"ask_{level.price}",
+                price=level.price,
+                qty=level.qty,
+                remaining_qty=level.qty,
                 timestamp_ns=snapshot.timestamp_ns,
                 side=Side.SELL,
             )

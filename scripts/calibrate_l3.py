@@ -301,6 +301,79 @@ def load_trades_json(
     return trades
 
 
+def load_orders_file(
+    path: str,
+    price_col: str = "price",
+    qty_col: str = "qty",
+    side_col: str = "side",
+    timestamp_col: str = "timestamp",
+    max_records: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Load orders from file (CSV, Parquet, or JSON).
+
+    Auto-detects format based on file extension.
+    """
+    path_lower = path.lower()
+
+    if path_lower.endswith(".json"):
+        with open(path, "r") as f:
+            data = json.load(f)
+        orders = data.get("orders", data) if isinstance(data, dict) else data
+        if max_records:
+            orders = orders[:max_records]
+        return orders
+
+    elif path_lower.endswith(".parquet"):
+        try:
+            import pandas as pd
+
+            df = pd.read_parquet(path)
+            if max_records:
+                df = df.head(max_records)
+
+            orders = []
+            for _, row in df.iterrows():
+                order = {
+                    "timestamp_ns": int(row.get(timestamp_col, 0)) * 1_000_000,
+                    "price": float(row.get(price_col, 0)),
+                    "qty": float(row.get(qty_col, 0)),
+                    "side": int(row.get(side_col, 1)),
+                    "event_type": str(row.get("event_type", "ADD")),
+                    "fill_qty": float(row.get("fill_qty", 0)),
+                }
+                orders.append(order)
+            return orders
+
+        except ImportError:
+            logger.error("pandas required for Parquet: pip install pandas pyarrow")
+            return []
+
+    else:  # CSV
+        import csv
+
+        orders = []
+        with open(path, "r") as f:
+            reader = csv.DictReader(f)
+            for i, row in enumerate(reader):
+                if max_records and i >= max_records:
+                    break
+                try:
+                    order = {
+                        "timestamp_ns": int(float(row.get(timestamp_col, 0))) * 1_000_000,
+                        "price": float(row.get(price_col, 0)),
+                        "qty": float(row.get(qty_col, 0)),
+                        "side": int(row.get(side_col, 1)),
+                        "event_type": str(row.get("event_type", "ADD")),
+                        "fill_qty": float(row.get("fill_qty", 0)),
+                    }
+                    orders.append(order)
+                except (ValueError, KeyError) as e:
+                    logger.warning(f"Skipping invalid order row {i}: {e}")
+
+        return orders
+
+
 def save_config_yaml(config: L3ExecutionConfig, path: str) -> None:
     """Save L3ExecutionConfig to YAML file."""
     import yaml
@@ -495,8 +568,27 @@ def main() -> int:
     # Load additional orders if provided
     if args.orders:
         logger.info(f"Loading orders from {args.orders}")
-        # Load orders (similar to trades)
-        # ...
+        try:
+            orders = load_orders_file(
+                args.orders,
+                price_col=args.price_col,
+                qty_col=args.qty_col,
+                side_col=args.side_col,
+                timestamp_col=args.timestamp_col,
+                max_records=args.max_records,
+            )
+            for order in orders:
+                pipeline.add_order(
+                    timestamp_ns=order.get("timestamp_ns", order.get("timestamp_ms", 0) * 1_000_000),
+                    price=order.get("price", 0.0),
+                    qty=order.get("qty", 0.0),
+                    side=Side.BUY if order.get("side", 1) > 0 else Side.SELL,
+                    event_type=order.get("event_type", "ADD"),
+                    fill_qty=order.get("fill_qty", 0.0),
+                )
+            logger.info(f"Loaded {len(orders)} orders")
+        except Exception as e:
+            logger.warning(f"Failed to load orders: {e}")
 
     # Load latencies if provided
     if args.latencies:

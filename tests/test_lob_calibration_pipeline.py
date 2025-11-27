@@ -770,5 +770,130 @@ class TestQualityAssessment:
         assert result.calibration_quality == "high"
 
 
+# ==============================================================================
+# Test Bug Fixes (Stage 8 Review)
+# ==============================================================================
+
+
+class TestBugFixes:
+    """Tests for bug fixes from Stage 8 code review."""
+
+    def test_pareto_mle_all_same_values(self) -> None:
+        """Test Pareto MLE edge case: all values equal xmin (Bug #2 fix)."""
+        import warnings
+
+        # This should NOT raise RuntimeWarning anymore
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # Turn warnings into errors
+
+            samples = [100.0] * 100  # All same value
+            params = LatencyDistributionParams.fit_pareto(samples)
+
+            # Should return default alpha, not inf or error
+            assert params.pareto_alpha == 2.5
+            assert params.pareto_xmin_us == 100.0
+
+    def test_pareto_mle_near_equal_values(self) -> None:
+        """Test Pareto MLE with nearly equal values."""
+        # Values very close to xmin
+        samples = [100.0 + 1e-12 * i for i in range(100)]
+        params = LatencyDistributionParams.fit_pareto(samples)
+
+        # Should handle gracefully
+        assert 1.1 <= params.pareto_alpha <= 10.0
+        assert params.pareto_xmin_us > 0
+
+    def test_pareto_mle_heavy_tail(self) -> None:
+        """Test Pareto MLE with proper heavy-tail data."""
+        import random
+
+        random.seed(42)
+        # Generate Pareto-distributed data
+        samples = [random.paretovariate(2.5) * 100 for _ in range(500)]
+
+        params = LatencyDistributionParams.fit_pareto(samples)
+
+        # Alpha should be estimated around 2.5
+        assert 1.5 < params.pareto_alpha < 4.0
+        assert params.distribution == LatencyDistributionType.PARETO
+
+    def test_confidence_intervals_computed(
+        self, sample_trades: List[Dict], sample_latencies: List[Dict]
+    ) -> None:
+        """Test that confidence intervals are computed (Missing Feature fix)."""
+        pipeline = L3CalibrationPipeline()
+        pipeline.set_market_params(avg_adv=10_000_000, avg_volatility=0.02)
+
+        # Add enough data for CI computation
+        for trade in sample_trades:
+            pipeline.add_trade(**trade)
+
+        for lat in sample_latencies:
+            pipeline.add_latency_observation(
+                timestamp_ns=lat["timestamp_ns"],
+                latency_type=lat["type"],
+                latency_us=lat["latency_us"],
+            )
+
+        result = pipeline.get_calibration_result()
+
+        # Confidence intervals should now be populated
+        assert result.confidence_intervals is not None
+        assert len(result.confidence_intervals) > 0
+
+        # Should have impact parameter CIs
+        impact_ci_keys = [k for k in result.confidence_intervals if k.startswith("impact_")]
+        assert len(impact_ci_keys) > 0
+
+        # Each CI should be a tuple of (lower, upper)
+        for key, ci in result.confidence_intervals.items():
+            assert isinstance(ci, tuple)
+            assert len(ci) == 2
+            lower, upper = ci
+            assert lower <= upper
+
+    def test_confidence_intervals_empty_with_few_samples(self) -> None:
+        """Test that CI is empty with insufficient data."""
+        pipeline = L3CalibrationPipeline()
+
+        # Add very few trades (less than 10)
+        for i in range(5):
+            pipeline.add_trade(
+                timestamp_ms=1000 + i * 1000,
+                price=100.0,
+                qty=100.0,
+                side=1,
+            )
+
+        result = pipeline.get_calibration_result()
+
+        # Should be empty with few samples
+        assert len(result.confidence_intervals) == 0
+
+    def test_confidence_intervals_have_impact_params(self) -> None:
+        """Test CI includes impact parameter intervals."""
+        pipeline = L3CalibrationPipeline()
+        pipeline.set_market_params(avg_adv=10_000_000, avg_volatility=0.02)
+
+        # Add enough data
+        for i in range(200):
+            pre_mid = 100.0 + i * 0.01
+            post_mid = pre_mid + 0.01 * (1 if i % 2 == 0 else -1)
+            pipeline.add_trade(
+                timestamp_ms=1000 + i * 1000,
+                price=100.0 + i * 0.01,
+                qty=100.0,
+                side=1 if i % 2 == 0 else -1,
+                pre_trade_mid=pre_mid,
+                post_trade_mid=post_mid,
+            )
+
+        result = pipeline.get_calibration_result()
+
+        # Should have impact_eta and impact_gamma CIs
+        ci = result.confidence_intervals
+        assert any("impact_eta" in k for k in ci.keys()) or any("impact_gamma" in k for k in ci.keys())
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
