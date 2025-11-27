@@ -564,11 +564,22 @@ class L3ExecutionConfig(BaseModel):
 
         Returns:
             L3ExecutionConfig instance
+
+        Raises:
+            FileNotFoundError: If the config file does not exist
+            ImportError: If PyYAML is not installed
         """
         if not HAS_YAML:
             raise ImportError("PyYAML is required for YAML loading. Install with: pip install pyyaml")
 
-        with open(path, "r") as f:
+        # Validate path exists before opening
+        config_path = Path(path)
+        if not config_path.exists():
+            raise FileNotFoundError(f"L3 config file not found: {path}")
+        if not config_path.is_file():
+            raise ValueError(f"L3 config path is not a file: {path}")
+
+        with open(config_path, "r") as f:
             data = yaml.safe_load(f)
 
         # Handle nested 'l3_simulation' or 'execution' key

@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import logging
 import math
+import random
 import time
 from dataclasses import dataclass, field
 from typing import (
@@ -401,6 +402,7 @@ class L3FillProvider:
         fee_provider: Optional[FeeProvider] = None,
         config: Optional[L3ExecutionConfig] = None,
         asset_class: AssetClass = AssetClass.EQUITY,
+        seed: Optional[int] = None,
         **kwargs: Any,
     ) -> None:
         """
@@ -411,10 +413,14 @@ class L3FillProvider:
             fee_provider: Fee provider (default: asset-class specific)
             config: L3 execution configuration
             asset_class: Asset class for defaults
+            seed: Random seed for reproducible backtests (None = non-deterministic)
             **kwargs: Additional configuration
         """
         self._asset_class = asset_class
         self._config = config or L3ExecutionConfig.for_equity()
+
+        # Seedable RNG for reproducible backtests
+        self._rng = random.Random(seed) if seed is not None else random.Random()
 
         # Initialize providers
         if slippage_provider is not None:
@@ -802,9 +808,8 @@ class L3FillProvider:
                 market_state=lob_state,
             )
 
-            # Stochastic fill based on probability
-            import random
-            if random.random() > prob_result.prob_fill:
+            # Stochastic fill based on probability (uses seedable RNG)
+            if self._rng.random() > prob_result.prob_fill:
                 # Did not fill this bar
                 return None
 
@@ -1005,6 +1010,9 @@ class L3ExecutionProvider:
             "dark_pool_fills": 0,
         }
 
+        # Counter for unique dark pool order IDs
+        self._dark_pool_order_counter = 0
+
     @property
     def asset_class(self) -> AssetClass:
         """Asset class this provider handles."""
@@ -1079,10 +1087,11 @@ class L3ExecutionProvider:
         adv = market.adv or _DEFAULT_ADV
         volatility = market.volatility or _DEFAULT_VOLATILITY
 
-        # Convert to LOB order for dark pool
+        # Convert to LOB order for dark pool (unique order_id)
         timestamp_ns = (market.timestamp or int(time.time() * 1000)) * 1_000_000
+        self._dark_pool_order_counter += 1
         lob_order = LimitOrder(
-            order_id=f"dark_{timestamp_ns}",
+            order_id=f"dark_{timestamp_ns}_{self._dark_pool_order_counter}",
             price=order.limit_price or mid,
             qty=order.qty,
             remaining_qty=order.qty,
