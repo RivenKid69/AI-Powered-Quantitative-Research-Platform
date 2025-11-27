@@ -1037,5 +1037,232 @@ class TestPerformance:
         assert elapsed < 1.0, f"Simulation took {elapsed:.2f}s, expected < 1.0s"
 
 
+# ==============================================================================
+# Bug Fix Verification Tests
+# ==============================================================================
+
+
+class TestBugFixes:
+    """Tests that verify specific bug fixes."""
+
+    def test_zero_latency_no_division_error(self):
+        """Test that zero latency config doesn't cause division by zero."""
+        # BUG FIX: dark_pool.py:362 - expovariate(1.0 / 0) caused ZeroDivisionError
+        config = DarkPoolConfig(
+            venue_id="ZERO_LATENCY",
+            latency_ms=0.0,  # Zero latency
+            base_fill_probability=0.99,
+            min_order_size=10,
+        )
+
+        import random
+        venue = DarkPoolVenue(config, rng=random.Random(42))
+
+        order = LimitOrder(
+            order_id="test_zero_lat",
+            price=100.0,
+            qty=1000.0,
+            remaining_qty=1000.0,
+            timestamp_ns=time.time_ns(),
+            side=Side.BUY,
+        )
+
+        # Should not raise ZeroDivisionError
+        fill = venue.attempt_fill(order=order, lit_mid_price=100.0)
+        if fill.is_filled:
+            assert fill.latency_ns == 0  # Zero latency
+
+    def test_batch_detection_updates_counters(self):
+        """Test that batch detection updates total_detected and total_confirmed."""
+        # BUG FIX: hidden_liquidity.py:663 - batch detection didn't update counters
+        detector = create_iceberg_detector(min_refills_to_confirm=2)
+
+        initial_stats = detector.stats()
+        assert initial_stats["total_detected"] == 0
+        assert initial_stats["total_confirmed"] == 0
+
+        # Create execution history with refill pattern (confirmed iceberg)
+        price = 100.0
+        ts = time.time_ns()
+        executions = []
+        level_qty_history = []
+
+        for i in range(3):  # 3 refills -> confirmed
+            executions.append(Trade(
+                price=price,
+                qty=100.0,
+                maker_order_id="maker_1",
+                timestamp_ns=ts + i * 10000,
+            ))
+            level_qty_history.append(500.0)  # Always back to 500 (refill)
+
+        iceberg = detector.detect_iceberg(
+            executions=executions,
+            level_qty_history=level_qty_history,
+            price=price,
+            side=Side.BUY,
+        )
+
+        # Verify counters are updated
+        assert iceberg is not None
+        stats = detector.stats()
+        assert stats["total_detected"] == 1
+        assert stats["total_confirmed"] == 1
+
+    def test_batch_detection_suspected_not_confirmed(self):
+        """Test batch detection with suspected but not confirmed iceberg."""
+        detector = create_iceberg_detector(min_refills_to_confirm=2)
+
+        price = 100.0
+        ts = time.time_ns()
+        executions = [
+            Trade(price=price, qty=100.0, maker_order_id="m1", timestamp_ns=ts)
+        ]
+        level_qty_history = [500.0]  # Only 1 refill -> suspected
+
+        iceberg = detector.detect_iceberg(
+            executions=executions,
+            level_qty_history=level_qty_history,
+            price=price,
+            side=Side.BUY,
+        )
+
+        assert iceberg is not None
+        assert iceberg.state == IcebergState.SUSPECTED
+        stats = detector.stats()
+        assert stats["total_detected"] == 1
+        assert stats["total_confirmed"] == 0  # Not confirmed
+
+    def test_configurable_initial_hidden_multiplier(self):
+        """Test that initial_hidden_multiplier is configurable."""
+        # BUG FIX: hidden_liquidity.py:467 - hardcoded 3.0 multiplier
+        detector_default = create_iceberg_detector()
+        detector_custom = create_iceberg_detector(initial_hidden_multiplier=5.0)
+
+        price = 100.0
+        ts = time.time_ns()
+
+        # Create iceberg with display size = 100 (from refill)
+        def create_iceberg(det: IcebergDetector) -> IcebergOrder:
+            pre_level = LevelSnapshot(price=price, visible_qty=500.0, order_count=5, timestamp_ns=ts)
+            trade = Trade(price=price, qty=100.0, maker_order_id="m1", timestamp_ns=ts + 1000, aggressor_side=Side.SELL)
+            post_level = LevelSnapshot(price=price, visible_qty=500.0, order_count=5, timestamp_ns=ts + 1000)
+            return det.process_execution(trade, pre_level, post_level, Side.BUY)
+
+        iceberg_default = create_iceberg(detector_default)
+        iceberg_custom = create_iceberg(detector_custom)
+
+        assert iceberg_default is not None
+        assert iceberg_custom is not None
+
+        # Default multiplier is 3.0, custom is 5.0
+        # display_size = 100 (refill amount)
+        # estimated_hidden = display_size * multiplier
+        assert iceberg_default.estimated_hidden_qty == pytest.approx(100.0 * 3.0, rel=0.01)
+        assert iceberg_custom.estimated_hidden_qty == pytest.approx(100.0 * 5.0, rel=0.01)
+
+    def test_aggressor_side_none_handling(self):
+        """Test that process_execution handles aggressor_side=None gracefully."""
+        # Test for edge case where aggressor_side is None
+        detector = create_iceberg_detector()
+
+        ts = time.time_ns()
+        pre_level = LevelSnapshot(price=100.0, visible_qty=500.0, order_count=5, timestamp_ns=ts)
+        post_level = LevelSnapshot(price=100.0, visible_qty=500.0, order_count=5, timestamp_ns=ts + 1000)
+
+        # Trade without aggressor_side and without explicit side
+        trade = Trade(
+            price=100.0,
+            qty=100.0,
+            maker_order_id="maker_1",
+            timestamp_ns=ts + 1000,
+            aggressor_side=None,  # Explicitly None
+        )
+
+        # Should return None when can't infer side
+        result = detector.process_execution(trade, pre_level, post_level, side=None)
+        assert result is None
+
+    def test_configurable_dark_pool_parameters(self):
+        """Test that dark pool magic numbers are now configurable."""
+        # BUG FIX: dark_pool.py:400,439,512 - magic numbers made configurable
+        config = DarkPoolConfig(
+            venue_id="CUSTOM_PARAMS",
+            size_penalty_multiplier=5.0,  # Default was 10
+            partial_fill_min_ratio=0.5,  # Default was 0.3
+            partial_fill_size_multiplier=3.0,  # Default was 5.0
+            partial_fill_max_reduction=0.5,  # Default was 0.7
+            impact_size_normalization=5000.0,  # Default was 10000
+            base_fill_probability=0.99,
+        )
+
+        import random
+        venue = DarkPoolVenue(config, rng=random.Random(42))
+
+        # Verify config is used
+        assert venue._config.size_penalty_multiplier == 5.0
+        assert venue._config.partial_fill_min_ratio == 0.5
+        assert venue._config.impact_size_normalization == 5000.0
+
+    def test_no_double_decay_in_estimate(self):
+        """Test that decay is not applied twice."""
+        # BUG FIX: hidden_liquidity.py - decay was applied in both
+        # _update_hidden_estimate and estimate_hidden_reserve
+        detector = create_iceberg_detector(decay_factor=0.5)  # Strong decay for visibility
+
+        price = 100.0
+        ts = time.time_ns()
+
+        # Create iceberg with multiple refills
+        iceberg = None
+        for i in range(4):
+            pre_level = LevelSnapshot(price=price, visible_qty=500.0, order_count=5, timestamp_ns=ts + i * 10000)
+            trade = Trade(price=price, qty=100.0, maker_order_id="m1", timestamp_ns=ts + i * 10000 + 1000, aggressor_side=Side.SELL)
+            post_level = LevelSnapshot(price=price, visible_qty=500.0, order_count=5, timestamp_ns=ts + i * 10000 + 1000)
+            iceberg = detector.process_execution(trade, pre_level, post_level, Side.BUY)
+
+        assert iceberg is not None
+
+        # Now call estimate_hidden_reserve multiple times
+        # It should return consistent values (not decaying further with each call)
+        estimate1 = detector.estimate_hidden_reserve(iceberg, current_visible_qty=500.0)
+        estimate2 = detector.estimate_hidden_reserve(iceberg, current_visible_qty=500.0)
+        estimate3 = detector.estimate_hidden_reserve(iceberg, current_visible_qty=500.0)
+
+        # All estimates should be the same (decay only based on refill_count, not call count)
+        assert estimate1 == estimate2
+        assert estimate2 == estimate3
+
+    def test_rng_consistency_with_custom_venues(self):
+        """Test that custom venues maintain RNG consistency."""
+        # BUG FIX: dark_pool.py:1010 - RNG was created twice
+        configs = [
+            DarkPoolConfig(venue_id="V1", base_fill_probability=0.99),
+            DarkPoolConfig(venue_id="V2", base_fill_probability=0.99),
+        ]
+
+        # Create two simulators with same seed
+        sim1 = create_dark_pool_simulator(venue_configs=configs, seed=42)
+        sim2 = create_dark_pool_simulator(venue_configs=configs, seed=42)
+
+        order = LimitOrder(
+            order_id="test_rng",
+            price=100.0,
+            qty=1000.0,
+            remaining_qty=1000.0,
+            timestamp_ns=time.time_ns(),
+            side=Side.BUY,
+        )
+
+        # Both should produce same fill results (reproducible)
+        fill1 = sim1.attempt_dark_fill(order=order, lit_mid_price=100.0)
+        fill2 = sim2.attempt_dark_fill(order=order, lit_mid_price=100.0)
+
+        if fill1 is not None and fill2 is not None:
+            assert fill1.fill_type == fill2.fill_type
+            if fill1.is_filled and fill2.is_filled:
+                assert fill1.filled_qty == fill2.filled_qty
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

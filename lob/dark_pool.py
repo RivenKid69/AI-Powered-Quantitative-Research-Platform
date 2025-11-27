@@ -107,10 +107,16 @@ class DarkPoolConfig:
         max_order_size: Maximum order size (0 = unlimited)
         base_fill_probability: Base probability of fill (0-1)
         size_penalty_factor: How much larger orders reduce fill probability
+        size_penalty_multiplier: Multiplier for size_ratio in penalty calc (default 10)
+            Formula: penalty = 1.0 - min(1.0, size_ratio * size_penalty_factor * size_penalty_multiplier)
         time_of_day_factor: Whether to apply time-of-day adjustments
         info_leakage_probability: Probability of information leakage per attempt
         typical_adv_fraction: Typical volume as fraction of ADV
         latency_ms: Average latency in milliseconds
+        partial_fill_min_ratio: Minimum fill ratio for partial fills (default 0.3)
+        partial_fill_size_multiplier: Size impact on partial fill ratio (default 5.0)
+        partial_fill_max_reduction: Max reduction from size impact (default 0.7)
+        impact_size_normalization: Shares for normalizing impact calculation (default 10000)
     """
 
     venue_id: str
@@ -119,10 +125,17 @@ class DarkPoolConfig:
     max_order_size: float = 0.0  # 0 = unlimited
     base_fill_probability: float = 0.30
     size_penalty_factor: float = 0.5
+    size_penalty_multiplier: float = 10.0  # Multiplier in size penalty formula
     time_of_day_factor: bool = True
     info_leakage_probability: float = 0.10
     typical_adv_fraction: float = 0.02  # 2% of ADV
     latency_ms: float = 5.0
+    # Partial fill configuration
+    partial_fill_min_ratio: float = 0.3  # Min fill ratio for partial fills
+    partial_fill_size_multiplier: float = 5.0  # How much size affects fill ratio
+    partial_fill_max_reduction: float = 0.7  # Max reduction from size impact
+    # Impact calculation
+    impact_size_normalization: float = 10000.0  # Shares for normalizing impact
 
 
 @dataclass
@@ -150,7 +163,7 @@ class DarkPoolFill:
     fill_price: float
     timestamp_ns: int
     latency_ns: int = 0
-    info_leakage: "InformationLeakage" = None
+    info_leakage: Optional["InformationLeakage"] = None
     remaining_qty: float = 0.0
     lit_mid_at_fill: float = 0.0
 
@@ -357,9 +370,16 @@ class DarkPoolVenue:
             lit_spread=lit_spread,
         )
 
-        # Calculate latency
-        latency_ns = int(self._config.latency_ms * 1_000_000)
-        latency_ns += int(self._rng.expovariate(1.0 / latency_ns) * 0.5)
+        # Calculate latency with exponential noise
+        # Base latency in nanoseconds
+        base_latency_ns = int(self._config.latency_ms * 1_000_000)
+        if base_latency_ns > 0:
+            # Add exponential noise (~50% of base latency on average)
+            noise_ns = int(self._rng.expovariate(1.0 / base_latency_ns) * 0.5)
+            latency_ns = base_latency_ns + noise_ns
+        else:
+            # Zero latency configured - no noise added
+            latency_ns = 0
 
         # Check for information leakage
         leakage = self._check_information_leakage(order, lit_mid_price)
@@ -395,9 +415,13 @@ class DarkPoolVenue:
         base_prob = self._config.base_fill_probability
 
         # Size penalty: larger orders have lower fill probability
+        # Formula: penalty = 1.0 - min(1.0, size_ratio * factor * multiplier)
         if adv > 0:
             size_ratio = order_qty / adv
-            size_penalty = 1.0 - min(1.0, size_ratio * self._config.size_penalty_factor * 10)
+            size_penalty = 1.0 - min(
+                1.0,
+                size_ratio * self._config.size_penalty_factor * self._config.size_penalty_multiplier,
+            )
         else:
             size_penalty = 0.8  # Default penalty if no ADV
 
@@ -430,13 +454,19 @@ class DarkPoolVenue:
         # For smaller orders, likely full fill
         if adv > 0:
             size_ratio = order_qty / adv
-            if size_ratio < 0.001:  # Very small order
+            if size_ratio < 0.001:  # Very small order (<0.1% ADV)
                 return order_qty
 
             # Larger orders may get partial fills
-            if size_ratio > 0.01:
-                # Partial fill with decreasing probability
-                fill_ratio = self._rng.uniform(0.3, 1.0) * (1.0 - min(0.7, size_ratio * 5))
+            if size_ratio > 0.01:  # >1% ADV
+                # Partial fill with decreasing probability based on size
+                # Uses configurable parameters for min ratio, size multiplier, and max reduction
+                min_ratio = self._config.partial_fill_min_ratio
+                size_mult = self._config.partial_fill_size_multiplier
+                max_reduction = self._config.partial_fill_max_reduction
+                fill_ratio = self._rng.uniform(min_ratio, 1.0) * (
+                    1.0 - min(max_reduction, size_ratio * size_mult)
+                )
                 return max(self._config.min_order_size, order_qty * fill_ratio)
 
         return order_qty
@@ -508,8 +538,9 @@ class DarkPoolVenue:
         # Calculate magnitude (severity)
         magnitude = self._rng.uniform(0.1, 0.5)
 
-        # Estimate market impact
-        size_factor = order.remaining_qty / 10000.0  # Normalize by 10k shares
+        # Estimate market impact using configurable normalization
+        # size_factor normalizes order size relative to typical institutional size
+        size_factor = order.remaining_qty / self._config.impact_size_normalization
         impact_bps = magnitude * size_factor * 2.0  # ~0.2-1.0 bps typical
 
         # Create leakage event
@@ -1000,20 +1031,36 @@ def create_dark_pool_simulator(
     Args:
         venue_configs: Optional list of venue configurations
         enable_smart_routing: Enable smart order routing
-        seed: Random seed
+        seed: Random seed for reproducibility
         on_fill: Fill callback
         on_leakage: Leakage callback
 
     Returns:
         Configured DarkPoolSimulator
+
+    Note:
+        When venue_configs is provided, all venues share the same RNG for
+        consistent reproducibility. When None, default venues are created
+        by the simulator using its internal RNG.
     """
     venues = None
     if venue_configs:
+        # Create shared RNG for all custom venues
         rng = random.Random(seed)
         venues = [DarkPoolVenue(cfg, rng) for cfg in venue_configs]
+        # Pass seed=None to simulator since venues already have their RNG
+        # This avoids creating duplicate RNG state
+        return DarkPoolSimulator(
+            venues=venues,
+            enable_smart_routing=enable_smart_routing,
+            seed=None,  # Venues already seeded
+            on_fill=on_fill,
+            on_leakage=on_leakage,
+        )
 
+    # No custom venues - let simulator create defaults with the seed
     return DarkPoolSimulator(
-        venues=venues,
+        venues=None,
         enable_smart_routing=enable_smart_routing,
         seed=seed,
         on_fill=on_fill,

@@ -251,6 +251,7 @@ class IcebergDetector:
         lookback_window_ns: int = 60_000_000_000,  # 60 seconds
         min_display_size: float = 1.0,
         decay_factor: float = 0.95,
+        initial_hidden_multiplier: float = 3.0,
         on_iceberg_detected: Optional[Callable[[IcebergOrder], None]] = None,
         on_iceberg_exhausted: Optional[Callable[[IcebergOrder], None]] = None,
     ) -> None:
@@ -264,6 +265,9 @@ class IcebergDetector:
             lookback_window_ns: Time window for pattern detection (ns)
             min_display_size: Minimum display size to consider
             decay_factor: Decay factor for hidden estimate (0.95 = conservative)
+            initial_hidden_multiplier: Multiplier for initial hidden estimate
+                (display_size * multiplier). Default 3.0 means initial estimate
+                is 3x display size (assumes ~2x more hidden reserve).
             on_iceberg_detected: Callback when iceberg is first detected
             on_iceberg_exhausted: Callback when iceberg reserve is exhausted
         """
@@ -273,6 +277,7 @@ class IcebergDetector:
         self._lookback_window_ns = lookback_window_ns
         self._min_display_size = min_display_size
         self._decay_factor = decay_factor
+        self._initial_hidden_multiplier = initial_hidden_multiplier
 
         # Callbacks
         self._on_iceberg_detected = on_iceberg_detected
@@ -281,6 +286,7 @@ class IcebergDetector:
         # State tracking
         self._icebergs: Dict[str, IcebergOrder] = {}  # iceberg_id -> IcebergOrder
         self._price_to_iceberg: Dict[Tuple[float, Side], str] = {}  # (price, side) -> iceberg_id
+        # Level history stores post-execution snapshots for each (price, side) pair
         self._level_history: Dict[Tuple[float, Side], Deque[LevelSnapshot]] = {}
         self._execution_history: Deque[ExecutionEvent] = deque(maxlen=1000)
 
@@ -353,11 +359,11 @@ class IcebergDetector:
         event = ExecutionEvent(trade=trade, pre_level=pre_level, post_level=post_level)
         self._execution_history.append(event)
 
-        # Update level history
+        # Update level history (only store post-level to avoid redundancy)
+        # post_level of step N equals pre_level of step N+1
         key = (pre_level.price, side)
         if key not in self._level_history:
             self._level_history[key] = deque(maxlen=100)
-        self._level_history[key].append(pre_level)
         self._level_history[key].append(post_level)
 
         # Check for iceberg pattern: refill after execution
@@ -462,9 +468,9 @@ class IcebergDetector:
             post_level_qty=post_level.visible_qty,
         )
 
-        # Estimate initial hidden quantity (conservative)
-        # Assume at least 2x display remaining
-        initial_hidden_estimate = display_size * 3.0
+        # Estimate initial hidden quantity using configurable multiplier
+        # Default 3.0 means initial estimate is 3x display size
+        initial_hidden_estimate = display_size * self._initial_hidden_multiplier
 
         iceberg = IcebergOrder(
             iceberg_id=iceberg_id,
@@ -547,7 +553,12 @@ class IcebergDetector:
         """
         Update hidden quantity estimate based on execution patterns.
 
-        Uses decay model with adjustments based on refill consistency.
+        Computes pattern-based estimate without decay. Decay is applied
+        separately in estimate_hidden_reserve() to avoid double-decay.
+
+        Note:
+            The stored estimated_hidden_qty is the base estimate.
+            Use estimate_hidden_reserve() for decay-adjusted values.
         """
         if not iceberg.refill_events:
             return
@@ -569,10 +580,8 @@ class IcebergDetector:
         # More consistent refills -> likely more hidden reserve
         multiplier = 2.0 + 3.0 * consistency  # 2x to 5x display remaining
 
-        # Decay existing estimate
-        iceberg.estimated_hidden_qty *= self._decay_factor
-
-        # Add estimate based on pattern
+        # Store pattern-based estimate (NO decay here - applied in estimate_hidden_reserve)
+        # FIX: Removed double-decay by not applying decay_factor here
         pattern_estimate = avg_refill * multiplier
         iceberg.estimated_hidden_qty = max(
             iceberg.estimated_hidden_qty,
@@ -663,26 +672,41 @@ class IcebergDetector:
         self._iceberg_counter += 1
         iceberg_id = f"iceberg_batch_{self._iceberg_counter}"
 
+        is_confirmed = len(refill_events) >= 2
+        # Use configurable multiplier for initial estimate
+        initial_estimate = avg_display * self._initial_hidden_multiplier
         iceberg = IcebergOrder(
             iceberg_id=iceberg_id,
             order_id=executions[0].maker_order_id if executions else None,
             price=price,
             side=side or Side.BUY,
             display_size=avg_display,
-            estimated_hidden_qty=avg_display * 2.0,  # Conservative estimate
+            estimated_hidden_qty=initial_estimate,
             total_executed=total_executed,
             refill_events=refill_events,
-            state=IcebergState.CONFIRMED if len(refill_events) >= 2 else IcebergState.SUSPECTED,
+            state=IcebergState.CONFIRMED if is_confirmed else IcebergState.SUSPECTED,
             confidence=(
                 DetectionConfidence.HIGH
                 if len(refill_events) >= 3
                 else DetectionConfidence.MEDIUM
-                if len(refill_events) >= 2
+                if is_confirmed
                 else DetectionConfidence.LOW
             ),
             first_seen_ns=executions[0].timestamp_ns if executions else 0,
             last_update_ns=executions[-1].timestamp_ns if executions else 0,
         )
+
+        # Register in tracking state (FIX: was missing counter updates)
+        self._icebergs[iceberg_id] = iceberg
+        actual_side = side or Side.BUY
+        self._price_to_iceberg[(price, actual_side)] = iceberg_id
+        self._total_detected += 1
+        if is_confirmed:
+            self._total_confirmed += 1
+
+        # Callback
+        if self._on_iceberg_detected:
+            self._on_iceberg_detected(iceberg)
 
         return iceberg
 
@@ -960,6 +984,8 @@ def create_iceberg_detector(
     min_refills_to_confirm: int = 2,
     lookback_window_sec: float = 60.0,
     min_display_size: float = 1.0,
+    decay_factor: float = 0.95,
+    initial_hidden_multiplier: float = 3.0,
     on_iceberg_detected: Optional[Callable[[IcebergOrder], None]] = None,
     on_iceberg_exhausted: Optional[Callable[[IcebergOrder], None]] = None,
 ) -> IcebergDetector:
@@ -970,6 +996,9 @@ def create_iceberg_detector(
         min_refills_to_confirm: Minimum refills to confirm iceberg
         lookback_window_sec: Time window in seconds
         min_display_size: Minimum display size to consider
+        decay_factor: Decay factor for hidden estimate (0.95 = conservative)
+        initial_hidden_multiplier: Multiplier for initial hidden estimate
+            (display_size * multiplier). Default 3.0.
         on_iceberg_detected: Detection callback
         on_iceberg_exhausted: Exhaustion callback
 
@@ -980,6 +1009,8 @@ def create_iceberg_detector(
         min_refills_to_confirm=min_refills_to_confirm,
         lookback_window_ns=int(lookback_window_sec * 1_000_000_000),
         min_display_size=min_display_size,
+        decay_factor=decay_factor,
+        initial_hidden_multiplier=initial_hidden_multiplier,
         on_iceberg_detected=on_iceberg_detected,
         on_iceberg_exhausted=on_iceberg_exhausted,
     )
