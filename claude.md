@@ -45,6 +45,8 @@
 | Iceberg detection | `lob/hidden_liquidity.py` | `pytest tests/test_hidden_liquidity_dark_pools.py::TestIcebergDetector` |
 | Hidden liquidity | `lob/hidden_liquidity.py` | `pytest tests/test_hidden_liquidity_dark_pools.py::TestHiddenLiquidityEstimator` |
 | Dark pool simulation | `lob/dark_pool.py` | `pytest tests/test_hidden_liquidity_dark_pools.py::TestDarkPoolSimulator` |
+| L3 execution provider | `execution_providers_l3.py` | `pytest tests/test_execution_providers_l3.py` |
+| L3 config models | `lob/config.py` | `pytest tests/test_execution_providers_l3.py::TestL3ExecutionConfig` |
 
 ### 🔍 Quick File Reference
 
@@ -828,6 +830,17 @@ Phase 10 добавляет высокоточную симуляцию order bo
    - Smart order routing across dark pool venues
    - Time-of-day and volatility adjustments
 
+7. **Stage 7: L3 Execution Provider Integration** (`execution_providers_l3.py`, `lob/config.py`)
+   - Full L3ExecutionProvider combining all LOB components
+   - Pydantic-based configuration models for all subsystems
+   - Factory function upgrade: `create_execution_provider(level="L3")`
+   - YAML configuration support with presets (equity, crypto, minimal)
+   - Pre-trade cost estimation with impact models
+   - Fill probability computation for limit orders
+   - Dark pool routing integration
+   - Backward compatible with L2 (crypto unchanged)
+   - 79 comprehensive tests
+
 ### Архитектура
 
 ```
@@ -848,7 +861,10 @@ lob/
 ├── event_scheduler.py    # Event ordering with priority queue (Stage 5)
 ├── hidden_liquidity.py   # Iceberg detection, hidden qty estimation (Stage 6)
 ├── dark_pool.py          # Dark pool simulation, multi-venue routing (Stage 6)
+├── config.py             # Pydantic config models for L3 subsystems (Stage 7)
 └── __init__.py           # Public API exports
+
+execution_providers_l3.py # L3ExecutionProvider combining all LOB components (Stage 7)
 ```
 
 ### Ключевые классы
@@ -879,6 +895,10 @@ lob/
 | `DarkPoolSimulator` | Multi-venue dark pool simulation (Stage 6) |
 | `DarkPoolVenue` | Individual dark pool venue model (Stage 6) |
 | `DarkPoolFill` | Dark pool execution result (Stage 6) |
+| `L3ExecutionProvider` | Full L3 execution provider combining all LOB components (Stage 7) |
+| `L3SlippageProvider` | LOB-based slippage with market impact (Stage 7) |
+| `L3FillProvider` | LOB-based fill logic with queue position (Stage 7) |
+| `L3ExecutionConfig` | Pydantic config model for L3 subsystems (Stage 7) |
 
 ### Self-Trade Prevention (STP)
 
@@ -1220,11 +1240,14 @@ pytest tests/test_lob_latency.py -v
 # Stage 6 тесты (hidden liquidity, dark pools)
 pytest tests/test_hidden_liquidity_dark_pools.py -v
 
+# Stage 7 тесты (L3 execution provider, config)
+pytest tests/test_execution_providers_l3.py -v
+
 # Все LOB тесты
-pytest tests/test_lob*.py tests/test_matching_engine.py tests/test_fill_probability_queue_value.py tests/test_market_impact.py tests/test_hidden_liquidity_dark_pools.py -v
+pytest tests/test_lob*.py tests/test_matching_engine.py tests/test_fill_probability_queue_value.py tests/test_market_impact.py tests/test_hidden_liquidity_dark_pools.py tests/test_execution_providers_l3.py -v
 ```
 
-**Покрытие**: 443 тестов (106 Stage 1 + 72 Stage 2 + 66 Stage 3 + 57 Stage 4 + 66 Stage 5 + 62 Stage 6)
+**Покрытие**: 522 тестов (106 Stage 1 + 72 Stage 2 + 66 Stage 3 + 57 Stage 4 + 66 Stage 5 + 62 Stage 6 + 79 Stage 7 + 95 execution_providers)
 
 ### Ключевые файлы
 
@@ -1249,6 +1272,11 @@ pytest tests/test_lob*.py tests/test_matching_engine.py tests/test_fill_probabil
 | `lob/hidden_liquidity.py` | Iceberg detection, hidden liquidity estimation (Stage 6) |
 | `lob/dark_pool.py` | Dark pool simulation, multi-venue routing (Stage 6) |
 | `tests/test_hidden_liquidity_dark_pools.py` | 62 Stage 6 tests |
+| `execution_providers_l3.py` | L3ExecutionProvider combining all LOB components (Stage 7) |
+| `lob/config.py` | Pydantic configuration models for L3 subsystems (Stage 7) |
+| `configs/execution_l3.yaml` | L3 execution configuration file (Stage 7) |
+| `tests/test_execution_providers_l3.py` | 79 Stage 7 tests |
+| `docs/L3_MIGRATION_GUIDE.md` | Migration guide from L2 to L3 (Stage 7) |
 
 ### Референсы
 
@@ -2791,6 +2819,6 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 
 ---
 
-**Последнее обновление**: 2025-11-27
-**Версия документации**: 6.0 (Phase 10: L3 LOB Simulation - Stage 6: Hidden Liquidity & Dark Pools)
+**Последнее обновление**: 2025-11-28
+**Версия документации**: 7.0 (Phase 10: L3 LOB Simulation - Stage 7: L3 Execution Provider Integration)
 **Статус**: ✅ Production Ready (все критические исправления применены, 53 задокументированных "НЕ БАГИ")

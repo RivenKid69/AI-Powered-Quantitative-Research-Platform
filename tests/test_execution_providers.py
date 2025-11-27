@@ -53,6 +53,13 @@ from execution_providers import (
     wrap_legacy_fees_model,
 )
 
+# L3 providers (Stage 7)
+from execution_providers_l3 import (
+    L3SlippageProvider,
+    L3FillProvider,
+    L3ExecutionProvider,
+)
+
 
 # =============================================================================
 # Test Fixtures
@@ -798,9 +805,9 @@ class TestFactoryFunctions:
         assert isinstance(provider, StatisticalSlippageProvider)
 
     def test_create_slippage_provider_l3(self):
-        """Test creating L3 slippage provider (stub)."""
+        """Test creating L3 slippage provider."""
         provider = create_slippage_provider("L3")
-        assert isinstance(provider, LOBSlippageProvider)
+        assert isinstance(provider, L3SlippageProvider)
 
     def test_create_slippage_provider_equity_defaults(self):
         """Test equity defaults for slippage provider."""
@@ -825,9 +832,9 @@ class TestFactoryFunctions:
         assert isinstance(provider, OHLCVFillProvider)
 
     def test_create_fill_provider_l3(self):
-        """Test creating L3 fill provider (stub)."""
+        """Test creating L3 fill provider."""
         provider = create_fill_provider("L3")
-        assert isinstance(provider, LOBFillProvider)
+        assert isinstance(provider, L3FillProvider)
 
     def test_create_execution_provider(self):
         """Test creating execution provider."""

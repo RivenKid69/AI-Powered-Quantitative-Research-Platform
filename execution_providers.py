@@ -1464,7 +1464,17 @@ def create_slippage_provider(
     level_upper = str(level).upper()
 
     if level_upper == "L3":
-        return LOBSlippageProvider(**kwargs)
+        # Import L3 provider (avoid circular import)
+        try:
+            from execution_providers_l3 import L3SlippageProvider
+            return L3SlippageProvider(asset_class=asset_class, **kwargs)
+        except ImportError:
+            logger.warning(
+                "L3 providers not available, falling back to L2. "
+                "Ensure execution_providers_l3.py is present."
+            )
+            # Fall back to LOB stub
+            return LOBSlippageProvider(**kwargs)
 
     # L1/L2: Statistical model
     if asset_class == AssetClass.EQUITY:
@@ -1527,11 +1537,25 @@ def create_fill_provider(
         fee_provider = create_fee_provider(asset_class)
 
     if level_upper == "L3":
-        return LOBFillProvider(
-            slippage_provider=slippage_provider,
-            fee_provider=fee_provider,
-            **kwargs,
-        )
+        # Import L3 provider (avoid circular import)
+        try:
+            from execution_providers_l3 import L3FillProvider
+            return L3FillProvider(
+                slippage_provider=slippage_provider,
+                fee_provider=fee_provider,
+                asset_class=asset_class,
+                **kwargs,
+            )
+        except ImportError:
+            logger.warning(
+                "L3 providers not available, falling back to LOB stub. "
+                "Ensure execution_providers_l3.py is present."
+            )
+            return LOBFillProvider(
+                slippage_provider=slippage_provider,
+                fee_provider=fee_provider,
+                **kwargs,
+            )
 
     # L2: OHLCV-based fills
     return OHLCVFillProvider(
@@ -1556,7 +1580,40 @@ def create_execution_provider(
 
     Returns:
         ExecutionProvider instance
+
+    Example:
+        # L2 provider (statistical models)
+        >>> provider = create_execution_provider(AssetClass.EQUITY, level="L2")
+
+        # L3 provider (full LOB simulation)
+        >>> provider = create_execution_provider(AssetClass.EQUITY, level="L3")
+
+        # L3 with custom config
+        >>> from lob.config import L3ExecutionConfig
+        >>> config = L3ExecutionConfig.for_equity()
+        >>> provider = create_execution_provider(AssetClass.EQUITY, level="L3", config=config)
     """
+    level_upper = str(level).upper()
+
+    if level_upper == "L3":
+        # Import L3 provider (avoid circular import)
+        try:
+            from execution_providers_l3 import L3ExecutionProvider
+            return L3ExecutionProvider(
+                asset_class=asset_class,
+                config=kwargs.pop("config", None),
+                slippage_provider=kwargs.pop("slippage_provider", None),
+                fee_provider=kwargs.pop("fee_provider", None),
+                **kwargs,
+            )
+        except ImportError as e:
+            logger.warning(
+                "L3 providers not available, falling back to L2. "
+                "Ensure execution_providers_l3.py is present. Error: %s", e
+            )
+            # Fall through to L2
+
+    # L2: Statistical models (default)
     return L2ExecutionProvider(
         asset_class=asset_class,
         slippage_provider=kwargs.pop("slippage_provider", None),

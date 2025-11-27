@@ -264,6 +264,37 @@ from lob.dark_pool import (
     create_default_dark_pool_simulator,
 )
 
+# Stage 7: L3 Execution Provider Configuration (v7.0)
+from lob.config import (
+    # Enums
+    LatencyDistributionType,
+    LatencyProfileType,
+    FillProbabilityModelType as L3FillProbabilityModelType,
+    ImpactModelType as L3ImpactModelType,
+    DecayFunctionType,
+    QueueEstimationMethod,
+    LOBDataSourceType,
+    # Configuration Classes
+    LatencyComponentConfig,
+    LatencyConfig as L3LatencyConfig,
+    FillProbabilityConfig,
+    QueueValueConfig as L3QueueValueConfig,
+    MarketImpactConfig,
+    IcebergConfig,
+    HiddenLiquidityConfig,
+    DarkPoolVenueConfig,
+    DarkPoolsConfig,
+    QueueTrackingConfig,
+    EventSchedulingConfig,
+    LOBDataConfig,
+    L3ExecutionConfig,
+    # Factory Functions
+    create_l3_config,
+    # Backward Compatibility
+    latency_config_to_dataclass,
+    impact_config_to_parameters,
+)
+
 __all__ = [
     # Core data structures
     "Side",
@@ -424,6 +455,30 @@ __all__ = [
     "InformationLeakage",
     "create_dark_pool_simulator",
     "create_default_dark_pool_simulator",
+    # L3 Configuration (Stage 7)
+    "LatencyDistributionType",
+    "LatencyProfileType",
+    "L3FillProbabilityModelType",
+    "L3ImpactModelType",
+    "DecayFunctionType",
+    "QueueEstimationMethod",
+    "LOBDataSourceType",
+    "LatencyComponentConfig",
+    "L3LatencyConfig",
+    "FillProbabilityConfig",
+    "L3QueueValueConfig",
+    "MarketImpactConfig",
+    "IcebergConfig",
+    "HiddenLiquidityConfig",
+    "DarkPoolVenueConfig",
+    "DarkPoolsConfig",
+    "QueueTrackingConfig",
+    "EventSchedulingConfig",
+    "LOBDataConfig",
+    "L3ExecutionConfig",
+    "create_l3_config",
+    "latency_config_to_dataclass",
+    "impact_config_to_parameters",
 ]
 
-__version__ = "6.0.0"
+__version__ = "7.0.0"
