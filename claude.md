@@ -65,6 +65,12 @@ python scripts/fetch_alpaca_universe.py --output data/universe/alpaca_symbols.js
 
 # Live Trading (Stocks - Alpaca)
 python script_live.py --config configs/config_live_alpaca.yaml
+
+# Training (Stocks)
+python train_model_multi_patch.py --config configs/config_train_stocks.yaml
+
+# Backtest (Stocks)
+python script_backtest.py --config configs/config_backtest_stocks.yaml
 ```
 
 ---
@@ -77,6 +83,7 @@ python script_live.py --config configs/config_live_alpaca.yaml
 |-------|-----|--------|----------|
 | **Binance** | Crypto (Spot/Futures) | ✅ Production | MarketData, Fee, TradingHours, ExchangeInfo |
 | **Alpaca** | US Equities | ✅ Production | MarketData, Fee, TradingHours, ExchangeInfo, OrderExecution |
+| **Polygon** | US Equities (Data) | ✅ Production | MarketData, TradingHours, ExchangeInfo |
 
 ### Архитектура адаптеров
 
@@ -86,17 +93,22 @@ adapters/
 ├── models.py         # Exchange-agnostic модели данных
 ├── registry.py       # Фабрика + регистрация адаптеров
 ├── config.py         # Pydantic конфигурация
+├── websocket_base.py # Production-grade async WebSocket wrapper
 ├── binance/          # Binance реализация (crypto)
 │   ├── market_data.py
 │   ├── fees.py
 │   ├── trading_hours.py
 │   └── exchange_info.py
-└── alpaca/           # Alpaca реализация (stocks)
+├── alpaca/           # Alpaca реализация (stocks)
+│   ├── market_data.py
+│   ├── fees.py
+│   ├── trading_hours.py
+│   ├── exchange_info.py
+│   └── order_execution.py
+└── polygon/          # Polygon.io реализация (stocks data)
     ├── market_data.py
-    ├── fees.py
     ├── trading_hours.py
-    ├── exchange_info.py
-    └── order_execution.py
+    └── exchange_info.py
 ```
 
 ### Использование
@@ -180,6 +192,113 @@ ALPACA_API_SECRET=...
 # Binance (существующие)
 BINANCE_API_KEY=...
 BINANCE_API_SECRET=...
+
+# Polygon.io (альтернативный data provider)
+POLYGON_API_KEY=...
+```
+
+---
+
+## 📊 Stock Training & Backtest (Phase 3)
+
+### Обзор
+
+Phase 3 добавляет полную поддержку акций в training и backtest pipeline:
+
+1. **Multi-Asset Data Loader** (`data_loader_multi_asset.py`)
+   - Унифицированная загрузка данных для crypto и stocks
+   - Фильтрация по trading hours для US equities
+   - Поддержка нескольких data vendors (Alpaca, Polygon)
+
+2. **Polygon Data Provider** (`adapters/polygon/`)
+   - Альтернативный источник рыночных данных
+   - Historical bars и real-time streaming
+   - US market holidays и trading hours
+
+3. **WebSocket Wrapper** (`adapters/websocket_base.py`)
+   - Production-grade async WebSocket с auto-reconnect
+   - Exponential backoff и heartbeat monitoring
+   - Rate limiting и message buffering
+
+### Stock Training Configuration
+
+```yaml
+# configs/config_train_stocks.yaml
+mode: train
+asset_class: equity
+data_vendor: alpaca  # или polygon
+
+data:
+  timeframe: "4h"
+  filter_trading_hours: true
+  include_extended_hours: false
+
+env:
+  session:
+    calendar: us_equity
+    extended_hours: false
+```
+
+### Stock Backtest Configuration
+
+```yaml
+# configs/config_backtest_stocks.yaml
+mode: backtest
+asset_class: equity
+
+fees:
+  structure: flat
+  maker_bps: 0.0
+  taker_bps: 0.0
+  regulatory:
+    enabled: true
+    sec_fee_per_million: 27.80
+    taf_fee_per_share: 0.000166
+```
+
+### Ключевые особенности Stock Trading
+
+| Аспект | Crypto (Binance) | Stocks (Alpaca/Polygon) |
+|--------|------------------|-------------------------|
+| **Часы торговли** | 24/7 | NYSE 9:30-16:00 ET |
+| **Extended hours** | N/A | 4:00-9:30, 16:00-20:00 ET |
+| **Комиссии** | % от notional | $0 + regulatory fees |
+| **Min trade** | LOT_SIZE filter | 1 share (fractional OK) |
+| **Holidays** | Нет | US market holidays |
+
+### Использование Multi-Asset Loader
+
+```python
+from data_loader_multi_asset import (
+    load_multi_asset_data,
+    load_from_adapter,
+    AssetClass,
+    DataVendor,
+)
+
+# Загрузка из файлов
+frames, obs_shapes = load_multi_asset_data(
+    paths=["data/stocks/*.parquet"],
+    asset_class="equity",
+    timeframe="4h",
+    filter_trading_hours=True,
+)
+
+# Загрузка через адаптер
+frames, obs_shapes = load_from_adapter(
+    vendor="polygon",
+    symbols=["AAPL", "MSFT", "GOOGL"],
+    timeframe="1h",
+    start_date="2024-01-01",
+    end_date="2024-12-31",
+)
+```
+
+### Требования
+
+```bash
+pip install polygon-api-client  # Polygon.io
+pip install alpaca-py           # Alpaca
 ```
 
 ---
