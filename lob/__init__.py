@@ -30,6 +30,7 @@ Stage 2 (v2.0): Matching engine, queue tracker, order manager
 Stage 3 (v3.0): Fill probability models, queue value, calibration
 Stage 4 (v4.0): Market impact models, effects, impact calibration
 Stage 5 (v5.0): Latency simulation, event scheduler
+Stage 6 (v6.0): Hidden liquidity detection, dark pool simulation
 
 Usage:
     from lob import OrderBook, LimitOrder, PriceLevel
@@ -53,6 +54,14 @@ Usage:
     )
     from lob.event_scheduler import (
         EventScheduler, SimulationClock, create_event_scheduler
+    )
+    from lob.hidden_liquidity import (
+        IcebergDetector, IcebergOrder, HiddenLiquidityEstimator,
+        create_iceberg_detector, create_hidden_liquidity_estimator
+    )
+    from lob.dark_pool import (
+        DarkPoolSimulator, DarkPoolVenue, DarkPoolFill,
+        create_dark_pool_simulator, create_default_dark_pool_simulator
     )
 
 Note:
@@ -227,6 +236,34 @@ from lob.event_scheduler import (
     create_simulation_clock,
 )
 
+# Stage 6: Hidden Liquidity & Dark Pools (v6.0)
+from lob.hidden_liquidity import (
+    IcebergDetector,
+    IcebergOrder,
+    IcebergState,
+    RefillEvent,
+    LevelSnapshot,
+    ExecutionEvent,
+    DetectionConfidence,
+    HiddenLiquidityEstimator,
+    create_iceberg_detector,
+    create_hidden_liquidity_estimator,
+)
+
+from lob.dark_pool import (
+    DarkPoolSimulator,
+    DarkPoolVenue,
+    DarkPoolConfig,
+    DarkPoolFill,
+    DarkPoolState,
+    DarkPoolVenueType,
+    FillType,
+    LeakageType,
+    InformationLeakage,
+    create_dark_pool_simulator,
+    create_default_dark_pool_simulator,
+)
+
 __all__ = [
     # Core data structures
     "Side",
@@ -364,6 +401,29 @@ __all__ = [
     "SimulationClock",
     "create_event_scheduler",
     "create_simulation_clock",
+    # Hidden Liquidity (Stage 6)
+    "IcebergDetector",
+    "IcebergOrder",
+    "IcebergState",
+    "RefillEvent",
+    "LevelSnapshot",
+    "ExecutionEvent",
+    "DetectionConfidence",
+    "HiddenLiquidityEstimator",
+    "create_iceberg_detector",
+    "create_hidden_liquidity_estimator",
+    # Dark Pool Simulation (Stage 6)
+    "DarkPoolSimulator",
+    "DarkPoolVenue",
+    "DarkPoolConfig",
+    "DarkPoolFill",
+    "DarkPoolState",
+    "DarkPoolVenueType",
+    "FillType",
+    "LeakageType",
+    "InformationLeakage",
+    "create_dark_pool_simulator",
+    "create_default_dark_pool_simulator",
 ]
 
-__version__ = "5.0.0"
+__version__ = "6.0.0"

@@ -42,6 +42,9 @@
 | Impact calibration | `lob/impact_calibration.py` | `pytest tests/test_market_impact.py::TestImpactCalibration` |
 | Latency simulation | `lob/latency_model.py` | `pytest tests/test_lob_latency.py::TestLatencyModel` |
 | Event scheduler | `lob/event_scheduler.py` | `pytest tests/test_lob_latency.py::TestEventScheduler` |
+| Iceberg detection | `lob/hidden_liquidity.py` | `pytest tests/test_hidden_liquidity_dark_pools.py::TestIcebergDetector` |
+| Hidden liquidity | `lob/hidden_liquidity.py` | `pytest tests/test_hidden_liquidity_dark_pools.py::TestHiddenLiquidityEstimator` |
+| Dark pool simulation | `lob/dark_pool.py` | `pytest tests/test_hidden_liquidity_dark_pools.py::TestDarkPoolSimulator` |
 
 ### 🔍 Quick File Reference
 
@@ -816,6 +819,15 @@ Phase 10 добавляет высокоточную симуляцию order bo
    - Time-of-day seasonality adjustments
    - Volatility-adjusted latency
 
+6. **Stage 6: Hidden Liquidity & Dark Pools** (`lob/hidden_liquidity.py`, `lob/dark_pool.py`)
+   - Iceberg order detection from execution patterns (refill pattern recognition)
+   - Hidden quantity estimation based on observed refills
+   - Dark pool multi-venue simulation (SIGMA_X, IEX_D, LIQUIDNET, RETAIL_INT)
+   - Mid-price execution with probabilistic fills
+   - Information leakage modeling (quote updates, trade signals, size inference)
+   - Smart order routing across dark pool venues
+   - Time-of-day and volatility adjustments
+
 ### Архитектура
 
 ```
@@ -834,6 +846,8 @@ lob/
 ├── impact_calibration.py # Impact parameter estimation (Stage 4)
 ├── latency_model.py      # Realistic latency simulation (Stage 5)
 ├── event_scheduler.py    # Event ordering with priority queue (Stage 5)
+├── hidden_liquidity.py   # Iceberg detection, hidden qty estimation (Stage 6)
+├── dark_pool.py          # Dark pool simulation, multi-venue routing (Stage 6)
 └── __init__.py           # Public API exports
 ```
 
@@ -859,6 +873,12 @@ lob/
 | `LatencySampler` | Distribution-based latency sampling (Stage 5) |
 | `EventScheduler` | Event ordering with priority queue (Stage 5) |
 | `SimulationClock` | Time tracking with latency awareness (Stage 5) |
+| `IcebergDetector` | Iceberg order detection from execution patterns (Stage 6) |
+| `IcebergOrder` | Tracked iceberg with refill history (Stage 6) |
+| `HiddenLiquidityEstimator` | Hidden quantity estimation (Stage 6) |
+| `DarkPoolSimulator` | Multi-venue dark pool simulation (Stage 6) |
+| `DarkPoolVenue` | Individual dark pool venue model (Stage 6) |
+| `DarkPoolFill` | Dark pool execution result (Stage 6) |
 
 ### Self-Trade Prevention (STP)
 
@@ -1102,6 +1122,83 @@ stats = model.stats()
 print(f"Feed p95: {stats['feed']['p95_us']:.1f}us")
 ```
 
+### Stage 6: Hidden Liquidity & Dark Pools
+
+```python
+from lob import (
+    # Iceberg Detection
+    IcebergDetector,
+    IcebergOrder,
+    IcebergState,
+    DetectionConfidence,
+    HiddenLiquidityEstimator,
+    create_iceberg_detector,
+    create_hidden_liquidity_estimator,
+    # Dark Pool Simulation
+    DarkPoolSimulator,
+    DarkPoolVenue,
+    DarkPoolConfig,
+    DarkPoolFill,
+    DarkPoolVenueType,
+    FillType,
+    InformationLeakage,
+    create_dark_pool_simulator,
+    create_default_dark_pool_simulator,
+)
+
+# 1. Create iceberg detector
+detector = create_iceberg_detector(
+    min_refills_to_confirm=2,
+    lookback_window_sec=60.0,
+)
+
+# 2. Process execution and detect iceberg pattern
+pre_snap = detector.take_level_snapshot(level, Side.BUY)
+# ... execution happens ...
+post_snap = detector.take_level_snapshot(level, Side.BUY)
+iceberg = detector.process_execution(trade, pre_snap, post_snap, Side.BUY)
+
+if iceberg:
+    print(f"Iceberg detected: display={iceberg.display_size}, state={iceberg.state.name}")
+    hidden_estimate = detector.estimate_hidden_reserve(iceberg)
+    print(f"Estimated hidden: {hidden_estimate}")
+
+# 3. Batch detection from execution history
+executions = [trade1, trade2, trade3]
+level_qty_history = [500.0, 500.0, 500.0]  # Qty refills indicate iceberg
+iceberg = detector.detect_iceberg(executions, level_qty_history, price=100.0, side=Side.BUY)
+
+# 4. Hidden liquidity estimation
+estimator = create_hidden_liquidity_estimator(detector, hidden_ratio=0.15)
+hidden = estimator.estimate_hidden_at_level(price=100.0, side=Side.BUY, visible_qty=500.0)
+
+# 5. Create dark pool simulator
+dark_pool = create_default_dark_pool_simulator(seed=42)
+
+# 6. Attempt dark pool fill
+fill = dark_pool.attempt_dark_fill(
+    order=limit_order,
+    lit_mid_price=100.0,
+    lit_spread=0.05,
+    adv=10_000_000,
+    volatility=0.02,
+    hour_of_day=10,
+)
+
+if fill and fill.is_filled:
+    print(f"Dark fill: {fill.filled_qty} @ {fill.fill_price} ({fill.venue_id})")
+    if fill.info_leakage:
+        print(f"Leakage: {fill.info_leakage.description}")
+
+# 7. Estimate fill probability at each venue
+probs = dark_pool.estimate_fill_probability(order, adv=10_000_000)
+for venue_id, prob in probs.items():
+    print(f"{venue_id}: {prob:.2%}")
+
+# 8. Multi-venue routing
+fills = dark_pool.attempt_fill_with_routing(order, lit_mid_price=100.0, max_attempts=3)
+```
+
 ### Тестирование
 
 ```bash
@@ -1120,11 +1217,14 @@ pytest tests/test_market_impact.py -v
 # Stage 5 тесты (latency simulation, event scheduler)
 pytest tests/test_lob_latency.py -v
 
+# Stage 6 тесты (hidden liquidity, dark pools)
+pytest tests/test_hidden_liquidity_dark_pools.py -v
+
 # Все LOB тесты
-pytest tests/test_lob*.py tests/test_matching_engine.py tests/test_fill_probability_queue_value.py tests/test_market_impact.py -v
+pytest tests/test_lob*.py tests/test_matching_engine.py tests/test_fill_probability_queue_value.py tests/test_market_impact.py tests/test_hidden_liquidity_dark_pools.py -v
 ```
 
-**Покрытие**: 381 тест (106 Stage 1 + 72 Stage 2 + 66 Stage 3 + 57 Stage 4 + 66 Stage 5)
+**Покрытие**: 425 тестов (106 Stage 1 + 72 Stage 2 + 66 Stage 3 + 57 Stage 4 + 66 Stage 5 + 44 Stage 6)
 
 ### Ключевые файлы
 
@@ -1146,6 +1246,9 @@ pytest tests/test_lob*.py tests/test_matching_engine.py tests/test_fill_probabil
 | `lob/latency_model.py` | Realistic latency simulation (Stage 5) |
 | `lob/event_scheduler.py` | Event ordering with priority queue (Stage 5) |
 | `tests/test_lob_latency.py` | 66 Stage 5 tests |
+| `lob/hidden_liquidity.py` | Iceberg detection, hidden liquidity estimation (Stage 6) |
+| `lob/dark_pool.py` | Dark pool simulation, multi-venue routing (Stage 6) |
+| `tests/test_hidden_liquidity_dark_pools.py` | 44 Stage 6 tests |
 
 ### Референсы
 
@@ -1160,6 +1263,9 @@ pytest tests/test_lob*.py tests/test_matching_engine.py tests/test_fill_probabil
 - Gatheral (2010): "No-Dynamic-Arbitrage and Market Impact"
 - Almgren et al. (2005): "Direct Estimation of Equity Market Impact"
 - hftbacktest: High-frequency trading backtesting framework (latency modeling reference)
+- Bookmap: Iceberg order detection methodology (https://bookmap.com/blog/advanced-order-flow-trading-spotting-hidden-liquidity-iceberg-orders)
+- SEC Rule 606: Dark pool routing disclosures
+- FINRA ATS: Dark pool transparency data
 
 ---
 
@@ -2680,5 +2786,5 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-11-27
-**Версия документации**: 5.1 (Phase 10: L3 LOB Simulation - Stage 5: Latency Simulation & Event Scheduler)
+**Версия документации**: 6.0 (Phase 10: L3 LOB Simulation - Stage 6: Hidden Liquidity & Dark Pools)
 **Статус**: ✅ Production Ready (все критические исправления применены, 53 задокументированных "НЕ БАГИ")
