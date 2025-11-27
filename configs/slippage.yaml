@@ -102,3 +102,104 @@ slippage:
   #           multiplier: 1.0
   #           impact_mean_bps: null
   #           k: null
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Asset-Class Specific Profiles (Phase 4.4 - Multi-Exchange Support)
+  # ═══════════════════════════════════════════════════════════════════════════
+  # These profiles provide calibrated default parameters for different asset
+  # classes based on empirical market microstructure research.
+  #
+  # References:
+  #   - Almgren & Chriss (2001): Market impact models
+  #   - NYSE/NASDAQ spread studies (2020-2024)
+  #   - Binance market microstructure analysis
+  # ═══════════════════════════════════════════════════════════════════════════
+  profiles:
+    # ─────────────────────────────────────────────────────────────────────────
+    # US Equities Profile (Alpaca, Polygon, etc.)
+    # ─────────────────────────────────────────────────────────────────────────
+    # Characteristics:
+    #   - Tighter spreads due to maker-taker market structure
+    #   - Lower market impact due to higher liquidity (for large-cap)
+    #   - Penny tick size ($0.01) for most stocks
+    #   - Trading hours constraints (9:30-16:00 ET)
+    #
+    # Calibration basis:
+    #   - Large-cap stocks (S&P 500): ~1-2 bps spread
+    #   - Mid-cap stocks: ~2-5 bps spread
+    #   - Impact coefficient derived from equity execution studies
+    # ─────────────────────────────────────────────────────────────────────────
+    equity:
+      spread_bps: 2.0              # Default half-spread in basis points
+      impact_coef: 0.05            # Almgren-Chriss style impact coefficient (k)
+      volatility_scale: 1.0        # Volatility adjustment multiplier
+      min_slippage_bps: 0.5        # Minimum slippage floor (tick protection)
+      max_slippage_bps: 200.0      # Safety cap for extreme conditions
+      # Per-tier adjustments (optional override by market cap)
+      tiers:
+        large_cap:                 # S&P 500, large tech
+          spread_bps: 1.0
+          impact_coef: 0.03
+        mid_cap:                   # Russell 1000 ex S&P 500
+          spread_bps: 2.5
+          impact_coef: 0.05
+        small_cap:                 # Russell 2000
+          spread_bps: 5.0
+          impact_coef: 0.08
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Cryptocurrency Profile (Binance, Coinbase, etc.)
+    # ─────────────────────────────────────────────────────────────────────────
+    # Characteristics:
+    #   - Wider spreads due to fragmented liquidity and volatility
+    #   - Higher market impact (especially for altcoins)
+    #   - Variable tick sizes per exchange filter
+    #   - 24/7 trading with liquidity seasonality
+    #
+    # Calibration basis:
+    #   - BTC/ETH majors: ~3-5 bps spread
+    #   - Altcoins: ~5-15 bps spread
+    #   - Impact coefficient from Binance order flow studies
+    # ─────────────────────────────────────────────────────────────────────────
+    crypto:
+      spread_bps: 5.0              # Default half-spread in basis points
+      impact_coef: 0.10            # Higher impact than equities
+      volatility_scale: 1.0        # Volatility adjustment multiplier
+      min_slippage_bps: 1.0        # Minimum slippage floor
+      max_slippage_bps: 500.0      # Safety cap for flash crashes
+      # Per-tier adjustments (optional override by liquidity)
+      tiers:
+        major:                     # BTC, ETH
+          spread_bps: 3.0
+          impact_coef: 0.08
+        altcoin_large:             # Top 20 by volume
+          spread_bps: 5.0
+          impact_coef: 0.10
+        altcoin_small:             # Long-tail altcoins
+          spread_bps: 10.0
+          impact_coef: 0.15
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Crypto Futures Profile (Binance Futures, etc.)
+    # ─────────────────────────────────────────────────────────────────────────
+    # Characteristics:
+    #   - Similar to spot but with leverage considerations
+    #   - Funding rate impact on holding costs
+    #   - Higher volume typically means tighter spreads
+    # ─────────────────────────────────────────────────────────────────────────
+    crypto_futures:
+      spread_bps: 4.0              # Slightly tighter than spot
+      impact_coef: 0.09
+      volatility_scale: 1.2        # Higher vol adjustment for futures
+      min_slippage_bps: 0.5
+      max_slippage_bps: 500.0
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Default fallback profile
+    # ─────────────────────────────────────────────────────────────────────────
+    default:
+      spread_bps: 5.0
+      impact_coef: 0.10
+      volatility_scale: 1.0
+      min_slippage_bps: 0.0
+      max_slippage_bps: 500.0

@@ -505,6 +505,34 @@ except Exception:
         compute_spread_bps_from_quotes = None  # type: ignore
         mid_from_quotes = None  # type: ignore
 
+# --- Импорт провайдеров исполнения (Phase 4.3: Multi-Exchange Support) ---
+try:
+    from execution_providers import (
+        AssetClass as EP_AssetClass,
+        SlippageProvider,
+        FeeProvider,
+        FillProvider,
+        StatisticalSlippageProvider,
+        CryptoFeeProvider,
+        EquityFeeProvider,
+        create_providers_from_asset_class,
+        wrap_legacy_slippage_config,
+        wrap_legacy_fees_model,
+    )
+    _HAS_EXECUTION_PROVIDERS = True
+except Exception:  # pragma: no cover - fallback for isolated testing
+    _HAS_EXECUTION_PROVIDERS = False
+    EP_AssetClass = None  # type: ignore
+    SlippageProvider = None  # type: ignore
+    FeeProvider = None  # type: ignore
+    FillProvider = None  # type: ignore
+    StatisticalSlippageProvider = None  # type: ignore
+    CryptoFeeProvider = None  # type: ignore
+    EquityFeeProvider = None  # type: ignore
+    create_providers_from_asset_class = None  # type: ignore
+    wrap_legacy_slippage_config = None  # type: ignore
+    wrap_legacy_fees_model = None  # type: ignore
+
 # --- Импорт исполнителей ---
 try:
     from sim.execution_algos import (
@@ -1837,6 +1865,17 @@ class ExecutionSimulator:
         pnl_config: Optional[dict] = None,
         risk_config: Optional[dict] = None,
         logging_config: Optional[dict] = None,
+        # ═══════════════════════════════════════════════════════════════════════
+        # Phase 4.3: Multi-Exchange Provider Integration
+        # ═══════════════════════════════════════════════════════════════════════
+        # These providers allow pluggable execution models for different
+        # asset classes (crypto, equity). When None, falls back to legacy logic.
+        # ═══════════════════════════════════════════════════════════════════════
+        fee_provider: Optional["FeeProvider"] = None,
+        slippage_provider: Optional["SlippageProvider"] = None,
+        fill_provider: Optional["FillProvider"] = None,
+        asset_class: Optional[str] = None,  # "crypto", "equity", "futures"
+        # ═══════════════════════════════════════════════════════════════════════
         liquidity_seasonality: Optional[Sequence[float]] = None,
         spread_seasonality: Optional[Sequence[float]] = None,
         liquidity_seasonality_path: Optional[str] = None,
@@ -2895,6 +2934,60 @@ class ExecutionSimulator:
             else None
         )
         self._step_counter: int = 0
+
+        # ═══════════════════════════════════════════════════════════════════════
+        # Phase 4.3: Multi-Exchange Provider Initialization
+        # ═══════════════════════════════════════════════════════════════════════
+        # Store providers for fee/slippage calculation. When provider is None,
+        # legacy calculation logic is used (100% backward compatible).
+        # ═══════════════════════════════════════════════════════════════════════
+        self._fee_provider: Optional[Any] = fee_provider
+        self._slippage_provider: Optional[Any] = slippage_provider
+        self._fill_provider: Optional[Any] = fill_provider
+        self._asset_class_str: Optional[str] = asset_class
+
+        # Resolve asset class from string to enum (if execution_providers available)
+        self._asset_class_enum: Optional[Any] = None
+        if asset_class is not None and _HAS_EXECUTION_PROVIDERS and EP_AssetClass is not None:
+            asset_class_lower = str(asset_class).lower()
+            if asset_class_lower in ("equity", "stock", "stocks"):
+                self._asset_class_enum = EP_AssetClass.EQUITY
+            elif asset_class_lower in ("crypto", "cryptocurrency"):
+                self._asset_class_enum = EP_AssetClass.CRYPTO
+            elif asset_class_lower in ("futures", "perp", "perpetual"):
+                self._asset_class_enum = EP_AssetClass.FUTURES
+            else:
+                self._asset_class_enum = EP_AssetClass.CRYPTO  # Default to crypto
+
+        # Auto-create providers if asset_class specified but no provider given
+        if (
+            self._asset_class_enum is not None
+            and _HAS_EXECUTION_PROVIDERS
+            and create_providers_from_asset_class is not None
+        ):
+            if self._slippage_provider is None or self._fee_provider is None:
+                auto_slippage, auto_fees = create_providers_from_asset_class(
+                    self._asset_class_enum,
+                    slippage_config=slippage_config,
+                    fee_config=fees_config,
+                )
+                if self._slippage_provider is None:
+                    self._slippage_provider = auto_slippage
+                    logger.debug(
+                        "Auto-created slippage provider for asset_class=%s: spread_bps=%.1f, impact_coef=%.3f",
+                        asset_class,
+                        getattr(auto_slippage, "spread_bps", 0.0),
+                        getattr(auto_slippage, "impact_coef", 0.0),
+                    )
+                if self._fee_provider is None:
+                    self._fee_provider = auto_fees
+                    logger.debug(
+                        "Auto-created fee provider for asset_class=%s: %s",
+                        asset_class,
+                        type(auto_fees).__name__,
+                    )
+
+        # ═══════════════════════════════════════════════════════════════════════
 
         # журнал исполненных трейдов для валидации PnL
         self._trade_log: List[ExecTrade] = []
@@ -5912,6 +6005,107 @@ class ExecutionSimulator:
             return float(pre_slip_price)
         return float(candidate)
 
+    def _compute_slippage_bps_with_provider(
+        self,
+        *,
+        spread_bps: float,
+        size: float,
+        liquidity: float,
+        vol_factor: float,
+        side: str = "BUY",
+        mid_price: Optional[float] = None,
+        adv: Optional[float] = None,
+    ) -> Optional[float]:
+        """
+        Compute slippage in basis points using provider or legacy fallback.
+
+        Phase 4.3: Multi-Exchange Support
+        ==================================
+        If a slippage_provider is configured, uses it for slippage calculation.
+        This enables asset-class-specific slippage models (crypto vs equity).
+        Falls back to legacy estimate_slippage_bps for backward compatibility.
+
+        Args:
+            spread_bps: Current spread in basis points
+            size: Order size (quantity)
+            liquidity: Available liquidity
+            vol_factor: Volatility scaling factor
+            side: Order side ("BUY" or "SELL")
+            mid_price: Mid-market price (for notional calculation)
+            adv: Average daily volume (for participation ratio)
+
+        Returns:
+            Expected slippage in basis points, or None if calculation fails
+        """
+        # ═══════════════════════════════════════════════════════════════════════
+        # Try SlippageProvider first (Phase 4.3)
+        # ═══════════════════════════════════════════════════════════════════════
+        slippage_provider = getattr(self, "_slippage_provider", None)
+        if slippage_provider is not None and _HAS_EXECUTION_PROVIDERS:
+            compute_fn = getattr(slippage_provider, "compute_slippage_bps", None)
+            if callable(compute_fn):
+                try:
+                    # Import Order and MarketState from execution_providers
+                    from execution_providers import Order as EPOrder, MarketState as EPMarketState
+
+                    # Calculate participation ratio
+                    participation = 0.001  # Default small participation
+                    if adv is not None and adv > 0:
+                        notional = abs(size * (mid_price or 1.0))
+                        participation = notional / adv
+                    elif liquidity is not None and liquidity > 0:
+                        participation = abs(size) / liquidity
+
+                    # Create Order and MarketState for provider
+                    order = EPOrder(
+                        symbol=getattr(self, "symbol", ""),
+                        side=str(side).upper(),
+                        qty=abs(size),
+                        order_type="MARKET",
+                    )
+                    market = EPMarketState(
+                        timestamp=int(now_ms()),
+                        spread_bps=spread_bps,
+                        mid_price=mid_price,
+                        volatility=vol_factor if vol_factor != 1.0 else None,
+                        adv=adv,
+                    )
+
+                    slippage = compute_fn(order, market, participation)
+                    if slippage is not None and math.isfinite(slippage):
+                        if logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(
+                                "Slippage from provider: size=%.4f participation=%.6f slippage_bps=%.2f",
+                                size,
+                                participation,
+                                slippage,
+                            )
+                        return float(slippage)
+                except Exception as e:
+                    logger.debug(
+                        "Slippage provider compute failed, falling back to legacy: %s",
+                        e,
+                    )
+                    # Fall through to legacy
+
+        # ═══════════════════════════════════════════════════════════════════════
+        # Legacy slippage calculation (backward compatible)
+        # ═══════════════════════════════════════════════════════════════════════
+        if estimate_slippage_bps is not None:
+            try:
+                fallback_slip = estimate_slippage_bps(
+                    spread_bps=spread_bps,
+                    size=size,
+                    liquidity=liquidity,
+                    vol_factor=vol_factor,
+                    cfg=getattr(self, "slippage_cfg", None),
+                )
+                return fallback_slip
+            except Exception as e:
+                logger.debug("Legacy estimate_slippage_bps failed: %s", e)
+
+        return None
+
     def _compute_trade_fee(
         self,
         *,
@@ -5940,6 +6134,44 @@ class ExecutionSimulator:
         if notional <= 0.0:
             return 0.0
 
+        # ═══════════════════════════════════════════════════════════════════════
+        # Phase 4.3: Use FeeProvider if available (Multi-Exchange Support)
+        # ═══════════════════════════════════════════════════════════════════════
+        # If a fee_provider is configured, use it for fee calculation.
+        # This enables asset-class-specific fee models (crypto vs equity).
+        # Falls back to legacy Binance logic for 100% backward compatibility.
+        # ═══════════════════════════════════════════════════════════════════════
+        fee_provider = getattr(self, "_fee_provider", None)
+        if fee_provider is not None:
+            compute_fee_fn = getattr(fee_provider, "compute_fee", None)
+            if callable(compute_fee_fn):
+                try:
+                    fee_from_provider = compute_fee_fn(
+                        notional=notional,
+                        side=side_key,
+                        liquidity=liquidity_key,
+                        qty=abs(qty_val),
+                    )
+                    if fee_from_provider is not None and math.isfinite(fee_from_provider):
+                        if logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(
+                                "Fee from provider: notional=%.2f side=%s liquidity=%s fee=%.6f",
+                                notional,
+                                side_key,
+                                liquidity_key,
+                                fee_from_provider,
+                            )
+                        return float(fee_from_provider)
+                except Exception as e:
+                    logger.warning(
+                        "Fee provider compute_fee failed, falling back to legacy: %s",
+                        e,
+                    )
+                    # Fall through to legacy logic
+
+        # ═══════════════════════════════════════════════════════════════════════
+        # Legacy Fee Calculation (Binance-style)
+        # ═══════════════════════════════════════════════════════════════════════
         symbol_value: Optional[str] = getattr(self, "symbol", None)
         quote_currency = self._resolve_quote_currency(symbol_value)
         is_maker = liquidity_key == "maker"

@@ -573,6 +573,150 @@ class StatisticalSlippageProvider:
             "impact_cost": impact_cost,
         }
 
+    @classmethod
+    def from_config(
+        cls,
+        config: Union[Mapping[str, Any], Any],
+        asset_class: Optional[AssetClass] = None,
+    ) -> "StatisticalSlippageProvider":
+        """
+        Create SlippageProvider from configuration dict or object.
+
+        Supports loading from:
+        - Dict/mapping with slippage parameters
+        - Pydantic config objects
+        - YAML profile structure (profiles.equity, profiles.crypto)
+
+        Args:
+            config: Configuration dict or object
+            asset_class: Optional asset class for profile selection
+
+        Returns:
+            StatisticalSlippageProvider instance
+        """
+        if config is None:
+            # Return asset-class-specific defaults
+            if asset_class == AssetClass.EQUITY:
+                return cls(impact_coef=0.05, spread_bps=2.0)
+            return cls()  # Crypto defaults
+
+        # Extract parameters from config
+        params: Dict[str, Any] = {}
+
+        def _extract_value(cfg: Any, *keys: str, default: Any = None) -> Any:
+            """Extract value from config trying multiple key names."""
+            for key in keys:
+                if isinstance(cfg, Mapping) and key in cfg:
+                    return cfg[key]
+                if hasattr(cfg, key):
+                    return getattr(cfg, key)
+            return default
+
+        # Check for profile-based config (profiles.equity or profiles.crypto)
+        profiles = _extract_value(config, "profiles")
+        if profiles is not None:
+            profile_name = None
+            if asset_class == AssetClass.EQUITY:
+                profile_name = "equity"
+            elif asset_class == AssetClass.CRYPTO:
+                profile_name = "crypto"
+            elif asset_class == AssetClass.FUTURES:
+                profile_name = "crypto_futures"
+
+            if profile_name:
+                profile = _extract_value(profiles, profile_name, "default")
+                if profile is not None:
+                    config = profile
+
+        # Extract slippage parameters
+        params["impact_coef"] = float(
+            _extract_value(config, "impact_coef", "k", "impact_coefficient", default=0.1)
+        )
+        params["spread_bps"] = float(
+            _extract_value(config, "spread_bps", "default_spread_bps", "half_spread_bps", default=5.0)
+        )
+        params["volatility_scale"] = float(
+            _extract_value(config, "volatility_scale", "vol_scale", default=1.0)
+        )
+        params["min_slippage_bps"] = float(
+            _extract_value(config, "min_slippage_bps", "min_bps", default=0.0)
+        )
+        params["max_slippage_bps"] = float(
+            _extract_value(config, "max_slippage_bps", "max_bps", default=500.0)
+        )
+
+        return cls(**params)
+
+    @classmethod
+    def from_profile(
+        cls,
+        profile_name: str,
+        profiles_config: Optional[Mapping[str, Any]] = None,
+    ) -> "StatisticalSlippageProvider":
+        """
+        Create SlippageProvider from named profile.
+
+        Args:
+            profile_name: Profile name ("equity", "crypto", "crypto_futures", etc.)
+            profiles_config: Optional profiles configuration dict
+
+        Returns:
+            StatisticalSlippageProvider instance
+        """
+        # Default profiles (calibrated values)
+        default_profiles = {
+            "equity": {
+                "spread_bps": 2.0,
+                "impact_coef": 0.05,
+                "volatility_scale": 1.0,
+                "min_slippage_bps": 0.5,
+                "max_slippage_bps": 200.0,
+            },
+            "crypto": {
+                "spread_bps": 5.0,
+                "impact_coef": 0.10,
+                "volatility_scale": 1.0,
+                "min_slippage_bps": 1.0,
+                "max_slippage_bps": 500.0,
+            },
+            "crypto_futures": {
+                "spread_bps": 4.0,
+                "impact_coef": 0.09,
+                "volatility_scale": 1.2,
+                "min_slippage_bps": 0.5,
+                "max_slippage_bps": 500.0,
+            },
+            "default": {
+                "spread_bps": 5.0,
+                "impact_coef": 0.10,
+                "volatility_scale": 1.0,
+                "min_slippage_bps": 0.0,
+                "max_slippage_bps": 500.0,
+            },
+        }
+
+        # Merge with provided profiles
+        if profiles_config:
+            for name, profile in profiles_config.items():
+                if name in default_profiles and isinstance(profile, Mapping):
+                    default_profiles[name].update(profile)
+                elif isinstance(profile, Mapping):
+                    default_profiles[name] = dict(profile)
+
+        profile = default_profiles.get(profile_name, default_profiles["default"])
+
+        # Filter out unknown keys (e.g., 'tiers' from YAML config)
+        valid_keys = {
+            "impact_coef",
+            "spread_bps",
+            "volatility_scale",
+            "min_slippage_bps",
+            "max_slippage_bps",
+        }
+        filtered_profile = {k: v for k, v in profile.items() if k in valid_keys}
+
+        return cls(**filtered_profile)
+
 
 class OHLCVFillProvider:
     """
@@ -847,6 +991,52 @@ class CryptoFeeProvider:
         fee = abs(notional) * rate_bps / 10000.0
         return float(fee)
 
+    @classmethod
+    def from_config(
+        cls,
+        config: Union[Mapping[str, Any], Any, None],
+    ) -> "CryptoFeeProvider":
+        """
+        Create CryptoFeeProvider from configuration dict or object.
+
+        Args:
+            config: Configuration dict or object with fee parameters
+
+        Returns:
+            CryptoFeeProvider instance
+        """
+        if config is None:
+            return cls()
+
+        def _extract_value(cfg: Any, *keys: str, default: Any = None) -> Any:
+            """Extract value from config trying multiple key names."""
+            for key in keys:
+                if isinstance(cfg, Mapping) and key in cfg:
+                    return cfg[key]
+                if hasattr(cfg, key):
+                    return getattr(cfg, key)
+            return default
+
+        maker_bps = _extract_value(
+            config, "maker_bps", "maker_rate_bps", "maker_fee_bps", default=2.0
+        )
+        taker_bps = _extract_value(
+            config, "taker_bps", "taker_rate_bps", "taker_fee_bps", default=4.0
+        )
+        discount_rate = _extract_value(
+            config, "discount_rate", "bnb_discount", default=0.75
+        )
+        use_discount = _extract_value(
+            config, "use_discount", "use_bnb_discount", "bnb_settlement", default=False
+        )
+
+        return cls(
+            maker_bps=float(maker_bps),
+            taker_bps=float(taker_bps),
+            discount_rate=float(discount_rate),
+            use_discount=bool(use_discount),
+        )
+
 
 class EquityFeeProvider:
     """
@@ -954,6 +1144,52 @@ class EquityFeeProvider:
             "taf_fee": round(taf_fee, 4),
             "total": round(sec_fee + taf_fee, 4),
         }
+
+    @classmethod
+    def from_config(
+        cls,
+        config: Union[Mapping[str, Any], Any, None],
+    ) -> "EquityFeeProvider":
+        """
+        Create EquityFeeProvider from configuration dict or object.
+
+        Args:
+            config: Configuration dict or object with fee parameters
+
+        Returns:
+            EquityFeeProvider instance
+        """
+        if config is None:
+            return cls()
+
+        def _extract_value(cfg: Any, *keys: str, default: Any = None) -> Any:
+            """Extract value from config trying multiple key names."""
+            for key in keys:
+                if isinstance(cfg, Mapping) and key in cfg:
+                    return cfg[key]
+                if hasattr(cfg, key):
+                    return getattr(cfg, key)
+            return default
+
+        sec_fee_rate = _extract_value(
+            config, "sec_fee_rate", "sec_fee_per_dollar", "sec_fee", default=None
+        )
+        taf_fee_rate = _extract_value(
+            config, "taf_fee_rate", "taf_fee_per_share", "taf_fee", default=None
+        )
+        taf_max_fee = _extract_value(
+            config, "taf_max_fee", "taf_max", "max_taf", default=None
+        )
+        include_regulatory = _extract_value(
+            config, "include_regulatory", "regulatory_fees", "include_fees", default=True
+        )
+
+        return cls(
+            sec_fee_rate=float(sec_fee_rate) if sec_fee_rate is not None else None,
+            taf_fee_rate=float(taf_fee_rate) if taf_fee_rate is not None else None,
+            taf_max_fee=float(taf_max_fee) if taf_max_fee is not None else None,
+            include_regulatory=bool(include_regulatory),
+        )
 
 
 # =============================================================================
@@ -1325,6 +1561,113 @@ def create_execution_provider(
         fee_provider=kwargs.pop("fee_provider", None),
         **kwargs,
     )
+
+
+def load_slippage_profile(
+    profile_name: str,
+    config_path: Optional[str] = None,
+) -> StatisticalSlippageProvider:
+    """
+    Load slippage provider from YAML config profile.
+
+    Loads calibrated slippage parameters from configs/slippage.yaml
+    or a custom config file.
+
+    Args:
+        profile_name: Profile name ("equity", "crypto", "crypto_futures", etc.)
+        config_path: Optional path to YAML config file
+
+    Returns:
+        StatisticalSlippageProvider instance
+
+    Example:
+        >>> provider = load_slippage_profile("equity")
+        >>> provider.spread_bps  # 2.0
+        >>> provider.impact_coef  # 0.05
+    """
+    import os
+
+    # Default config path
+    if config_path is None:
+        config_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "configs",
+            "slippage.yaml",
+        )
+        if not os.path.exists(config_path):
+            # Try relative to current working directory
+            config_path = "configs/slippage.yaml"
+
+    profiles_config: Optional[Mapping[str, Any]] = None
+
+    if os.path.exists(config_path):
+        try:
+            import yaml
+
+            with open(config_path, "r", encoding="utf-8") as f:
+                config = yaml.safe_load(f)
+
+            if config and isinstance(config, Mapping):
+                slippage_cfg = config.get("slippage", config)
+                if isinstance(slippage_cfg, Mapping):
+                    profiles_config = slippage_cfg.get("profiles")
+        except ImportError:
+            logger.warning("PyYAML not installed, using default profiles")
+        except Exception as e:
+            logger.warning("Failed to load slippage config from %s: %s", config_path, e)
+
+    return StatisticalSlippageProvider.from_profile(profile_name, profiles_config)
+
+
+def create_providers_from_asset_class(
+    asset_class: AssetClass,
+    slippage_config: Optional[Mapping[str, Any]] = None,
+    fee_config: Optional[Mapping[str, Any]] = None,
+) -> Tuple[SlippageProvider, FeeProvider]:
+    """
+    Create slippage and fee providers based on asset class.
+
+    Convenience function to create correctly configured providers
+    for a given asset class.
+
+    Args:
+        asset_class: Asset class (CRYPTO, EQUITY, FUTURES)
+        slippage_config: Optional slippage configuration override
+        fee_config: Optional fee configuration override
+
+    Returns:
+        Tuple of (SlippageProvider, FeeProvider)
+
+    Example:
+        >>> slippage, fees = create_providers_from_asset_class(AssetClass.EQUITY)
+        >>> slippage.spread_bps  # 2.0 (equity default)
+    """
+    # Slippage provider
+    if slippage_config is not None:
+        slippage = StatisticalSlippageProvider.from_config(slippage_config, asset_class)
+    else:
+        profile_name = {
+            AssetClass.EQUITY: "equity",
+            AssetClass.CRYPTO: "crypto",
+            AssetClass.FUTURES: "crypto_futures",
+        }.get(asset_class, "default")
+        slippage = StatisticalSlippageProvider.from_profile(profile_name)
+
+    # Fee provider
+    if asset_class == AssetClass.EQUITY:
+        fees: FeeProvider = (
+            EquityFeeProvider.from_config(fee_config)
+            if fee_config
+            else EquityFeeProvider()
+        )
+    else:
+        fees = (
+            CryptoFeeProvider.from_config(fee_config)
+            if fee_config
+            else CryptoFeeProvider()
+        )
+
+    return slippage, fees
 
 
 # =============================================================================
