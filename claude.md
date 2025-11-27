@@ -37,6 +37,11 @@
 | Fill probability models | `lob/fill_probability.py` | `pytest tests/test_fill_probability_queue_value.py` |
 | Queue value (Moallemi) | `lob/queue_value.py` | `pytest tests/test_fill_probability_queue_value.py::TestQueueValueModel` |
 | LOB calibration | `lob/calibration.py` | `pytest tests/test_fill_probability_queue_value.py::TestCalibrationPipeline` |
+| Market impact models | `lob/market_impact.py` | `pytest tests/test_market_impact.py::TestAlmgrenChrissModel` |
+| Impact effects on LOB | `lob/impact_effects.py` | `pytest tests/test_market_impact.py::TestImpactEffects` |
+| Impact calibration | `lob/impact_calibration.py` | `pytest tests/test_market_impact.py::TestImpactCalibration` |
+| Latency simulation | `lob/latency_model.py` | `pytest tests/test_lob_latency.py::TestLatencyModel` |
+| Event scheduler | `lob/event_scheduler.py` | `pytest tests/test_lob_latency.py::TestEventScheduler` |
 
 ### 🔍 Quick File Reference
 
@@ -796,6 +801,21 @@ Phase 10 добавляет высокоточную симуляцию order bo
    - Queue Value computation (Moallemi & Yuan): `V = P(fill) * spread/2 - adverse_selection`
    - Calibration pipeline from historical LOB data (`lob/calibration.py`)
 
+4. **Stage 4: Market Impact Models** (`lob/market_impact.py`, `lob/impact_effects.py`)
+   - Kyle (1985) Lambda model: `Δp = λ * sign(x) * |x|`
+   - Almgren-Chriss (2001): `temp = η * σ * (Q/V)^0.5`, `perm = γ * (Q/V)`
+   - Gatheral (2010) transient impact with power-law decay: `G(t) = (1 + t/τ)^(-β)`
+   - Impact effects on LOB: quote shifting, liquidity reaction, momentum detection
+   - Calibration from historical trade data (`lob/impact_calibration.py`)
+
+5. **Stage 5: Latency Simulation** (`lob/latency_model.py`, `lob/event_scheduler.py`)
+   - Realistic latency distributions: Log-normal, Pareto (heavy tail), Gamma
+   - Separate feed/order/exchange/fill latencies
+   - Latency profiles: Co-located (~10-50μs), Proximity (~100-500μs), Retail (~1-10ms), Institutional (~200μs-2ms)
+   - Event scheduler with priority queue and race condition detection
+   - Time-of-day seasonality adjustments
+   - Volatility-adjusted latency
+
 ### Архитектура
 
 ```
@@ -809,6 +829,11 @@ lob/
 ├── fill_probability.py   # Poisson, Queue-Reactive, Historical models (Stage 3)
 ├── queue_value.py        # Queue value computation (Moallemi & Yuan) (Stage 3)
 ├── calibration.py        # Model calibration from historical data (Stage 3)
+├── market_impact.py      # Kyle, Almgren-Chriss, Gatheral models (Stage 4)
+├── impact_effects.py     # Quote shifting, liquidity reaction (Stage 4)
+├── impact_calibration.py # Impact parameter estimation (Stage 4)
+├── latency_model.py      # Realistic latency simulation (Stage 5)
+├── event_scheduler.py    # Event ordering with priority queue (Stage 5)
 └── __init__.py           # Public API exports
 ```
 
@@ -824,6 +849,16 @@ lob/
 | `QueueReactiveModel` | Fill probability с intensity = f(queue, spread, vol) |
 | `QueueValueModel` | Queue position value (Moallemi & Yuan) |
 | `CalibrationPipeline` | MLE parameter fitting from historical data |
+| `AlmgrenChrissModel` | Square-root temporary + linear permanent impact (Stage 4) |
+| `GatheralModel` | Transient impact with power-law decay (Stage 4) |
+| `KyleLambdaModel` | Kyle (1985) linear price impact model (Stage 4) |
+| `ImpactEffects` | Quote shifting, liquidity reaction, momentum (Stage 4) |
+| `LOBImpactSimulator` | Complete trade impact simulation workflow (Stage 4) |
+| `ImpactCalibrationPipeline` | OLS/MLE calibration for impact params (Stage 4) |
+| `LatencyModel` | Realistic latency simulation with profiles (Stage 5) |
+| `LatencySampler` | Distribution-based latency sampling (Stage 5) |
+| `EventScheduler` | Event ordering with priority queue (Stage 5) |
+| `SimulationClock` | Time tracking with latency awareness (Stage 5) |
 
 ### Self-Trade Prevention (STP)
 
@@ -948,6 +983,125 @@ results = pipeline.run_calibration()
 calibrated_model = pipeline.get_best_model("queue_reactive")
 ```
 
+### Stage 4: Market Impact Models
+
+```python
+from lob import (
+    AlmgrenChrissModel,
+    GatheralModel,
+    ImpactParameters,
+    ImpactEffects,
+    LOBImpactSimulator,
+    create_impact_model,
+    ImpactCalibrationPipeline,
+    TradeObservation,
+    CalibrationDataset,
+)
+
+# 1. Create impact model
+params = ImpactParameters.for_equity()  # or .for_crypto()
+model = AlmgrenChrissModel(params=params)
+
+# 2. Compute market impact
+result = model.compute_total_impact(
+    order_qty=10000,
+    adv=10_000_000,
+    volatility=0.02,
+    mid_price=150.0,
+)
+print(f"Temporary: {result.temporary_impact_bps:.2f} bps")
+print(f"Permanent: {result.permanent_impact_bps:.2f} bps")
+print(f"Impact cost: ${result.impact_cost:.2f}")
+
+# 3. Simulate impact effects on LOB
+simulator = LOBImpactSimulator(impact_model=model)
+impact, quote_shift, liquidity = simulator.simulate_trade_impact(
+    order_book=order_book,
+    order=limit_order,
+    fill=fill,
+    adv=10_000_000,
+    volatility=0.02,
+)
+print(f"New bid: {quote_shift.new_bid}, New ask: {quote_shift.new_ask}")
+
+# 4. Calibrate from historical trades
+pipeline = ImpactCalibrationPipeline()
+dataset = CalibrationDataset(avg_adv=10_000_000, avg_volatility=0.02)
+for trade in historical_trades:
+    obs = TradeObservation(
+        timestamp_ms=trade.ts,
+        price=trade.price,
+        qty=trade.qty,
+        side=1 if trade.is_buy else -1,
+        adv=dataset.avg_adv,
+        pre_trade_mid=trade.pre_mid,
+        post_trade_mid=trade.post_mid,
+    )
+    dataset.add_observation(obs)
+results = pipeline.calibrate_all(dataset)
+calibrated_model = pipeline.create_calibrated_model()
+```
+
+### Stage 5: Latency Simulation
+
+```python
+from lob import (
+    LatencyModel,
+    LatencyProfile,
+    EventScheduler,
+    SimulationClock,
+    MarketDataEvent,
+    create_latency_model,
+    create_event_scheduler,
+)
+
+# 1. Create latency model from profile
+model = LatencyModel.from_profile(LatencyProfile.INSTITUTIONAL, seed=42)
+# Or: model = create_latency_model("colocated")
+
+# 2. Sample latencies (returns nanoseconds)
+feed_latency = model.sample_feed_latency()
+order_latency = model.sample_order_latency()
+exchange_latency = model.sample_exchange_latency()
+fill_latency = model.sample_fill_latency()
+round_trip = model.sample_round_trip()
+
+print(f"Feed: {feed_latency/1000:.1f}us, Order: {order_latency/1000:.1f}us")
+print(f"Round-trip: {round_trip/1000:.1f}us")
+
+# 3. Create event scheduler
+scheduler = create_event_scheduler("institutional", seed=42)
+
+# Schedule market data event
+event = MarketDataEvent(
+    symbol="AAPL",
+    exchange_time_ns=1_000_000,
+    bid_price=150.0,
+    ask_price=150.05,
+)
+our_receive_time = scheduler.schedule_market_data(event, exchange_time_ns=1_000_000)
+
+# Schedule our order
+from lob import LimitOrder, Side
+order = LimitOrder(
+    order_id="order_1",
+    price=150.0,
+    qty=100.0,
+    remaining_qty=100.0,
+    timestamp_ns=1_000_000,
+    side=Side.BUY,
+)
+arrival_time = scheduler.schedule_order_arrival(order, our_send_time_ns=1_000_000)
+
+# Process all events in timestamp order
+for event in scheduler:
+    print(f"Event: {event.event_type.name} at {event.timestamp_ns}ns")
+
+# 4. Get latency statistics
+stats = model.stats()
+print(f"Feed p95: {stats['feed']['p95_us']:.1f}us")
+```
+
 ### Тестирование
 
 ```bash
@@ -960,11 +1114,17 @@ pytest tests/test_matching_engine.py -v
 # Stage 3 тесты (fill probability, queue value, calibration)
 pytest tests/test_fill_probability_queue_value.py -v
 
+# Stage 4 тесты (market impact, effects, calibration)
+pytest tests/test_market_impact.py -v
+
+# Stage 5 тесты (latency simulation, event scheduler)
+pytest tests/test_lob_latency.py -v
+
 # Все LOB тесты
-pytest tests/test_lob*.py tests/test_matching_engine.py tests/test_fill_probability_queue_value.py -v
+pytest tests/test_lob*.py tests/test_matching_engine.py tests/test_fill_probability_queue_value.py tests/test_market_impact.py -v
 ```
 
-**Покрытие**: 244 теста (106 Stage 1 + 72 Stage 2 + 66 Stage 3)
+**Покрытие**: 381 тест (106 Stage 1 + 72 Stage 2 + 66 Stage 3 + 57 Stage 4 + 66 Stage 5)
 
 ### Ключевые файлы
 
@@ -977,8 +1137,15 @@ pytest tests/test_lob*.py tests/test_matching_engine.py tests/test_fill_probabil
 | `lob/fill_probability.py` | Poisson, Queue-Reactive, Historical models |
 | `lob/queue_value.py` | Queue value computation (Moallemi & Yuan) |
 | `lob/calibration.py` | MLE calibration from historical data |
+| `lob/market_impact.py` | Kyle, Almgren-Chriss, Gatheral impact models |
+| `lob/impact_effects.py` | Quote shifting, liquidity reaction, momentum |
+| `lob/impact_calibration.py` | OLS/grid search calibration for impact params |
 | `tests/test_matching_engine.py` | 72 Stage 2 tests |
 | `tests/test_fill_probability_queue_value.py` | 66 Stage 3 tests |
+| `tests/test_market_impact.py` | 57 Stage 4 tests |
+| `lob/latency_model.py` | Realistic latency simulation (Stage 5) |
+| `lob/event_scheduler.py` | Event ordering with priority queue (Stage 5) |
+| `tests/test_lob_latency.py` | 66 Stage 5 tests |
 
 ### Референсы
 
@@ -988,6 +1155,11 @@ pytest tests/test_lob*.py tests/test_matching_engine.py tests/test_fill_probabil
 - FIX Protocol: Order Status semantics
 - Huang et al. (2015): Queue-Reactive Model
 - Moallemi & Yuan (2017): Queue Position Valuation
+- Kyle (1985): "Continuous Auctions and Insider Trading"
+- Almgren & Chriss (2001): "Optimal Execution of Portfolio Transactions"
+- Gatheral (2010): "No-Dynamic-Arbitrage and Market Impact"
+- Almgren et al. (2005): "Direct Estimation of Equity Market Impact"
+- hftbacktest: High-frequency trading backtesting framework (latency modeling reference)
 
 ---
 
@@ -2508,5 +2680,5 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-11-27
-**Версия документации**: 4.9 (Phase 10: L3 LOB Simulation - Stage 3: Fill Probability & Queue Value)
+**Версия документации**: 5.1 (Phase 10: L3 LOB Simulation - Stage 5: Latency Simulation & Event Scheduler)
 **Статус**: ✅ Production Ready (все критические исправления применены, 53 задокументированных "НЕ БАГИ")

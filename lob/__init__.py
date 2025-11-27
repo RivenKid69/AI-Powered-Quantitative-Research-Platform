@@ -16,6 +16,8 @@ supporting full market microstructure modeling including:
 - Market impact models (Kyle, Almgren-Chriss, Gatheral)
 - Impact effects on LOB state (quote shifting, liquidity reaction)
 - Impact calibration from historical trade data
+- Latency simulation (feed/order/exchange/fill latencies)
+- Event scheduling with priority queue and race condition detection
 
 Architecture:
     This module is SEPARATE from the Cython LOB implementations (fast_lob.pyx,
@@ -27,6 +29,7 @@ Stage 1 (v1.0): Data structures, parsers, state manager
 Stage 2 (v2.0): Matching engine, queue tracker, order manager
 Stage 3 (v3.0): Fill probability models, queue value, calibration
 Stage 4 (v4.0): Market impact models, effects, impact calibration
+Stage 5 (v5.0): Latency simulation, event scheduler
 
 Usage:
     from lob import OrderBook, LimitOrder, PriceLevel
@@ -45,6 +48,12 @@ Usage:
     )
     from lob.impact_effects import ImpactEffects, LOBImpactSimulator
     from lob.impact_calibration import ImpactCalibrationPipeline
+    from lob.latency_model import (
+        LatencyModel, LatencyProfile, create_latency_model
+    )
+    from lob.event_scheduler import (
+        EventScheduler, SimulationClock, create_event_scheduler
+    )
 
 Note:
     This module does NOT affect crypto execution paths. Crypto continues
@@ -193,6 +202,31 @@ from lob.impact_calibration import (
     calibrate_from_trades as calibrate_impact_from_trades,
 )
 
+# Stage 5: Latency Simulation (v5.0)
+from lob.latency_model import (
+    LatencyConfig,
+    LatencyDistribution,
+    LatencyModel,
+    LatencyModelConfig,
+    LatencyProfile,
+    LatencySample,
+    LatencySampler,
+    create_latency_model,
+)
+
+from lob.event_scheduler import (
+    EventScheduler,
+    EventType,
+    FillEvent,
+    MarketDataEvent,
+    OrderSubmission,
+    RaceConditionInfo,
+    ScheduledEvent,
+    SimulationClock,
+    create_event_scheduler,
+    create_simulation_clock,
+)
+
 __all__ = [
     # Core data structures
     "Side",
@@ -310,6 +344,26 @@ __all__ = [
     "create_calibrator",
     "create_impact_calibration_pipeline",
     "calibrate_impact_from_trades",
+    # Latency Simulation (Stage 5)
+    "LatencyConfig",
+    "LatencyDistribution",
+    "LatencyModel",
+    "LatencyModelConfig",
+    "LatencyProfile",
+    "LatencySample",
+    "LatencySampler",
+    "create_latency_model",
+    # Event Scheduler (Stage 5)
+    "EventScheduler",
+    "EventType",
+    "FillEvent",
+    "MarketDataEvent",
+    "OrderSubmission",
+    "RaceConditionInfo",
+    "ScheduledEvent",
+    "SimulationClock",
+    "create_event_scheduler",
+    "create_simulation_clock",
 ]
 
-__version__ = "4.0.0"
+__version__ = "5.0.0"
