@@ -35,10 +35,12 @@ from __future__ import annotations
 import math
 import random
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from enum import IntEnum
 from typing import (
     Callable,
+    Deque,
     Dict,
     Iterator,
     List,
@@ -136,6 +138,31 @@ class DarkPoolConfig:
     partial_fill_max_reduction: float = 0.7  # Max reduction from size impact
     # Impact calculation
     impact_size_normalization: float = 10000.0  # Shares for normalizing impact
+    # History limits (to prevent memory leaks)
+    max_history_size: int = 10000  # Maximum entries in fill/leakage history
+
+    def __post_init__(self) -> None:
+        """Validate configuration parameters."""
+        if self.impact_size_normalization <= 0:
+            raise ValueError(
+                f"impact_size_normalization must be positive, got {self.impact_size_normalization}"
+            )
+        if self.base_fill_probability < 0 or self.base_fill_probability > 1:
+            raise ValueError(
+                f"base_fill_probability must be in [0, 1], got {self.base_fill_probability}"
+            )
+        if self.info_leakage_probability < 0 or self.info_leakage_probability > 1:
+            raise ValueError(
+                f"info_leakage_probability must be in [0, 1], got {self.info_leakage_probability}"
+            )
+        if self.min_order_size < 0:
+            raise ValueError(
+                f"min_order_size must be non-negative, got {self.min_order_size}"
+            )
+        if self.max_history_size <= 0:
+            raise ValueError(
+                f"max_history_size must be positive, got {self.max_history_size}"
+            )
 
 
 @dataclass
@@ -666,6 +693,7 @@ class DarkPoolSimulator:
         seed: Optional[int] = None,
         on_fill: Optional[Callable[[DarkPoolFill], None]] = None,
         on_leakage: Optional[Callable[[InformationLeakage], None]] = None,
+        max_history_size: int = 10000,
     ) -> None:
         """
         Initialize dark pool simulator.
@@ -677,8 +705,10 @@ class DarkPoolSimulator:
             seed: Random seed for reproducibility
             on_fill: Callback when fill occurs
             on_leakage: Callback when leakage detected
+            max_history_size: Maximum entries in fill/leakage history (prevents memory leaks)
         """
         self._rng = random.Random(seed)
+        self._max_history_size = max_history_size
 
         # Initialize venues
         if venues:
@@ -696,10 +726,10 @@ class DarkPoolSimulator:
         self._on_fill = on_fill
         self._on_leakage = on_leakage
 
-        # State
+        # State with bounded history (prevents memory leaks in long simulations)
         self._state = DarkPoolState()
-        self._leakage_history: List[InformationLeakage] = []
-        self._fill_history: List[DarkPoolFill] = []
+        self._leakage_history: Deque[InformationLeakage] = deque(maxlen=max_history_size)
+        self._fill_history: Deque[DarkPoolFill] = deque(maxlen=max_history_size)
 
     def attempt_dark_fill(
         self,
@@ -920,8 +950,10 @@ class DarkPoolSimulator:
         current_time = time.time_ns()
         cutoff = current_time - recent_window_ns
 
+        # Convert deque to list for slicing (deque doesn't support slice indexing)
+        leakage_list = list(self._leakage_history)
         recent_leakage = [
-            l for l in self._leakage_history[-10:]
+            l for l in leakage_list[-10:]
             if l.timestamp_ns > cutoff
         ]
 
@@ -950,14 +982,18 @@ class DarkPoolSimulator:
         limit: int = 100,
     ) -> List[InformationLeakage]:
         """Get recent leakage history."""
-        return self._leakage_history[-limit:]
+        # Convert deque slice to list
+        history_list = list(self._leakage_history)
+        return history_list[-limit:] if limit < len(history_list) else history_list
 
     def get_fill_history(
         self,
         limit: int = 100,
     ) -> List[DarkPoolFill]:
         """Get recent fill history."""
-        return self._fill_history[-limit:]
+        # Convert deque slice to list
+        history_list = list(self._fill_history)
+        return history_list[-limit:] if limit < len(history_list) else history_list
 
     def estimate_fill_probability(
         self,
@@ -1024,6 +1060,7 @@ def create_dark_pool_simulator(
     seed: Optional[int] = None,
     on_fill: Optional[Callable[[DarkPoolFill], None]] = None,
     on_leakage: Optional[Callable[[InformationLeakage], None]] = None,
+    max_history_size: int = 10000,
 ) -> DarkPoolSimulator:
     """
     Create a DarkPoolSimulator with configuration.
@@ -1034,6 +1071,7 @@ def create_dark_pool_simulator(
         seed: Random seed for reproducibility
         on_fill: Fill callback
         on_leakage: Leakage callback
+        max_history_size: Maximum entries in fill/leakage history (prevents memory leaks)
 
     Returns:
         Configured DarkPoolSimulator
@@ -1056,6 +1094,7 @@ def create_dark_pool_simulator(
             seed=None,  # Venues already seeded
             on_fill=on_fill,
             on_leakage=on_leakage,
+            max_history_size=max_history_size,
         )
 
     # No custom venues - let simulator create defaults with the seed
@@ -1065,17 +1104,20 @@ def create_dark_pool_simulator(
         seed=seed,
         on_fill=on_fill,
         on_leakage=on_leakage,
+        max_history_size=max_history_size,
     )
 
 
 def create_default_dark_pool_simulator(
     seed: Optional[int] = None,
+    max_history_size: int = 10000,
 ) -> DarkPoolSimulator:
     """
     Create a DarkPoolSimulator with default US equity venues.
 
     Args:
         seed: Random seed for reproducibility
+        max_history_size: Maximum entries in fill/leakage history (prevents memory leaks)
 
     Returns:
         DarkPoolSimulator with default venues
@@ -1084,4 +1126,5 @@ def create_default_dark_pool_simulator(
         venues=None,  # Uses DEFAULT_VENUES
         enable_smart_routing=True,
         seed=seed,
+        max_history_size=max_history_size,
     )

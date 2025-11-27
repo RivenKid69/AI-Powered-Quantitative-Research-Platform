@@ -1263,6 +1263,154 @@ class TestBugFixes:
             if fill1.is_filled and fill2.is_filled:
                 assert fill1.filled_qty == fill2.filled_qty
 
+    def test_config_validation_impact_size_normalization_zero(self):
+        """Test that impact_size_normalization=0 raises ValueError."""
+        # BUG FIX: dark_pool.py:543 - division by zero if impact_size_normalization=0
+        with pytest.raises(ValueError, match="impact_size_normalization must be positive"):
+            DarkPoolConfig(
+                venue_id="INVALID",
+                impact_size_normalization=0.0,
+            )
+
+    def test_config_validation_impact_size_normalization_negative(self):
+        """Test that negative impact_size_normalization raises ValueError."""
+        with pytest.raises(ValueError, match="impact_size_normalization must be positive"):
+            DarkPoolConfig(
+                venue_id="INVALID",
+                impact_size_normalization=-100.0,
+            )
+
+    def test_config_validation_base_fill_probability_invalid(self):
+        """Test that invalid base_fill_probability raises ValueError."""
+        # Too high
+        with pytest.raises(ValueError, match="base_fill_probability must be in"):
+            DarkPoolConfig(
+                venue_id="INVALID",
+                base_fill_probability=1.5,
+            )
+        # Negative
+        with pytest.raises(ValueError, match="base_fill_probability must be in"):
+            DarkPoolConfig(
+                venue_id="INVALID",
+                base_fill_probability=-0.1,
+            )
+
+    def test_config_validation_info_leakage_probability_invalid(self):
+        """Test that invalid info_leakage_probability raises ValueError."""
+        with pytest.raises(ValueError, match="info_leakage_probability must be in"):
+            DarkPoolConfig(
+                venue_id="INVALID",
+                info_leakage_probability=2.0,
+            )
+
+    def test_config_validation_min_order_size_negative(self):
+        """Test that negative min_order_size raises ValueError."""
+        with pytest.raises(ValueError, match="min_order_size must be non-negative"):
+            DarkPoolConfig(
+                venue_id="INVALID",
+                min_order_size=-100.0,
+            )
+
+    def test_config_validation_max_history_size_invalid(self):
+        """Test that invalid max_history_size raises ValueError."""
+        with pytest.raises(ValueError, match="max_history_size must be positive"):
+            DarkPoolConfig(
+                venue_id="INVALID",
+                max_history_size=0,
+            )
+        with pytest.raises(ValueError, match="max_history_size must be positive"):
+            DarkPoolConfig(
+                venue_id="INVALID",
+                max_history_size=-10,
+            )
+
+    def test_bounded_history_prevents_memory_leak(self, sample_order: LimitOrder):
+        """Test that history is bounded to prevent memory leaks."""
+        # BUG FIX: dark_pool.py:701-702 - unbounded List -> bounded deque
+        max_history = 50  # Small for testing
+        simulator = DarkPoolSimulator(
+            venues=None,
+            seed=42,
+            max_history_size=max_history,
+        )
+
+        # Make many more attempts than max_history
+        for _ in range(max_history * 3):
+            simulator.attempt_dark_fill(order=sample_order, lit_mid_price=100.0)
+
+        # History should be bounded
+        fill_history = simulator.get_fill_history(limit=max_history * 2)
+        leakage_history = simulator.get_leakage_history(limit=max_history * 2)
+
+        assert len(fill_history) <= max_history
+        assert len(leakage_history) <= max_history
+
+    def test_bounded_history_preserves_recent_entries(self, sample_order: LimitOrder):
+        """Test that bounded history keeps the most recent entries."""
+        max_history = 10
+        simulator = DarkPoolSimulator(
+            venues=None,
+            seed=42,
+            max_history_size=max_history,
+        )
+
+        # Track all fills
+        all_fills: List[DarkPoolFill] = []
+
+        def track_fill(fill: DarkPoolFill):
+            all_fills.append(fill)
+
+        # Reconnect callback
+        simulator._on_fill = track_fill
+
+        # Make many attempts
+        for i in range(50):
+            simulator.attempt_dark_fill(order=sample_order, lit_mid_price=100.0)
+
+        # Get history
+        history = simulator.get_fill_history(limit=max_history * 2)
+
+        if len(all_fills) > max_history:
+            # Should have last max_history entries
+            assert len(history) == max_history
+            # Most recent fills should be in history
+            expected_recent = all_fills[-max_history:]
+            for expected, actual in zip(expected_recent, history):
+                assert expected.order_id == actual.order_id
+
+    def test_factory_function_passes_max_history_size(self, sample_order: LimitOrder):
+        """Test that factory functions pass max_history_size correctly."""
+        max_history = 25
+
+        # Test create_dark_pool_simulator
+        sim1 = create_dark_pool_simulator(seed=42, max_history_size=max_history)
+        assert sim1._max_history_size == max_history
+
+        # Test create_default_dark_pool_simulator
+        sim2 = create_default_dark_pool_simulator(seed=42, max_history_size=max_history)
+        assert sim2._max_history_size == max_history
+
+        # Verify bounded behavior
+        for _ in range(max_history * 2):
+            sim1.attempt_dark_fill(order=sample_order, lit_mid_price=100.0)
+
+        assert len(sim1.get_fill_history(limit=max_history * 2)) <= max_history
+
+    def test_valid_config_passes_validation(self):
+        """Test that valid config passes all validations."""
+        # Should not raise
+        config = DarkPoolConfig(
+            venue_id="VALID_VENUE",
+            base_fill_probability=0.5,
+            info_leakage_probability=0.1,
+            min_order_size=100,
+            impact_size_normalization=10000,
+            max_history_size=5000,
+        )
+
+        assert config.venue_id == "VALID_VENUE"
+        assert config.base_fill_probability == 0.5
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

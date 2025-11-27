@@ -1224,7 +1224,7 @@ pytest tests/test_hidden_liquidity_dark_pools.py -v
 pytest tests/test_lob*.py tests/test_matching_engine.py tests/test_fill_probability_queue_value.py tests/test_market_impact.py tests/test_hidden_liquidity_dark_pools.py -v
 ```
 
-**Покрытие**: 425 тестов (106 Stage 1 + 72 Stage 2 + 66 Stage 3 + 57 Stage 4 + 66 Stage 5 + 44 Stage 6)
+**Покрытие**: 443 тестов (106 Stage 1 + 72 Stage 2 + 66 Stage 3 + 57 Stage 4 + 66 Stage 5 + 62 Stage 6)
 
 ### Ключевые файлы
 
@@ -1248,7 +1248,7 @@ pytest tests/test_lob*.py tests/test_matching_engine.py tests/test_fill_probabil
 | `tests/test_lob_latency.py` | 66 Stage 5 tests |
 | `lob/hidden_liquidity.py` | Iceberg detection, hidden liquidity estimation (Stage 6) |
 | `lob/dark_pool.py` | Dark pool simulation, multi-venue routing (Stage 6) |
-| `tests/test_hidden_liquidity_dark_pools.py` | 44 Stage 6 tests |
+| `tests/test_hidden_liquidity_dark_pools.py` | 62 Stage 6 tests |
 
 ### Референсы
 
@@ -1336,6 +1336,9 @@ pytest tests/test_lob*.py tests/test_matching_engine.py tests/test_fill_probabil
 | `_project_categorical_distribution` shape error | 1D atoms not expanded to batch_size | ✅ Фикс 2025-11-26: proper batch expansion |
 | Limit order fills missed for high-price assets | Fixed tolerance 1e-12 < machine epsilon at $100k | ✅ Фикс 2025-11-26: `_compute_price_tolerance` с relative tolerance |
 | EV≈0, Twin Critics loss +327%, grad norm -82% | VGS alpha=0.1 даёт 91% редукцию градиентов при высокой variance | ✅ Фикс 2025-11-27: VGS v3.2 с `min_scaling_factor=0.1`, `variance_cap=50.0` |
+| DarkPoolSimulator memory leak | `_leakage_history`, `_fill_history` росли unbounded | ✅ Фикс 2025-11-27: `deque(maxlen=max_history_size)` |
+| DarkPoolConfig division by zero | `impact_size_normalization=0` не валидировался | ✅ Фикс 2025-11-27: `__post_init__` validation |
+| DarkPoolSimulator TypeError on deque slice | `_should_block_for_leakage` использовал slice на deque | ✅ Фикс 2025-11-27: convert to list before slicing |
 
 ---
 
@@ -2416,6 +2419,9 @@ if ratio > 1.0:
 
 | Дата | Исправление | Влияние |
 |------|-------------|---------|
+| **2025-11-27** | Stage 6: DarkPoolSimulator memory leak fix | unbounded List → deque(maxlen=N), prevents OOM in long simulations |
+| **2025-11-27** | Stage 6: DarkPoolConfig validation | Division by zero prevented with ValueError for invalid params |
+| **2025-11-27** | Stage 6: deque slice fix in _should_block_for_leakage | TypeError on deque slicing → convert to list first |
 | **2025-11-27** | VGS v3.2: min_scaling_factor + variance_cap | EV≈0, Twin Critics loss +327%, grad norm -82% → VGS не блокирует обучение |
 | **2025-11-26** | Twin Critics categorical VF clipping projection fix | `_project_distribution` was identity stub → now uses proper C51 projection |
 | **2025-11-26** | Yang-Zhang RS denominator fix | RS used (n-1) instead of n → +11% inflation for n=10 removed |
