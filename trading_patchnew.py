@@ -551,6 +551,7 @@ class TradingEnv(gym.Env):
             self._no_trade_mask = np.zeros(len(self.df), dtype=bool)
         self.no_trade_blocks = 0
         self.no_trade_hits = 0
+        self.trading_hours_blocked_count = 0  # Phase 4.2: Trading hours enforcement
         self.total_steps = 0
         self.no_trade_block_ratio = float(self._no_trade_mask.mean()) if len(self._no_trade_mask) else 0.0
 
@@ -761,6 +762,7 @@ class TradingEnv(gym.Env):
         self.total_steps = 0
         self.no_trade_blocks = 0
         self.no_trade_hits = 0  # Reset to prevent leakage between episodes
+        self.trading_hours_blocked_count = 0  # Phase 4.2: Reset for new episode
         self._episode_return = 0.0
         self._episode_length = 0
         self.state = _EnvState(
@@ -1317,6 +1319,58 @@ class TradingEnv(gym.Env):
             return None
         return numeric
 
+    def _check_trading_hours(self, row: pd.Series) -> bool:
+        """
+        Check if market is closed based on trading hours adapter.
+
+        Phase 4.2: Trading Hours Enforcement
+
+        For equity assets, this checks the market calendar to determine
+        if the market is currently open. If closed, returns True to
+        block trading (forcing HOLD action).
+
+        For crypto (24/7), always returns False (market always open).
+
+        Args:
+            row: Current DataFrame row containing timestamp
+
+        Returns:
+            True if market is closed (trading should be blocked),
+            False if market is open (trading allowed)
+        """
+        # If no mediator or no trading hours adapter, market is always open (crypto 24/7)
+        mediator = getattr(self, "_mediator", None)
+        if mediator is None:
+            return False
+
+        trading_hours_adapter = getattr(mediator, "trading_hours_adapter", None)
+        if trading_hours_adapter is None:
+            return False  # Crypto markets are 24/7
+
+        # Extract timestamp from row
+        timestamp_ms = None
+        for col in ["decision_ts", "ts_ms", "timestamp_ms", "close_ts", "timestamp"]:
+            if col in row.index:
+                ts_val = self._safe_float(row.get(col))
+                if ts_val is not None and ts_val > 0:
+                    # Convert to milliseconds if needed
+                    if col == "timestamp" and ts_val < 1e12:  # Probably in seconds
+                        ts_val = ts_val * 1000
+                    timestamp_ms = int(ts_val)
+                    break
+
+        if timestamp_ms is None:
+            # No valid timestamp found, assume market is open
+            return False
+
+        # Check if market is open
+        try:
+            is_open = trading_hours_adapter.is_market_open(timestamp_ms)
+            return not is_open  # Return True if closed (blocked), False if open
+        except Exception as e:
+            logger.warning("Error checking trading hours: %s", e)
+            return False  # Fail open for safety
+
     def _diff_to_ms(self, start: Any, end: Any, col_name: str) -> int | None:
         try:
             if pd.isna(start) or pd.isna(end):
@@ -1782,7 +1836,15 @@ class TradingEnv(gym.Env):
             mask_hit = bool(self._no_trade_mask[row_idx])
         if mask_hit:
             self.no_trade_hits += 1
-        blocked = mask_hit and self._no_trade_policy != "ignore"
+
+        # Phase 4.2: Trading hours enforcement for equity assets
+        # Check if market is currently open based on bar timestamp
+        market_closed = self._check_trading_hours(row)
+        if market_closed:
+            self.trading_hours_blocked_count += 1
+
+        # Blocked if either no-trade mask hit OR market closed
+        blocked = (mask_hit and self._no_trade_policy != "ignore") or market_closed
         prev_signal_pos_for_reward = float(self._last_signal_position)
         prev_signal_pos = float(prev_signal_pos_for_reward)
         agent_signal_pos = float(prev_signal_pos_for_reward)
@@ -2363,6 +2425,9 @@ class TradingEnv(gym.Env):
         info["no_trade_triggered"] = bool(mask_hit)
         info["no_trade_policy"] = self._no_trade_policy
         info["no_trade_enabled"] = bool(self._no_trade_enabled)
+        # Phase 4.2: Trading hours enforcement
+        info["market_closed"] = bool(market_closed)
+        info["trading_hours_blocked_count"] = int(self.trading_hours_blocked_count)
 
         if terminated or truncated:
             info["no_trade_stats"] = self.get_no_trade_stats()

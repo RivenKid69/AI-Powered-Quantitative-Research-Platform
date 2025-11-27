@@ -72,6 +72,34 @@ from compat_shims import sim_report_dict_to_core_exec_reports
 from core_models import as_dict
 from order_shims import actionproto_to_order, legacy_decision_to_order, OrderContext
 
+# Phase 4.1: Multi-asset execution providers
+try:
+    from execution_providers import (
+        AssetClass,
+        StatisticalSlippageProvider,
+        CryptoFeeProvider,
+        EquityFeeProvider,
+        SlippageProvider,
+        FeeProvider,
+    )
+    _HAVE_EXEC_PROVIDERS = True
+except ImportError:
+    _HAVE_EXEC_PROVIDERS = False
+    AssetClass = None  # type: ignore
+    StatisticalSlippageProvider = None  # type: ignore
+    CryptoFeeProvider = None  # type: ignore
+    EquityFeeProvider = None  # type: ignore
+    SlippageProvider = None  # type: ignore
+    FeeProvider = None  # type: ignore
+
+# Phase 4.1: Trading hours adapters
+try:
+    from adapters.alpaca.trading_hours import AlpacaTradingHoursAdapter
+    _HAVE_TRADING_HOURS = True
+except ImportError:
+    _HAVE_TRADING_HOURS = False
+    AlpacaTradingHoursAdapter = None  # type: ignore
+
 # ExecutionSimulator и SimStepReport (как внутренний тип отчёта, импортируемый как ExecReport)
 # опциональны; при отсутствии работаем напрямую с LOB
 try:
@@ -322,6 +350,126 @@ class Mediator:
         self._context_row_idx: int | None = None
         self._context_timestamp: int | None = None
         self._last_signal_position: float = 0.0
+
+        # Phase 4.1: Multi-asset execution providers
+        # Initialize providers based on asset_class from run_config
+        self._asset_class: str = "crypto"  # Default
+        self.slippage_provider: Optional[Any] = None
+        self.fee_provider: Optional[Any] = None
+        self.trading_hours_adapter: Optional[Any] = None
+        self._extended_hours: bool = False
+
+        if rc is not None:
+            self._asset_class = getattr(rc, "asset_class", "crypto") or "crypto"
+            self._extended_hours = bool(getattr(rc, "extended_hours", False))
+            data_vendor = getattr(rc, "data_vendor", None)
+            self._create_providers(self._asset_class, data_vendor)
+
+    def _create_providers(
+        self,
+        asset_class: str,
+        data_vendor: Optional[str] = None,
+    ) -> None:
+        """
+        Factory method to create execution providers based on asset class.
+
+        Phase 4.1: Multi-asset support for crypto and equity.
+
+        Args:
+            asset_class: "crypto" or "equity"
+            data_vendor: Optional data vendor override (e.g., "alpaca", "binance")
+        """
+        asset_class_lower = str(asset_class).lower()
+
+        if not _HAVE_EXEC_PROVIDERS:
+            logger.debug(
+                "Mediator: execution_providers not available, "
+                "using legacy slippage/fee configuration"
+            )
+            return
+
+        if asset_class_lower == "equity":
+            # Equity: tighter spreads, lower impact, commission-free + regulatory fees
+            self.slippage_provider = StatisticalSlippageProvider(
+                impact_coef=0.05,  # Lower impact for deeper equity markets
+                spread_bps=2.0,    # Tighter spreads for liquid US equities
+                volatility_scale=1.0,
+                min_slippage_bps=0.0,
+                max_slippage_bps=200.0,  # 2% max for equities
+            )
+            self.fee_provider = EquityFeeProvider(
+                include_regulatory=True,  # SEC + TAF fees on sells
+            )
+
+            # Trading hours adapter for US equity markets
+            if _HAVE_TRADING_HOURS and AlpacaTradingHoursAdapter is not None:
+                try:
+                    self.trading_hours_adapter = AlpacaTradingHoursAdapter(
+                        config={
+                            "allow_extended_hours": self._extended_hours,
+                        }
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "Failed to initialize AlpacaTradingHoursAdapter: %s", e
+                    )
+                    self.trading_hours_adapter = None
+
+            logger.info(
+                "Mediator: configured for EQUITY asset class "
+                "(impact_coef=0.05, spread_bps=2.0, regulatory_fees=True, "
+                "extended_hours=%s)",
+                self._extended_hours,
+            )
+
+        else:
+            # Crypto (default): wider spreads, higher impact, percentage fees
+            self.slippage_provider = StatisticalSlippageProvider(
+                impact_coef=0.1,   # Higher impact for crypto
+                spread_bps=5.0,    # Wider spreads
+                volatility_scale=1.0,
+                min_slippage_bps=0.0,
+                max_slippage_bps=500.0,  # 5% max for crypto
+            )
+            self.fee_provider = CryptoFeeProvider(
+                maker_bps=2.0,   # 0.02% maker
+                taker_bps=4.0,   # 0.04% taker
+            )
+
+            # No trading hours adapter for 24/7 crypto markets
+            self.trading_hours_adapter = None
+
+            logger.info(
+                "Mediator: configured for CRYPTO asset class "
+                "(impact_coef=0.1, spread_bps=5.0, maker=2bps, taker=4bps)"
+            )
+
+    def is_market_open(self, timestamp_ms: Optional[int] = None) -> bool:
+        """
+        Check if the market is currently open.
+
+        Phase 4.1: For equity assets, uses trading hours adapter.
+        For crypto (24/7), always returns True.
+
+        Args:
+            timestamp_ms: Unix timestamp in milliseconds. If None, uses current time.
+
+        Returns:
+            True if market is open for trading, False otherwise.
+        """
+        # Crypto markets are 24/7
+        if self.trading_hours_adapter is None:
+            return True
+
+        # Use provided timestamp or current time
+        if timestamp_ms is None:
+            timestamp_ms = now_ms()
+
+        try:
+            return self.trading_hours_adapter.is_market_open(timestamp_ms)
+        except Exception as e:
+            logger.warning("Error checking market hours: %s", e)
+            return True  # Fail open for safety
 
     def _check_rate_limit(self) -> bool:
         """Apply rate limiter using wall-clock milliseconds."""

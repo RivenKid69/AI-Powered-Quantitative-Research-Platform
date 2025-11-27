@@ -760,6 +760,31 @@ class CommonRunConfig(BaseModel):
     logs_dir: str = Field(default="logs")
     artifacts_dir: str = Field(default="artifacts")
     timezone: Optional[str] = None
+    # Phase 4.1: Multi-asset support
+    asset_class: str = Field(
+        default="crypto",
+        description=(
+            "Asset class for execution simulation and provider selection. "
+            "Supported values: 'crypto' (default), 'equity'. "
+            "Determines default slippage, fee, and trading hours behavior."
+        ),
+    )
+    data_vendor: Optional[str] = Field(
+        default=None,
+        description=(
+            "Data vendor for market data and trading. "
+            "For crypto: 'binance' (default). "
+            "For equity: 'alpaca', 'polygon'. "
+            "If None, uses default vendor for the asset class."
+        ),
+    )
+    extended_hours: bool = Field(
+        default=False,
+        description=(
+            "For equity assets: whether to allow trading during extended hours "
+            "(pre-market and after-hours sessions). Ignored for 24/7 crypto markets."
+        ),
+    )
     liquidity_seasonality_path: Optional[str] = Field(default=None)
     liquidity_seasonality_hash: Optional[str] = Field(default=None)
     seasonality_log_level: str = Field(
