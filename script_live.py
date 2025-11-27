@@ -1,11 +1,21 @@
-"""Run realtime signaler using :mod:`service_signal_runner`."""
+"""Run realtime signaler using :mod:`service_signal_runner`.
+
+This script is the unified entry point for live trading, supporting both
+crypto (Binance) and equity (Alpaca) markets through the --asset-class option.
+
+Phase 9: Live Trading Improvements (2025-11-27)
+- Explicit asset_class CLI support
+- Auto-detection from config
+- Asset-class-specific defaults
+"""
 
 from __future__ import annotations
 
 import argparse
+import logging
 from contextlib import suppress
 from pathlib import Path
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, Mapping, Optional
 
 import yaml
 from pydantic import BaseModel
@@ -19,10 +29,202 @@ from runtime_trade_defaults import (
     merge_runtime_trade_defaults,
 )
 
+logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Asset Class Constants and Defaults
+# =============================================================================
+
+ASSET_CLASS_CRYPTO = "crypto"
+ASSET_CLASS_EQUITY = "equity"
+VALID_ASSET_CLASSES = (ASSET_CLASS_CRYPTO, ASSET_CLASS_EQUITY)
+
+# Asset-class-specific execution defaults
+ASSET_CLASS_DEFAULTS: Dict[str, Dict[str, Any]] = {
+    ASSET_CLASS_CRYPTO: {
+        "slippage_bps": 5.0,
+        "limit_offset_bps": 10.0,
+        "tif": "GTC",
+        "extended_hours": False,  # Not applicable (24/7)
+        "default_vendor": "binance",
+    },
+    ASSET_CLASS_EQUITY: {
+        "slippage_bps": 2.0,  # Tighter spreads in regulated markets
+        "limit_offset_bps": 5.0,
+        "tif": "DAY",
+        "extended_hours": False,  # Default to regular hours
+        "default_vendor": "alpaca",
+    },
+}
+
+# Vendor to asset class mapping for auto-detection
+VENDOR_TO_ASSET_CLASS: Dict[str, str] = {
+    "binance": ASSET_CLASS_CRYPTO,
+    "alpaca": ASSET_CLASS_EQUITY,
+    "polygon": ASSET_CLASS_EQUITY,
+}
+
 try:
     from box import Box  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
     Box = None  # type: ignore
+
+
+# =============================================================================
+# Asset Class Detection and Application
+# =============================================================================
+
+
+def detect_asset_class(cfg_dict: Dict[str, Any]) -> str:
+    """
+    Auto-detect asset class from configuration.
+
+    Priority:
+    1. Explicit asset_class field in config
+    2. exchange.vendor mapping
+    3. exchange.market_type
+    4. Default to 'crypto' for backward compatibility
+
+    Args:
+        cfg_dict: Configuration dictionary
+
+    Returns:
+        Asset class string ('crypto' or 'equity')
+    """
+    # Priority 1: Explicit asset_class
+    asset_class = cfg_dict.get("asset_class")
+    if asset_class and asset_class in VALID_ASSET_CLASSES:
+        return asset_class
+
+    # Priority 2: Exchange vendor mapping
+    exchange = cfg_dict.get("exchange", {})
+    vendor = exchange.get("vendor", "").lower()
+    if vendor in VENDOR_TO_ASSET_CLASS:
+        return VENDOR_TO_ASSET_CLASS[vendor]
+
+    # Priority 3: Market type
+    market_type = exchange.get("market_type", "").upper()
+    if market_type in ("EQUITY", "STOCK"):
+        return ASSET_CLASS_EQUITY
+    if market_type in ("CRYPTO", "CRYPTO_SPOT", "CRYPTO_FUTURES"):
+        return ASSET_CLASS_CRYPTO
+
+    # Default: crypto for backward compatibility
+    return ASSET_CLASS_CRYPTO
+
+
+def apply_asset_class_defaults(
+    cfg_dict: Dict[str, Any],
+    asset_class: str,
+    cli_extended_hours: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """
+    Apply asset-class-specific defaults to configuration.
+
+    These defaults are applied only if the corresponding field is not
+    already set in the config, ensuring explicit config values take precedence.
+
+    Args:
+        cfg_dict: Configuration dictionary
+        asset_class: Asset class ('crypto' or 'equity')
+        cli_extended_hours: Extended hours override from CLI (optional)
+
+    Returns:
+        Updated configuration dictionary
+    """
+    defaults = ASSET_CLASS_DEFAULTS.get(asset_class, ASSET_CLASS_DEFAULTS[ASSET_CLASS_CRYPTO])
+
+    # Set asset_class in config
+    cfg_dict["asset_class"] = asset_class
+
+    # Apply execution defaults
+    exec_block = dict(cfg_dict.get("execution", {}) or {})
+    exec_params = dict(cfg_dict.get("execution_params", {}) or {})
+
+    # slippage_bps
+    if "slippage_bps" not in exec_params:
+        exec_params["slippage_bps"] = defaults["slippage_bps"]
+
+    # limit_offset_bps
+    if "limit_offset_bps" not in exec_params:
+        exec_params["limit_offset_bps"] = defaults["limit_offset_bps"]
+
+    # tif (time in force)
+    if "tif" not in exec_params:
+        exec_params["tif"] = defaults["tif"]
+
+    cfg_dict["execution_params"] = exec_params
+
+    # Extended hours handling (equity only)
+    if asset_class == ASSET_CLASS_EQUITY:
+        # CLI override takes precedence
+        if cli_extended_hours is not None:
+            cfg_dict["extended_hours"] = cli_extended_hours
+        elif "extended_hours" not in cfg_dict:
+            cfg_dict["extended_hours"] = defaults["extended_hours"]
+
+        # Also set in exchange config for adapter
+        exchange = dict(cfg_dict.get("exchange", {}) or {})
+        alpaca_cfg = dict(exchange.get("alpaca", {}) or {})
+
+        if cli_extended_hours is not None:
+            alpaca_cfg["extended_hours"] = cli_extended_hours
+        elif "extended_hours" not in alpaca_cfg:
+            alpaca_cfg["extended_hours"] = cfg_dict.get("extended_hours", False)
+
+        exchange["alpaca"] = alpaca_cfg
+        cfg_dict["exchange"] = exchange
+
+    # Set data_vendor if not specified
+    if not cfg_dict.get("data_vendor"):
+        cfg_dict["data_vendor"] = defaults["default_vendor"]
+
+    return cfg_dict
+
+
+def _get_symbols_for_asset_class(
+    args: argparse.Namespace,
+    cfg_dict: Dict[str, Any],
+    asset_class: str,
+) -> list:
+    """
+    Get symbols list based on asset class and config.
+
+    Args:
+        args: CLI arguments
+        cfg_dict: Configuration dictionary
+        asset_class: Asset class
+
+    Returns:
+        List of symbols
+    """
+    # CLI override
+    if args.symbols:
+        return [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+
+    # Try to get from config data section
+    data_cfg = cfg_dict.get("data", {}) or {}
+    symbols_path = data_cfg.get("symbols_path")
+
+    if symbols_path:
+        try:
+            from pathlib import Path
+            import json
+
+            symbols_file = Path(symbols_path)
+            if symbols_file.exists():
+                with open(symbols_file, "r", encoding="utf-8") as f:
+                    symbols_data = json.load(f)
+                    if isinstance(symbols_data, list):
+                        return [s.upper() for s in symbols_data]
+                    if isinstance(symbols_data, dict) and "symbols" in symbols_data:
+                        return [s.upper() for s in symbols_data["symbols"]]
+        except Exception as e:
+            logger.warning(f"Failed to load symbols from {symbols_path}: {e}")
+
+    # Fallback to universe service
+    return get_symbols()
 
 
 def _apply_runtime_overrides(
@@ -291,27 +493,80 @@ def _ensure_state_dir(state_obj: Any) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(
-        description="Run realtime signaler (public Binance WS, no keys).",
+        description=(
+            "Unified live trading script for crypto and equity markets.\n\n"
+            "Supports:\n"
+            "  - Crypto: Binance (default)\n"
+            "  - Equity: Alpaca (US stocks)\n\n"
+            "The asset class is auto-detected from config or can be explicitly set."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+
+    # ==========================================================================
+    # Core arguments
+    # ==========================================================================
     p.add_argument(
         "--config",
         default="configs/config_live.yaml",
-        help="Путь к YAML-конфигу запуска",
+        help="Path to YAML config file (default: configs/config_live.yaml)",
     )
     p.add_argument(
         "--state-config",
         default="configs/state.yaml",
-        help="Путь к YAML-конфигу состояния",
+        help="Path to state YAML config file",
     )
     p.add_argument(
         "--reset-state",
         action="store_true",
-        help="Удалить файлы состояния перед запуском",
+        help="Clear state files before starting",
     )
     p.add_argument(
         "--symbols",
         default="",
-        help="Список символов через запятую; пусто = загрузить из universe",
+        help="Comma-separated list of symbols (overrides config)",
+    )
+
+    # ==========================================================================
+    # Asset class arguments (Phase 9)
+    # ==========================================================================
+    asset_group = p.add_argument_group(
+        "Asset class options",
+        "Control asset-class-specific behavior for unified live trading",
+    )
+    asset_group.add_argument(
+        "--asset-class",
+        choices=["crypto", "equity"],
+        default=None,
+        help=(
+            "Asset class to trade. If not specified, auto-detected from config. "
+            "crypto=Binance, equity=Alpaca"
+        ),
+    )
+    asset_group.add_argument(
+        "--extended-hours",
+        action="store_true",
+        default=None,
+        help=(
+            "Enable extended hours trading (equity only). "
+            "Pre-market: 4:00-9:30 AM ET, After-hours: 4:00-8:00 PM ET"
+        ),
+    )
+    asset_group.add_argument(
+        "--no-extended-hours",
+        action="store_true",
+        help="Disable extended hours trading (equity only). Regular hours: 9:30 AM-4:00 PM ET",
+    )
+    asset_group.add_argument(
+        "--paper",
+        action="store_true",
+        default=None,
+        help="Use paper trading (Alpaca only, default: True)",
+    )
+    asset_group.add_argument(
+        "--live",
+        action="store_true",
+        help="Use live trading (Alpaca only, overrides --paper)",
     )
     runtime_group = p.add_argument_group("Runtime overrides")
     runtime_group.add_argument(
@@ -406,14 +661,13 @@ def main() -> None:
     p.add_argument(
         "--runtime-trade-config",
         default=DEFAULT_RUNTIME_TRADE_PATH,
-        help="Путь к runtime_trade.yaml с дефолтами исполнения",
+        help="Path to runtime_trade.yaml with execution defaults",
     )
     args = p.parse_args()
-    symbols = (
-        [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
-        if args.symbols
-        else get_symbols()
-    )
+
+    # ==========================================================================
+    # Load and prepare configuration
+    # ==========================================================================
 
     try:
         with open(args.state_config, "r", encoding="utf-8") as f:
@@ -423,11 +677,80 @@ def main() -> None:
     state_data = state_data_raw if isinstance(state_data_raw, Mapping) else {}
 
     cfg = load_config(args.config)
+    cfg_dict = cfg.dict()
+
+    # ==========================================================================
+    # Phase 9: Asset class detection and defaults
+    # ==========================================================================
+
+    # Determine asset class (CLI override > config detection)
+    if args.asset_class:
+        asset_class = args.asset_class
+        logger.info(f"Asset class from CLI: {asset_class}")
+    else:
+        asset_class = detect_asset_class(cfg_dict)
+        logger.info(f"Auto-detected asset class: {asset_class}")
+
+    # Determine extended hours setting
+    cli_extended_hours: Optional[bool] = None
+    if args.no_extended_hours:
+        cli_extended_hours = False
+    elif args.extended_hours:
+        cli_extended_hours = True
+
+    # Apply asset-class-specific defaults
+    cfg_dict = apply_asset_class_defaults(cfg_dict, asset_class, cli_extended_hours)
+
+    # Handle paper/live trading (Alpaca)
+    if asset_class == ASSET_CLASS_EQUITY:
+        exchange = dict(cfg_dict.get("exchange", {}) or {})
+        alpaca_cfg = dict(exchange.get("alpaca", {}) or {})
+
+        if args.live:
+            alpaca_cfg["paper"] = False
+            logger.warning("LIVE TRADING MODE enabled - real money at risk!")
+        elif args.paper:
+            alpaca_cfg["paper"] = True
+            logger.info("Paper trading mode enabled")
+
+        exchange["alpaca"] = alpaca_cfg
+        cfg_dict["exchange"] = exchange
+
+    # Get symbols (using asset-class-aware function)
+    symbols = _get_symbols_for_asset_class(args, cfg_dict, asset_class)
+
+    # Log asset class summary
+    logger.info(
+        f"Live trading starting: asset_class={asset_class}, "
+        f"symbols={len(symbols)}, extended_hours={cfg_dict.get('extended_hours', False)}"
+    )
+
+    # ==========================================================================
+    # Continue with standard configuration flow
+    # ==========================================================================
+
+    # Ensure symbols are set in data config
+    data_cfg = dict(cfg_dict.get("data", {}) or {})
+    data_cfg["symbols"] = symbols
+    cfg_dict["data"] = data_cfg
+
+    # Apply runtime trade defaults
+    runtime_trade_defaults = load_runtime_trade_defaults(args.runtime_trade_config)
+    cfg_dict = merge_runtime_trade_defaults(cfg_dict, runtime_trade_defaults)
+
+    # Apply CLI overrides
+    cfg_dict = _apply_runtime_overrides(cfg_dict, args)
+
+    # Rebuild config from dict
+    cfg = cfg.__class__.parse_obj(cfg_dict)
     cfg.data.symbols = symbols
+
     try:
-        cfg.components.executor.params["symbol"] = symbols[0]
+        cfg.components.executor.params["symbol"] = symbols[0] if symbols else ""
     except Exception:
         pass
+
+    # Handle state config
     if state_data:
         merged_state = _merge_state_config(cfg.state, state_data)
         if merged_state is not cfg.state:
@@ -440,16 +763,9 @@ def main() -> None:
     if getattr(state_cfg, "enabled", False):
         _ensure_state_dir(state_cfg)
 
-    cfg_dict = cfg.dict()
-    runtime_trade_defaults = load_runtime_trade_defaults(args.runtime_trade_config)
-    cfg_dict = merge_runtime_trade_defaults(cfg_dict, runtime_trade_defaults)
-    cfg_dict = _apply_runtime_overrides(cfg_dict, args)
-    cfg = cfg.__class__.parse_obj(cfg_dict)
-    cfg.data.symbols = symbols
-    try:
-        cfg.components.executor.params["symbol"] = symbols[0]
-    except Exception:
-        pass
+    # ==========================================================================
+    # Start signal runner
+    # ==========================================================================
 
     for report in from_config(cfg, snapshot_config_path=args.config):
         print(report)

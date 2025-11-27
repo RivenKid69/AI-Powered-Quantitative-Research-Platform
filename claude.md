@@ -27,6 +27,9 @@
 | Отладить training | `train_model_multi_patch.py` + logs | Проверить `tensorboard` logs |
 | Проблемы с данными | `impl_offline_data.py`, `data_validation.py` | Проверить data degradation params |
 | Live trading проблемы | `script_live.py` → `service_signal_runner.py` | Проверить ops_kill_switch, state_storage |
+| Position sync (Alpaca) | `services/position_sync.py` | `pytest tests/test_phase9_live_trading.py::TestPositionSynchronizer` |
+| Extended hours trading | `services/session_router.py` | `pytest tests/test_phase9_live_trading.py::TestSessionRouter` |
+| Bracket/OCO orders | `adapters/alpaca/order_execution.py` | `pytest tests/test_phase9_live_trading.py::TestBracketOrderConfig` |
 
 ### 🔍 Quick File Reference
 
@@ -66,6 +69,11 @@ python scripts/fetch_alpaca_universe.py --output data/universe/alpaca_symbols.js
 
 # Live Trading (Stocks - Alpaca)
 python script_live.py --config configs/config_live_alpaca.yaml
+python script_live.py --config configs/config_live_alpaca.yaml --asset-class equity --paper
+python script_live.py --config configs/config_live_alpaca.yaml --extended-hours
+
+# Live Trading (Crypto - Binance)
+python script_live.py --config configs/config_live.yaml
 
 # Training (Stocks)
 python train_model_multi_patch.py --config configs/config_train_stocks.yaml
@@ -455,6 +463,253 @@ pytest tests/test_execution_providers.py::TestIntegration -v
 - Almgren & Chriss (2001): "Optimal Execution of Portfolio Transactions"
 - Kyle (1985): "Continuous Auctions and Insider Trading"
 - SEC Fee Rates: https://www.sec.gov/divisions/marketreg/mrfreqreq.shtml
+
+---
+
+## 🔴 Live Trading Improvements (Phase 9)
+
+### Обзор
+
+Phase 9 добавляет полную поддержку live trading для акций через Alpaca:
+
+1. **Unified Live Script** (`script_live.py`)
+   - Единый entry point для crypto и stocks
+   - Автоматическое определение asset class
+   - CLI аргументы для переключения режимов
+
+2. **Position Synchronization** (`services/position_sync.py`)
+   - Синхронизация локального состояния с биржей
+   - Background polling с настраиваемым интервалом
+   - Автоматическое обнаружение и обработка расхождений
+
+3. **Advanced Order Management** (`adapters/alpaca/order_execution.py`)
+   - Bracket orders (take-profit + stop-loss)
+   - OCO (One-Cancels-Other) orders
+   - Order replacement (cancel + new)
+   - Order history и wait-for-fill
+
+4. **Extended Hours Trading** (`services/session_router.py`)
+   - Session detection (pre-market, regular, after-hours)
+   - Session-aware order routing
+   - Spread adjustment для extended hours
+
+### Архитектура
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                      script_live.py                              │
+│  - CLI: --asset-class, --extended-hours, --paper/--live         │
+│  - Auto-detection: detect_asset_class()                         │
+│  - Defaults: apply_asset_class_defaults()                       │
+└─────────────────────────┬───────────────────────────────────────┘
+                          │
+          ┌───────────────┴───────────────┐
+          ▼                               ▼
+┌─────────────────────┐       ┌─────────────────────┐
+│  Crypto (Binance)   │       │  Equity (Alpaca)    │
+│  - 24/7 trading     │       │  - Market hours     │
+│  - GTC orders       │       │  - DAY orders       │
+│  - 5 bps slippage   │       │  - 2 bps slippage   │
+└─────────────────────┘       └─────────┬───────────┘
+                                        │
+          ┌─────────────────────────────┼─────────────────────────┐
+          ▼                             ▼                         ▼
+┌─────────────────┐         ┌─────────────────┐       ┌─────────────────┐
+│ Position Sync   │         │ Order Execution │       │ Session Router  │
+│ - Reconcile     │         │ - Bracket orders│       │ - Pre-market    │
+│ - Background    │         │ - OCO orders    │       │ - Regular       │
+│ - Callbacks     │         │ - Replace order │       │ - After-hours   │
+└─────────────────┘         └─────────────────┘       └─────────────────┘
+```
+
+### Asset Class Detection
+
+```python
+# Приоритет определения asset class:
+# 1. Explicit: --asset-class equity
+# 2. Vendor: vendor=alpaca → equity
+# 3. Market type: market_type=EQUITY → equity
+# 4. Default: crypto (backward compatible)
+
+def detect_asset_class(cfg_dict: Dict[str, Any]) -> str:
+    # Priority 1: Explicit
+    if "asset_class" in cfg_dict:
+        return cfg_dict["asset_class"]
+
+    # Priority 2: Vendor mapping
+    vendor = cfg_dict.get("vendor", "").lower()
+    if vendor in ("alpaca", "polygon"):
+        return "equity"
+    if vendor == "binance":
+        return "crypto"
+
+    # Priority 3: Market type
+    market_type = cfg_dict.get("market_type", "").upper()
+    if market_type in ("EQUITY", "STOCK"):
+        return "equity"
+
+    # Default: crypto
+    return "crypto"
+```
+
+### Asset Class Defaults
+
+| Параметр | Crypto | Equity |
+|----------|--------|--------|
+| `slippage_bps` | 5.0 | 2.0 |
+| `limit_offset_bps` | 10.0 | 5.0 |
+| `tif` | GTC | DAY |
+| `extended_hours` | False | False |
+| `default_vendor` | binance | alpaca |
+
+### Position Synchronization
+
+```python
+from services.position_sync import (
+    PositionSynchronizer,
+    SyncConfig,
+    reconcile_alpaca_state,
+)
+
+# Конфигурация
+config = SyncConfig(
+    sync_interval_sec=30.0,       # Интервал polling
+    position_tolerance=0.01,      # 1% tolerance
+    auto_reconcile=True,          # Автоматическая коррекция
+    max_reconcile_qty=1000.0,     # Максимальный объём коррекции
+)
+
+# Создание synchronizer
+sync = PositionSynchronizer(
+    position_provider=alpaca_adapter,
+    local_state_getter=get_local_positions,
+    config=config,
+    on_discrepancy=handle_discrepancy,
+    on_sync_complete=on_sync,
+)
+
+# Запуск background sync
+sync.start_background_sync()
+```
+
+### Bracket Orders (Alpaca)
+
+```python
+from adapters.alpaca.order_execution import (
+    AlpacaOrderExecutionAdapter,
+    BracketOrderConfig,
+)
+
+adapter = AlpacaOrderExecutionAdapter(api_key, api_secret, paper=True)
+
+# Bracket order: entry + take-profit + stop-loss
+config = BracketOrderConfig(
+    symbol="AAPL",
+    side=Side.BUY,
+    qty=100,
+    entry_price=150.0,           # Optional limit entry
+    take_profit_price=165.0,     # +10% target
+    stop_loss_price=142.50,      # -5% stop
+    time_in_force="DAY",
+)
+
+result = adapter.submit_bracket_order(config)
+# result.entry_order_id, result.tp_order_id, result.sl_order_id
+```
+
+### Session Router
+
+```python
+from services.session_router import (
+    SessionRouter,
+    TradingSession,
+    get_current_session,
+)
+
+# Текущая сессия
+session = get_current_session()
+# session.session: PRE_MARKET | REGULAR | AFTER_HOURS | CLOSED
+
+# Router для intelligent routing
+router = SessionRouter(
+    allow_extended_hours=True,
+    extended_hours_spread_multiplier=2.0,
+)
+
+# Решение о routing
+decision = router.get_routing_decision(
+    symbol="AAPL",
+    side="BUY",
+    qty=100,
+    order_type="market",
+)
+
+if decision.should_submit:
+    if decision.use_extended_hours:
+        adapter.submit_extended_hours_order(order, session="pre")
+    else:
+        adapter.submit_order(order)
+```
+
+### Trading Sessions (US Equity)
+
+| Session | Время (ET) | Market Orders | Limit Orders | Spread |
+|---------|------------|---------------|--------------|--------|
+| Pre-market | 4:00-9:30 | ❌ | ✅ | 2.5x |
+| Regular | 9:30-16:00 | ✅ | ✅ | 1.0x |
+| After-hours | 16:00-20:00 | ❌ | ✅ | 2.0x |
+| Closed | 20:00-4:00 | ❌ | ❌ | N/A |
+
+### CLI Usage
+
+```bash
+# Crypto (default, backward compatible)
+python script_live.py --config configs/config_live.yaml
+
+# Equity explicit
+python script_live.py --config configs/config_live_alpaca.yaml --asset-class equity
+
+# Extended hours trading
+python script_live.py --config configs/config_live_alpaca.yaml --extended-hours
+
+# Paper trading (Alpaca sandbox)
+python script_live.py --config configs/config_live_alpaca.yaml --paper
+
+# Live trading (real money)
+python script_live.py --config configs/config_live_alpaca.yaml --live
+```
+
+### Backward Compatibility
+
+- **100% backward compatible** с существующим crypto functionality
+- Default asset class = `crypto` если не указан explicit
+- Все существующие конфиги работают без изменений
+- Новые параметры опциональны
+
+### Тестирование
+
+```bash
+# Все тесты Phase 9
+pytest tests/test_phase9_live_trading.py -v
+
+# Тесты по категориям
+pytest tests/test_phase9_live_trading.py::TestAssetClassDetection -v
+pytest tests/test_phase9_live_trading.py::TestPositionSynchronizer -v
+pytest tests/test_phase9_live_trading.py::TestSessionRouter -v
+pytest tests/test_phase9_live_trading.py::TestBackwardCompatibility -v
+```
+
+**Покрытие**: 46 тестов (100% pass)
+
+### Ключевые файлы
+
+| Файл | Описание |
+|------|----------|
+| `script_live.py` | Unified live trading entry point |
+| `services/position_sync.py` | Position synchronization service |
+| `services/session_router.py` | Session-aware order routing |
+| `adapters/alpaca/order_execution.py` | Enhanced Alpaca order execution |
+| `tests/test_phase9_live_trading.py` | Comprehensive test suite |
 
 ---
 
@@ -1888,6 +2143,7 @@ pytest tests/test_pbt*.py -v           # PBT
 | Action Space | `test_critical_action_space_fixes.py`, `test_long_only_action_space_fix.py` (26+21 тестов) |
 | LSTM | `test_lstm_episode_boundary_reset.py` |
 | Reset Observation | `test_trading_env_reset_observation_fixes.py` (9 тестов) |
+| Phase 9 Live Trading | `test_phase9_live_trading.py` (46 тестов) |
 
 ---
 
@@ -1974,5 +2230,5 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-11-27
-**Версия документации**: 4.6 (VGS v3.2: min_scaling_factor + variance_cap для предотвращения блокировки обучения)
+**Версия документации**: 4.7 (Phase 9: Live Trading Improvements - unified script, position sync, bracket orders, extended hours)
 **Статус**: ✅ Production Ready (все критические исправления применены, 53 задокументированных "НЕ БАГИ")
