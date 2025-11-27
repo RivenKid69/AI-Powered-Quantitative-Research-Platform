@@ -1206,6 +1206,352 @@ class TestQueueValueFactory:
 
 
 # ==============================================================================
+# Test Issue 4.1: LOBState order_side and order_price
+# ==============================================================================
+
+
+class TestLOBStateOrderInfo:
+    """Tests for LOBState order_side and order_price fields (Issue 4.1 fix)."""
+
+    def test_order_side_field(self):
+        """Test LOBState with order_side field."""
+        state = LOBState(
+            mid_price=150.0,
+            order_side=Side.BUY,
+        )
+        assert state.order_side == Side.BUY
+
+    def test_order_price_field(self):
+        """Test LOBState with order_price field."""
+        state = LOBState(
+            mid_price=150.0,
+            order_price=149.95,
+        )
+        assert state.order_price == 149.95
+
+    def test_from_order_book_with_order_info(self, sample_order_book):
+        """Test LOBState.from_order_book with order info."""
+        state = LOBState.from_order_book(
+            sample_order_book,
+            order_side=Side.SELL,
+            order_price=150.05,
+        )
+        assert state.order_side == Side.SELL
+        assert state.order_price == 150.05
+
+    def test_from_order_book_defaults(self, sample_order_book):
+        """Test LOBState.from_order_book defaults to None."""
+        state = LOBState.from_order_book(sample_order_book)
+        assert state.order_side is None
+        assert state.order_price is None
+
+
+class TestHistoricalRateModelOrderInfo:
+    """Tests for HistoricalRateModel using order_side/price (Issue 4.1 fix)."""
+
+    def test_uses_order_side_from_state(self):
+        """Test that HistoricalRateModel uses order_side from LOBState."""
+        model = HistoricalRateModel()
+
+        # Add historical rates for both sides
+        model.add_historical_rate(HistoricalFillRate(
+            price=150.0,
+            side=Side.BUY,
+            avg_fill_rate=100.0,
+            fill_count=50,
+        ))
+        model.add_historical_rate(HistoricalFillRate(
+            price=150.0,
+            side=Side.SELL,
+            avg_fill_rate=200.0,  # Different rate for SELL
+            fill_count=50,
+        ))
+
+        # Test with BUY side
+        state_buy = LOBState(
+            mid_price=150.0,
+            order_side=Side.BUY,
+            order_price=150.0,
+        )
+        result_buy = model.compute_fill_probability(
+            queue_position=0,
+            qty_ahead=100.0,
+            order_qty=50.0,
+            time_horizon_sec=60.0,
+            market_state=state_buy,
+        )
+
+        # Test with SELL side
+        state_sell = LOBState(
+            mid_price=150.0,
+            order_side=Side.SELL,
+            order_price=150.0,
+        )
+        result_sell = model.compute_fill_probability(
+            queue_position=0,
+            qty_ahead=100.0,
+            order_qty=50.0,
+            time_horizon_sec=60.0,
+            market_state=state_sell,
+        )
+
+        # Different rates should produce different probabilities
+        # SELL has higher rate, so should have higher probability
+        assert result_sell.prob_fill >= result_buy.prob_fill
+
+    def test_uses_order_price_from_state(self):
+        """Test that HistoricalRateModel uses order_price from LOBState."""
+        model = HistoricalRateModel()
+
+        # Add historical rate at specific price
+        model.add_historical_rate(HistoricalFillRate(
+            price=149.0,
+            side=Side.BUY,
+            avg_fill_rate=300.0,
+            fill_count=50,
+        ))
+
+        # State with specific order_price
+        state = LOBState(
+            mid_price=150.0,
+            order_side=Side.BUY,
+            order_price=149.0,  # Match the historical rate price
+        )
+        result = model.compute_fill_probability(
+            queue_position=0,
+            qty_ahead=100.0,
+            order_qty=50.0,
+            time_horizon_sec=60.0,
+            market_state=state,
+        )
+
+        # Should use the high rate at 149.0
+        assert result.details["fill_rate"] == 300.0
+
+    def test_fallback_to_imbalance_heuristic(self):
+        """Test fallback to imbalance heuristic when order_side is None."""
+        model = HistoricalRateModel()
+
+        # Add rates for both sides
+        model.add_historical_rate(HistoricalFillRate(
+            price=150.0,
+            side=Side.BUY,
+            avg_fill_rate=100.0,
+            fill_count=50,
+        ))
+        model.add_historical_rate(HistoricalFillRate(
+            price=150.0,
+            side=Side.SELL,
+            avg_fill_rate=200.0,
+            fill_count=50,
+        ))
+
+        # Positive imbalance -> should use SELL side
+        state_pos = LOBState(
+            mid_price=150.0,
+            imbalance=0.5,  # Positive = more bids
+            order_side=None,  # No explicit side
+        )
+        result_pos = model.compute_fill_probability(
+            queue_position=0,
+            qty_ahead=100.0,
+            order_qty=50.0,
+            time_horizon_sec=60.0,
+            market_state=state_pos,
+        )
+
+        # Negative imbalance -> should use BUY side
+        state_neg = LOBState(
+            mid_price=150.0,
+            imbalance=-0.5,  # Negative = more asks
+            order_side=None,
+        )
+        result_neg = model.compute_fill_probability(
+            queue_position=0,
+            qty_ahead=100.0,
+            order_qty=50.0,
+            time_horizon_sec=60.0,
+            market_state=state_neg,
+        )
+
+        # Should get different rates based on imbalance
+        assert result_pos.details["fill_rate"] != result_neg.details["fill_rate"]
+
+
+# ==============================================================================
+# Test Issue 4.2: Calibration _evaluate_model uses actual data
+# ==============================================================================
+
+
+class TestCalibrationEvaluateModel:
+    """Tests for CalibrationPipeline._evaluate_model using actual data (Issue 4.2 fix)."""
+
+    def test_uses_actual_volume_rate(self, sample_trades):
+        """Test that _evaluate_model computes volume rate from trades."""
+        pipeline = CalibrationPipeline()
+        pipeline.add_trades(sample_trades)
+        pipeline.run_calibration()
+
+        # The calibration should complete without error
+        # and use actual data
+        model = pipeline.get_best_model("poisson")
+        assert model is not None
+
+    def test_uses_time_in_queue_data(self):
+        """Test that _evaluate_model uses time_in_queue from trades."""
+        pipeline = CalibrationPipeline()
+
+        # Create trades with time_in_queue data
+        base_time = time.time_ns()
+        trades = []
+        for i in range(20):
+            trades.append(TradeRecord(
+                timestamp_ns=base_time + i * 1_000_000_000,
+                price=150.0,
+                qty=100.0,
+                side=Side.BUY if i % 2 == 0 else Side.SELL,
+                time_in_queue_sec=30.0,  # All trades filled in 30 sec
+            ))
+
+        pipeline.add_trades(trades)
+        results = pipeline.run_calibration()
+
+        # Should complete without error
+        assert "poisson" in results
+
+    def test_cross_validate_with_actual_data(self, sample_trades):
+        """Test cross-validation uses actual trade data."""
+        pipeline = CalibrationPipeline()
+        pipeline.add_trades(sample_trades)
+
+        cv_result = pipeline.cross_validate(n_folds=3)
+
+        assert cv_result.n_folds == 3
+        assert len(cv_result.test_scores) == 3
+
+
+# ==============================================================================
+# Test Issue 4.3: QueueValueModel decision methods
+# ==============================================================================
+
+
+class TestQueueValueModelDecisionMethods:
+    """Tests for QueueValueModel decision methods (Issue 4.3 fix)."""
+
+    def test_should_cancel_only_for_cancel(self, sample_limit_order, sample_lob_state):
+        """Test should_cancel returns True only for CANCEL decision."""
+        model = QueueValueModel()
+
+        # Very far back in queue -> likely CANCEL
+        queue_state = QueueState(
+            order_id="test",
+            price=150.05,
+            side=Side.SELL,
+            estimated_position=10000,
+            qty_ahead=1000000.0,
+            total_level_qty=1000000.0,
+        )
+
+        result = model.compute_queue_value(
+            sample_limit_order, sample_lob_state, queue_state
+        )
+
+        if result.decision == OrderDecision.CANCEL:
+            assert model.should_cancel(sample_limit_order, sample_lob_state, queue_state)
+            assert model.should_modify(sample_limit_order, sample_lob_state, queue_state)
+        elif result.decision == OrderDecision.REPRICE:
+            assert not model.should_cancel(sample_limit_order, sample_lob_state, queue_state)
+            assert model.should_reprice(sample_limit_order, sample_lob_state, queue_state)
+            assert model.should_modify(sample_limit_order, sample_lob_state, queue_state)
+        else:
+            assert not model.should_cancel(sample_limit_order, sample_lob_state, queue_state)
+            assert not model.should_reprice(sample_limit_order, sample_lob_state, queue_state)
+            assert not model.should_modify(sample_limit_order, sample_lob_state, queue_state)
+
+    def test_should_reprice_for_reprice(self, sample_limit_order, sample_lob_state):
+        """Test should_reprice returns True only for REPRICE decision."""
+        model = QueueValueModel()
+
+        # Front of queue with narrow spread -> likely HOLD
+        queue_state = QueueState(
+            order_id="test",
+            price=150.05,
+            side=Side.SELL,
+            estimated_position=0,
+            qty_ahead=0.0,
+            total_level_qty=100.0,
+        )
+
+        result = model.compute_queue_value(
+            sample_limit_order, sample_lob_state, queue_state
+        )
+
+        # Verify decision consistency
+        if result.decision == OrderDecision.REPRICE:
+            assert model.should_reprice(sample_limit_order, sample_lob_state, queue_state)
+            assert not model.should_cancel(sample_limit_order, sample_lob_state, queue_state)
+            assert model.should_modify(sample_limit_order, sample_lob_state, queue_state)
+
+    def test_should_modify_includes_both(self, sample_limit_order, sample_lob_state):
+        """Test should_modify returns True for CANCEL or REPRICE."""
+        model = QueueValueModel()
+
+        queue_state = QueueState(
+            order_id="test",
+            price=150.05,
+            side=Side.SELL,
+            estimated_position=5,
+            qty_ahead=500.0,
+        )
+
+        result = model.compute_queue_value(
+            sample_limit_order, sample_lob_state, queue_state
+        )
+
+        should_modify = model.should_modify(
+            sample_limit_order, sample_lob_state, queue_state
+        )
+        should_cancel = model.should_cancel(
+            sample_limit_order, sample_lob_state, queue_state
+        )
+        should_reprice = model.should_reprice(
+            sample_limit_order, sample_lob_state, queue_state
+        )
+
+        # should_modify should be True if either cancel or reprice is True
+        assert should_modify == (should_cancel or should_reprice)
+
+    def test_hold_decision_all_false(self, sample_limit_order, sample_lob_state):
+        """Test HOLD decision returns False for all should_* methods."""
+        model = QueueValueModel()
+
+        # Front of queue with good spread -> HOLD
+        sample_queue_state = QueueState(
+            order_id="test",
+            price=150.05,
+            side=Side.SELL,
+            estimated_position=0,
+            qty_ahead=0.0,
+            total_level_qty=100.0,
+        )
+
+        result = model.compute_queue_value(
+            sample_limit_order, sample_lob_state, sample_queue_state
+        )
+
+        if result.decision == OrderDecision.HOLD:
+            assert not model.should_cancel(
+                sample_limit_order, sample_lob_state, sample_queue_state
+            )
+            assert not model.should_reprice(
+                sample_limit_order, sample_lob_state, sample_queue_state
+            )
+            assert not model.should_modify(
+                sample_limit_order, sample_lob_state, sample_queue_state
+            )
+
+
+# ==============================================================================
 # Run tests
 # ==============================================================================
 

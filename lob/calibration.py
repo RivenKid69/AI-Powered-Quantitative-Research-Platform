@@ -1027,16 +1027,38 @@ class CalibrationPipeline:
         if not trades:
             return 0.0
 
+        # Compute average volume rate from trades data
+        if len(trades) >= 2:
+            time_span = (trades[-1].timestamp_ns - trades[0].timestamp_ns) / 1e9
+            total_volume = sum(t.qty for t in trades)
+            avg_volume_rate = total_volume / max(time_span, 1.0)
+        else:
+            avg_volume_rate = 100.0  # Default fallback
+
+        # Compute average time in queue for time horizon estimation
+        times_in_queue = [t.time_in_queue_sec for t in trades if t.time_in_queue_sec is not None]
+        avg_time_horizon = sum(times_in_queue) / len(times_in_queue) if times_in_queue else 60.0
+
         log_likelihood = 0.0
-        market_state = LOBState(volume_rate=100.0)
 
         for trade in trades:
+            # Create LOBState with actual trade info for accurate model evaluation
+            market_state = LOBState(
+                volume_rate=avg_volume_rate,
+                mid_price=trade.price,  # Approximate mid as trade price
+                order_side=trade.side,
+                order_price=trade.price,
+            )
+
+            # Use actual time in queue if available, otherwise average
+            time_horizon = trade.time_in_queue_sec if trade.time_in_queue_sec is not None else avg_time_horizon
+
             # Predict fill probability
             result = model.compute_fill_probability(
                 queue_position=trade.maker_queue_position or 0,
                 qty_ahead=0.0,  # Unknown
                 order_qty=trade.qty,
-                time_horizon_sec=60.0,
+                time_horizon_sec=time_horizon,
                 market_state=market_state,
             )
 

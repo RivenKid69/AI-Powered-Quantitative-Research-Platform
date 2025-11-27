@@ -84,6 +84,8 @@ class LOBState:
         volatility: Recent price volatility (if available)
         trade_rate: Recent trade arrival rate (trades/sec)
         volume_rate: Recent volume rate (qty/sec)
+        order_side: Side of the order being evaluated (optional, for model-specific use)
+        order_price: Price of the order being evaluated (optional, for historical lookups)
     """
 
     timestamp_ns: int = 0
@@ -98,6 +100,8 @@ class LOBState:
     volatility: float = 0.0
     trade_rate: float = 0.0
     volume_rate: float = 100.0  # Default: 100 shares/sec
+    order_side: Optional[Side] = None  # Side of order being evaluated
+    order_price: Optional[float] = None  # Price of order being evaluated
 
     @classmethod
     def from_order_book(
@@ -107,8 +111,20 @@ class LOBState:
         trade_rate: float = 0.0,
         volume_rate: float = 100.0,
         timestamp_ns: Optional[int] = None,
+        order_side: Optional[Side] = None,
+        order_price: Optional[float] = None,
     ) -> "LOBState":
-        """Create LOBState from OrderBook instance."""
+        """Create LOBState from OrderBook instance.
+
+        Args:
+            book: OrderBook instance
+            volatility: Recent price volatility
+            trade_rate: Trade arrival rate (trades/sec)
+            volume_rate: Volume rate (qty/sec)
+            timestamp_ns: Timestamp in nanoseconds
+            order_side: Side of the order being evaluated (for model-specific lookups)
+            order_price: Price of the order being evaluated (for historical rate lookups)
+        """
         import time
 
         mid = book.mid_price or 0.0
@@ -137,6 +153,8 @@ class LOBState:
             volatility=volatility,
             trade_rate=trade_rate,
             volume_rate=volume_rate,
+            order_side=order_side,
+            order_price=order_price,
         )
 
 
@@ -684,11 +702,20 @@ class HistoricalRateModel(FillProbabilityModel):
         market_state: LOBState,
     ) -> FillProbabilityResult:
         """Compute fill probability using historical rates."""
-        # Get rate (using mid price for distance calculation)
-        # Note: actual price not available here, use market state
+        # Get rate using order info from market_state if available
+        # Otherwise use imbalance-based heuristic for side
+        price = market_state.order_price if market_state.order_price is not None else market_state.mid_price
+
+        if market_state.order_side is not None:
+            side = market_state.order_side
+        else:
+            # Heuristic: infer side from imbalance
+            # Positive imbalance (more bids) suggests more likely to be a SELL order
+            side = Side.SELL if market_state.imbalance > 0 else Side.BUY
+
         fill_rate, confidence = self.get_rate_at_price(
-            price=market_state.mid_price,  # Approximation
-            side=Side.BUY,  # Default, should be passed
+            price=price,
+            side=side,
             mid_price=market_state.mid_price,
         )
 
@@ -730,9 +757,17 @@ class HistoricalRateModel(FillProbabilityModel):
         market_state: LOBState,
     ) -> float:
         """Compute expected fill time."""
+        # Use order info from market_state if available
+        price = market_state.order_price if market_state.order_price is not None else market_state.mid_price
+
+        if market_state.order_side is not None:
+            side = market_state.order_side
+        else:
+            side = Side.SELL if market_state.imbalance > 0 else Side.BUY
+
         fill_rate, _ = self.get_rate_at_price(
-            price=market_state.mid_price,
-            side=Side.BUY,
+            price=price,
+            side=side,
             mid_price=market_state.mid_price,
         )
         return (qty_ahead + 1) / fill_rate
@@ -1067,7 +1102,12 @@ def compute_fill_probability_for_order(
     if model is None:
         model = QueueReactiveModel()
 
-    market_state = LOBState.from_order_book(order_book)
+    # Include order info in market state for models that need it (e.g., HistoricalRateModel)
+    market_state = LOBState.from_order_book(
+        order_book,
+        order_side=order.side,
+        order_price=order.price,
+    )
 
     result = model.compute_for_queue_state(
         queue_state=queue_state,

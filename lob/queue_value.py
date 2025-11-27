@@ -365,9 +365,41 @@ class QueueValueModel:
         queue_state: Optional[QueueState] = None,
     ) -> bool:
         """
-        Simple check: should this order be cancelled?
+        Check if this order should be cancelled (not repriced).
 
-        Convenience method for quick decision making.
+        Returns True only for CANCEL decision. For orders that should be
+        repriced but not cancelled, this returns False.
+
+        Use should_modify() if you want to check for either CANCEL or REPRICE.
+        """
+        result = self.compute_queue_value(order, market_state, queue_state)
+        return result.decision == OrderDecision.CANCEL
+
+    def should_reprice(
+        self,
+        order: LimitOrder,
+        market_state: LOBState,
+        queue_state: Optional[QueueState] = None,
+    ) -> bool:
+        """
+        Check if this order should be repriced (moved to better price).
+
+        Returns True only for REPRICE decision.
+        """
+        result = self.compute_queue_value(order, market_state, queue_state)
+        return result.decision == OrderDecision.REPRICE
+
+    def should_modify(
+        self,
+        order: LimitOrder,
+        market_state: LOBState,
+        queue_state: Optional[QueueState] = None,
+    ) -> bool:
+        """
+        Check if this order should be modified (cancelled or repriced).
+
+        Convenience method for checking if any action should be taken.
+        Use should_cancel() or should_reprice() for specific decisions.
         """
         result = self.compute_queue_value(order, market_state, queue_state)
         return result.decision in (OrderDecision.CANCEL, OrderDecision.REPRICE)
