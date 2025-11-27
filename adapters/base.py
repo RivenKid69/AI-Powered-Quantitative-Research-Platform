@@ -50,12 +50,18 @@ from core_models import Bar, Tick, Order, ExecReport, Position, Side, Liquidity
 
 from .models import (
     AccountInfo,
+    AdjustmentFactors,
+    CorporateAction,
+    CorporateActionType,
+    Dividend,
+    EarningsEvent,
     ExchangeRule,
     ExchangeVendor,
     FeeSchedule,
     MarketCalendar,
     MarketType,
     SessionType,
+    StockSplit,
     SymbolInfo,
     TradingSession,
 )
@@ -828,6 +834,320 @@ class ExchangeInfoAdapter(BaseAdapter):
         if not info.is_tradable:
             return False, f"Symbol {symbol} is not tradable"
         return True, None
+
+
+# =========================
+# Corporate Actions Adapter (Phase 7)
+# =========================
+
+class CorporateActionsAdapter(BaseAdapter):
+    """
+    Abstract adapter for corporate actions data.
+
+    Handles:
+    - Dividends (cash, stock)
+    - Stock splits (forward, reverse)
+    - Mergers and acquisitions
+    - Spinoffs
+    - Symbol changes
+
+    Critical for:
+    - Accurate backtesting with total return
+    - Position adjustment for splits
+    - Historical price adjustment
+
+    Usage:
+        adapter = YahooCorporateActionsAdapter(config)
+        dividends = adapter.get_dividends("AAPL", start_date="2023-01-01")
+        splits = adapter.get_splits("AAPL", start_date="2020-01-01")
+        factors = adapter.get_adjustment_factors("AAPL", "2024-01-15")
+    """
+
+    @abstractmethod
+    def get_dividends(
+        self,
+        symbol: str,
+        *,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> List[Dividend]:
+        """
+        Get dividend history for a symbol.
+
+        Args:
+            symbol: Stock symbol
+            start_date: Start date (ISO format, inclusive)
+            end_date: End date (ISO format, inclusive)
+
+        Returns:
+            List of Dividend objects, sorted by ex_date ascending
+        """
+        ...
+
+    @abstractmethod
+    def get_splits(
+        self,
+        symbol: str,
+        *,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> List[StockSplit]:
+        """
+        Get stock split history for a symbol.
+
+        Args:
+            symbol: Stock symbol
+            start_date: Start date (ISO format)
+            end_date: End date (ISO format)
+
+        Returns:
+            List of StockSplit objects, sorted by ex_date ascending
+        """
+        ...
+
+    @abstractmethod
+    def get_corporate_actions(
+        self,
+        symbol: str,
+        *,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        action_types: Optional[Sequence[CorporateActionType]] = None,
+    ) -> List[CorporateAction]:
+        """
+        Get all corporate actions for a symbol.
+
+        Args:
+            symbol: Stock symbol
+            start_date: Start date
+            end_date: End date
+            action_types: Filter by specific action types (None = all)
+
+        Returns:
+            List of CorporateAction objects, sorted by ex_date ascending
+        """
+        ...
+
+    @abstractmethod
+    def get_adjustment_factors(
+        self,
+        symbol: str,
+        date: str,
+    ) -> AdjustmentFactors:
+        """
+        Get cumulative adjustment factors for a symbol at a date.
+
+        These factors convert raw historical prices to split-adjusted prices.
+        For backtesting, apply these factors to historical OHLC data.
+
+        Args:
+            symbol: Stock symbol
+            date: Reference date (ISO format)
+
+        Returns:
+            AdjustmentFactors for converting prices
+        """
+        ...
+
+    def get_adjustment_series(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> Dict[str, AdjustmentFactors]:
+        """
+        Get adjustment factors for each date in a range.
+
+        Default implementation fetches splits/dividends and computes factors.
+        Override for more efficient bulk fetching.
+
+        Args:
+            symbol: Stock symbol
+            start_date: Start date
+            end_date: End date
+
+        Returns:
+            Dict mapping date string to AdjustmentFactors
+        """
+        from datetime import datetime, timedelta
+
+        splits = self.get_splits(symbol, start_date=start_date, end_date=end_date)
+        dividends = self.get_dividends(symbol, start_date=start_date, end_date=end_date)
+
+        # Build map of ex_dates to actions
+        split_map: Dict[str, float] = {s.ex_date: s.adjustment_factor for s in splits}
+        div_map: Dict[str, Decimal] = {d.ex_date: d.amount for d in dividends}
+
+        # Generate date range
+        result: Dict[str, AdjustmentFactors] = {}
+        start_dt = datetime.fromisoformat(start_date)
+        end_dt = datetime.fromisoformat(end_date)
+
+        cumulative_split = 1.0
+        cumulative_div = 1.0
+
+        current = start_dt
+        while current <= end_dt:
+            date_str = current.strftime("%Y-%m-%d")
+
+            # Apply split factor (multiplicative)
+            if date_str in split_map:
+                cumulative_split *= split_map[date_str]
+
+            # Dividend factor would need price info for proper adjustment
+            # For now, track cumulative split only
+            result[date_str] = AdjustmentFactors(
+                symbol=symbol,
+                date=date_str,
+                split_factor=cumulative_split,
+                dividend_factor=cumulative_div,
+            )
+
+            current += timedelta(days=1)
+
+        return result
+
+    def get_upcoming_dividends(
+        self,
+        symbols: Sequence[str],
+        days_ahead: int = 30,
+    ) -> Dict[str, List[Dividend]]:
+        """
+        Get upcoming ex-dividend dates for multiple symbols.
+
+        Args:
+            symbols: List of symbols
+            days_ahead: Number of days to look ahead
+
+        Returns:
+            Dict mapping symbol to list of upcoming dividends
+        """
+        from datetime import datetime, timedelta
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        end = (datetime.now() + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+
+        result: Dict[str, List[Dividend]] = {}
+        for symbol in symbols:
+            try:
+                divs = self.get_dividends(symbol, start_date=today, end_date=end)
+                if divs:
+                    result[symbol] = divs
+            except Exception:
+                continue
+
+        return result
+
+
+# =========================
+# Earnings Adapter (Phase 7)
+# =========================
+
+class EarningsAdapter(BaseAdapter):
+    """
+    Abstract adapter for earnings calendar and estimates.
+
+    Important for:
+    - Volatility modeling around earnings
+    - Position sizing (reduce before earnings)
+    - Feature engineering (days to earnings)
+
+    Usage:
+        adapter = YahooEarningsAdapter(config)
+        earnings = adapter.get_earnings_history("AAPL")
+        upcoming = adapter.get_upcoming_earnings(["AAPL", "MSFT"])
+    """
+
+    @abstractmethod
+    def get_earnings_history(
+        self,
+        symbol: str,
+        *,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> List[EarningsEvent]:
+        """
+        Get historical earnings for a symbol.
+
+        Args:
+            symbol: Stock symbol
+            start_date: Start date (ISO format)
+            end_date: End date (ISO format)
+
+        Returns:
+            List of EarningsEvent objects with actuals filled in
+        """
+        ...
+
+    @abstractmethod
+    def get_upcoming_earnings(
+        self,
+        symbols: Sequence[str],
+        days_ahead: int = 30,
+    ) -> Dict[str, List[EarningsEvent]]:
+        """
+        Get upcoming earnings dates for multiple symbols.
+
+        Args:
+            symbols: List of symbols
+            days_ahead: Days to look ahead
+
+        Returns:
+            Dict mapping symbol to list of upcoming EarningsEvent
+        """
+        ...
+
+    @abstractmethod
+    def get_earnings_calendar(
+        self,
+        date: str,
+    ) -> List[EarningsEvent]:
+        """
+        Get all earnings scheduled for a specific date.
+
+        Args:
+            date: Date to check (ISO format)
+
+        Returns:
+            List of EarningsEvent for companies reporting that day
+        """
+        ...
+
+    def get_next_earnings(self, symbol: str) -> Optional[EarningsEvent]:
+        """
+        Get next upcoming earnings for a single symbol.
+
+        Args:
+            symbol: Stock symbol
+
+        Returns:
+            Next EarningsEvent or None if not scheduled
+        """
+        upcoming = self.get_upcoming_earnings([symbol], days_ahead=120)
+        events = upcoming.get(symbol, [])
+        if events:
+            return min(events, key=lambda e: e.report_date)
+        return None
+
+    def days_to_earnings(self, symbol: str) -> Optional[int]:
+        """
+        Get number of days until next earnings.
+
+        Args:
+            symbol: Stock symbol
+
+        Returns:
+            Number of days, or None if no upcoming earnings
+        """
+        from datetime import datetime
+
+        event = self.get_next_earnings(symbol)
+        if event is None:
+            return None
+
+        today = datetime.now().date()
+        earnings_date = datetime.fromisoformat(event.report_date).date()
+        return (earnings_date - today).days
 
 
 # =========================

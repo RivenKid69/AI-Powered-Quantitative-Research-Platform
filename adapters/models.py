@@ -56,6 +56,7 @@ class ExchangeVendor(str, Enum):
     BINANCE_US = "binance_us"
     ALPACA = "alpaca"
     POLYGON = "polygon"  # Data provider
+    YAHOO = "yahoo"      # Data provider for corporate actions, earnings (Phase 7)
     UNKNOWN = "unknown"
 
     @property
@@ -715,3 +716,493 @@ def create_crypto_calendar(vendor: ExchangeVendor = ExchangeVendor.BINANCE) -> M
         sessions=[CRYPTO_CONTINUOUS_SESSION],
         timezone="UTC",
     )
+
+
+# =========================
+# Corporate Actions (Phase 7)
+# =========================
+
+class CorporateActionType(str, Enum):
+    """Type of corporate action affecting stock price/position."""
+    DIVIDEND = "dividend"              # Cash dividend
+    STOCK_DIVIDEND = "stock_dividend"  # Stock dividend (shares distributed)
+    SPLIT = "split"                    # Stock split (forward or reverse)
+    MERGER = "merger"                  # Merger/acquisition
+    SPINOFF = "spinoff"                # Spinoff of subsidiary
+    RIGHTS = "rights"                  # Rights offering
+    SYMBOL_CHANGE = "symbol_change"    # Ticker symbol change
+    DELISTING = "delisting"            # Removed from exchange
+
+
+class DividendType(str, Enum):
+    """Type of dividend distribution."""
+    REGULAR = "regular"         # Regular quarterly/monthly dividend
+    SPECIAL = "special"         # One-time special dividend
+    STOCK = "stock"            # Paid in shares, not cash
+    QUALIFIED = "qualified"     # Tax-advantaged qualified dividend
+    UNQUALIFIED = "unqualified" # Ordinary income dividend
+
+
+@dataclass(frozen=True)
+class CorporateAction:
+    """
+    A corporate action affecting stock price or position.
+
+    Corporate actions are critical for accurate backtesting:
+    - Dividends: Affect total return, may need price adjustment
+    - Splits: Multiply/divide shares, adjust prices proportionally
+    - Mergers: May result in cash/stock consideration
+    - Spinoffs: Create new position in spun-off company
+
+    Attributes:
+        action_type: Type of corporate action
+        symbol: Stock symbol
+        ex_date: Ex-dividend/ex-date (when price adjusts)
+        record_date: Record date (ownership cutoff)
+        pay_date: Payment/effective date
+        announcement_date: When action was announced
+        amount: Cash amount per share (dividends)
+        ratio: Split ratio as tuple (new_shares, old_shares)
+                e.g., (2, 1) for 2-for-1 split, (1, 10) for 1-for-10 reverse
+        currency: Currency of cash amounts
+        description: Human-readable description
+        adjustment_factor: Price adjustment factor (e.g., 0.5 for 2:1 split)
+        related_symbol: New symbol for mergers/spinoffs/symbol changes
+        raw_data: Original data from source
+    """
+    action_type: CorporateActionType
+    symbol: str
+    ex_date: str  # ISO format YYYY-MM-DD
+    record_date: Optional[str] = None
+    pay_date: Optional[str] = None
+    announcement_date: Optional[str] = None
+    amount: Optional[Decimal] = None  # Per share amount for dividends
+    ratio: Optional[Tuple[int, int]] = None  # (new, old) for splits
+    currency: str = "USD"
+    description: str = ""
+    adjustment_factor: Optional[float] = None  # Pre-computed for convenience
+    related_symbol: Optional[str] = None  # For mergers, spinoffs, symbol changes
+    raw_data: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Compute adjustment factor if not provided."""
+        if self.adjustment_factor is None and self.ratio is not None:
+            # For split: new_shares / old_shares
+            # e.g., 2:1 split → adjustment_factor = 0.5 (prices halve)
+            new, old = self.ratio
+            if old > 0:
+                object.__setattr__(self, 'adjustment_factor', old / new)
+
+    @property
+    def is_price_adjusting(self) -> bool:
+        """Returns True if this action requires price adjustment."""
+        return self.action_type in (
+            CorporateActionType.DIVIDEND,
+            CorporateActionType.STOCK_DIVIDEND,
+            CorporateActionType.SPLIT,
+            CorporateActionType.SPINOFF,
+        )
+
+    @property
+    def is_position_adjusting(self) -> bool:
+        """Returns True if this action changes position size."""
+        return self.action_type in (
+            CorporateActionType.SPLIT,
+            CorporateActionType.STOCK_DIVIDEND,
+            CorporateActionType.MERGER,
+            CorporateActionType.SPINOFF,
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "action_type": self.action_type.value,
+            "symbol": self.symbol,
+            "ex_date": self.ex_date,
+            "record_date": self.record_date,
+            "pay_date": self.pay_date,
+            "announcement_date": self.announcement_date,
+            "amount": str(self.amount) if self.amount else None,
+            "ratio": list(self.ratio) if self.ratio else None,
+            "currency": self.currency,
+            "description": self.description,
+            "adjustment_factor": self.adjustment_factor,
+            "related_symbol": self.related_symbol,
+            "raw_data": self.raw_data,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> "CorporateAction":
+        action_type_val = d.get("action_type", "dividend")
+        try:
+            action_type = CorporateActionType(str(action_type_val))
+        except ValueError:
+            action_type = CorporateActionType.DIVIDEND
+
+        ratio = d.get("ratio")
+        if ratio and isinstance(ratio, (list, tuple)) and len(ratio) >= 2:
+            ratio = (int(ratio[0]), int(ratio[1]))
+        else:
+            ratio = None
+
+        amount = d.get("amount")
+        if amount is not None:
+            try:
+                amount = Decimal(str(amount))
+            except Exception:
+                amount = None
+
+        return cls(
+            action_type=action_type,
+            symbol=str(d.get("symbol", "")),
+            ex_date=str(d.get("ex_date", "")),
+            record_date=d.get("record_date"),
+            pay_date=d.get("pay_date"),
+            announcement_date=d.get("announcement_date"),
+            amount=amount,
+            ratio=ratio,
+            currency=str(d.get("currency", "USD")),
+            description=str(d.get("description", "")),
+            adjustment_factor=float(d["adjustment_factor"]) if d.get("adjustment_factor") else None,
+            related_symbol=d.get("related_symbol"),
+            raw_data=dict(d.get("raw_data", {})),
+        )
+
+
+@dataclass(frozen=True)
+class Dividend:
+    """
+    Dividend payment details.
+
+    Convenience class for dividend-specific operations.
+    More detailed than CorporateAction for dividend analysis.
+
+    Attributes:
+        symbol: Stock symbol
+        ex_date: Ex-dividend date
+        record_date: Record date
+        pay_date: Payment date
+        declaration_date: Declaration/announcement date
+        amount: Dividend amount per share
+        dividend_type: Type of dividend (regular, special, etc.)
+        frequency: Payment frequency (quarterly, monthly, annual)
+        currency: Payment currency
+        yield_pct: Dividend yield at declaration (optional)
+        is_adjusted: Whether amount is split-adjusted
+    """
+    symbol: str
+    ex_date: str  # ISO format
+    amount: Decimal
+    record_date: Optional[str] = None
+    pay_date: Optional[str] = None
+    declaration_date: Optional[str] = None
+    dividend_type: DividendType = DividendType.REGULAR
+    frequency: Optional[str] = None  # "quarterly", "monthly", "annual", etc.
+    currency: str = "USD"
+    yield_pct: Optional[float] = None
+    is_adjusted: bool = False  # True if amount is split-adjusted
+
+    @property
+    def ex_date_timestamp(self) -> int:
+        """Ex-date as Unix timestamp (seconds)."""
+        from datetime import datetime
+        dt = datetime.fromisoformat(self.ex_date)
+        return int(dt.timestamp())
+
+    def to_corporate_action(self) -> CorporateAction:
+        """Convert to CorporateAction for unified processing."""
+        return CorporateAction(
+            action_type=CorporateActionType.DIVIDEND,
+            symbol=self.symbol,
+            ex_date=self.ex_date,
+            record_date=self.record_date,
+            pay_date=self.pay_date,
+            announcement_date=self.declaration_date,
+            amount=self.amount,
+            currency=self.currency,
+            description=f"{self.dividend_type.value} dividend: ${self.amount}",
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "symbol": self.symbol,
+            "ex_date": self.ex_date,
+            "amount": str(self.amount),
+            "record_date": self.record_date,
+            "pay_date": self.pay_date,
+            "declaration_date": self.declaration_date,
+            "dividend_type": self.dividend_type.value,
+            "frequency": self.frequency,
+            "currency": self.currency,
+            "yield_pct": self.yield_pct,
+            "is_adjusted": self.is_adjusted,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> "Dividend":
+        div_type_val = d.get("dividend_type", "regular")
+        try:
+            div_type = DividendType(str(div_type_val))
+        except ValueError:
+            div_type = DividendType.REGULAR
+
+        amount = d.get("amount", "0")
+        try:
+            amount = Decimal(str(amount))
+        except Exception:
+            amount = Decimal("0")
+
+        return cls(
+            symbol=str(d.get("symbol", "")),
+            ex_date=str(d.get("ex_date", "")),
+            amount=amount,
+            record_date=d.get("record_date"),
+            pay_date=d.get("pay_date"),
+            declaration_date=d.get("declaration_date"),
+            dividend_type=div_type,
+            frequency=d.get("frequency"),
+            currency=str(d.get("currency", "USD")),
+            yield_pct=float(d["yield_pct"]) if d.get("yield_pct") else None,
+            is_adjusted=bool(d.get("is_adjusted", False)),
+        )
+
+
+@dataclass(frozen=True)
+class StockSplit:
+    """
+    Stock split details.
+
+    Attributes:
+        symbol: Stock symbol
+        ex_date: Ex-date (effective date)
+        ratio: Split ratio as (new_shares, old_shares)
+               e.g., (4, 1) means 4-for-1 split
+               (1, 10) means 1-for-10 reverse split
+        announcement_date: When split was announced
+        is_reverse: True if reverse split (consolidation)
+    """
+    symbol: str
+    ex_date: str  # ISO format
+    ratio: Tuple[int, int]  # (new, old)
+    announcement_date: Optional[str] = None
+    is_reverse: bool = False
+
+    def __post_init__(self) -> None:
+        """Validate and set is_reverse flag."""
+        new, old = self.ratio
+        if new < old and not self.is_reverse:
+            object.__setattr__(self, 'is_reverse', True)
+
+    @property
+    def adjustment_factor(self) -> float:
+        """
+        Factor to multiply historical prices by.
+
+        For 2:1 split, factor = 0.5 (prices halve)
+        For 1:10 reverse, factor = 10 (prices 10x)
+        """
+        new, old = self.ratio
+        return old / new if new > 0 else 1.0
+
+    @property
+    def share_multiplier(self) -> float:
+        """
+        Factor to multiply share count by.
+
+        For 2:1 split, multiplier = 2 (shares double)
+        For 1:10 reverse, multiplier = 0.1 (shares reduced)
+        """
+        new, old = self.ratio
+        return new / old if old > 0 else 1.0
+
+    def to_corporate_action(self) -> CorporateAction:
+        """Convert to CorporateAction for unified processing."""
+        split_type = "reverse split" if self.is_reverse else "split"
+        return CorporateAction(
+            action_type=CorporateActionType.SPLIT,
+            symbol=self.symbol,
+            ex_date=self.ex_date,
+            announcement_date=self.announcement_date,
+            ratio=self.ratio,
+            adjustment_factor=self.adjustment_factor,
+            description=f"{self.ratio[0]}-for-{self.ratio[1]} {split_type}",
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "symbol": self.symbol,
+            "ex_date": self.ex_date,
+            "ratio": list(self.ratio),
+            "announcement_date": self.announcement_date,
+            "is_reverse": self.is_reverse,
+            "adjustment_factor": self.adjustment_factor,
+            "share_multiplier": self.share_multiplier,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> "StockSplit":
+        ratio = d.get("ratio", [1, 1])
+        if isinstance(ratio, (list, tuple)) and len(ratio) >= 2:
+            ratio = (int(ratio[0]), int(ratio[1]))
+        else:
+            ratio = (1, 1)
+
+        return cls(
+            symbol=str(d.get("symbol", "")),
+            ex_date=str(d.get("ex_date", "")),
+            ratio=ratio,
+            announcement_date=d.get("announcement_date"),
+            is_reverse=bool(d.get("is_reverse", False)),
+        )
+
+
+@dataclass(frozen=True)
+class EarningsEvent:
+    """
+    Earnings announcement event.
+
+    Important for:
+    - Volatility modeling (earnings surprises)
+    - Position sizing around earnings
+    - Feature engineering (days to/from earnings)
+
+    Attributes:
+        symbol: Stock symbol
+        report_date: Expected/actual report date
+        fiscal_quarter: Fiscal quarter (1-4)
+        fiscal_year: Fiscal year
+        report_time: "BMO" (before market open), "AMC" (after market close), or "DDM" (during day)
+        eps_estimate: Consensus EPS estimate
+        eps_actual: Actual reported EPS (None if not yet reported)
+        revenue_estimate: Consensus revenue estimate
+        revenue_actual: Actual revenue
+        surprise_pct: EPS surprise percentage (actual - estimate) / estimate
+        is_confirmed: Whether date is confirmed by company
+    """
+    symbol: str
+    report_date: str  # ISO format YYYY-MM-DD
+    fiscal_quarter: Optional[int] = None  # 1-4
+    fiscal_year: Optional[int] = None
+    report_time: Optional[str] = None  # "BMO", "AMC", "DDM"
+    eps_estimate: Optional[Decimal] = None
+    eps_actual: Optional[Decimal] = None
+    revenue_estimate: Optional[Decimal] = None  # In millions or actual
+    revenue_actual: Optional[Decimal] = None
+    surprise_pct: Optional[float] = None
+    is_confirmed: bool = False
+
+    @property
+    def report_date_timestamp(self) -> int:
+        """Report date as Unix timestamp (seconds)."""
+        from datetime import datetime
+        dt = datetime.fromisoformat(self.report_date)
+        return int(dt.timestamp())
+
+    @property
+    def has_reported(self) -> bool:
+        """Whether earnings have been reported."""
+        return self.eps_actual is not None
+
+    @property
+    def beat_estimates(self) -> Optional[bool]:
+        """Whether company beat EPS estimates (None if not reported)."""
+        if self.eps_actual is None or self.eps_estimate is None:
+            return None
+        return self.eps_actual > self.eps_estimate
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "symbol": self.symbol,
+            "report_date": self.report_date,
+            "fiscal_quarter": self.fiscal_quarter,
+            "fiscal_year": self.fiscal_year,
+            "report_time": self.report_time,
+            "eps_estimate": str(self.eps_estimate) if self.eps_estimate else None,
+            "eps_actual": str(self.eps_actual) if self.eps_actual else None,
+            "revenue_estimate": str(self.revenue_estimate) if self.revenue_estimate else None,
+            "revenue_actual": str(self.revenue_actual) if self.revenue_actual else None,
+            "surprise_pct": self.surprise_pct,
+            "is_confirmed": self.is_confirmed,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> "EarningsEvent":
+        def _to_decimal_opt(v: Any) -> Optional[Decimal]:
+            if v is None:
+                return None
+            try:
+                return Decimal(str(v))
+            except Exception:
+                return None
+
+        return cls(
+            symbol=str(d.get("symbol", "")),
+            report_date=str(d.get("report_date", "")),
+            fiscal_quarter=int(d["fiscal_quarter"]) if d.get("fiscal_quarter") else None,
+            fiscal_year=int(d["fiscal_year"]) if d.get("fiscal_year") else None,
+            report_time=d.get("report_time"),
+            eps_estimate=_to_decimal_opt(d.get("eps_estimate")),
+            eps_actual=_to_decimal_opt(d.get("eps_actual")),
+            revenue_estimate=_to_decimal_opt(d.get("revenue_estimate")),
+            revenue_actual=_to_decimal_opt(d.get("revenue_actual")),
+            surprise_pct=float(d["surprise_pct"]) if d.get("surprise_pct") else None,
+            is_confirmed=bool(d.get("is_confirmed", False)),
+        )
+
+
+@dataclass(frozen=True)
+class AdjustmentFactors:
+    """
+    Combined adjustment factors for a symbol at a point in time.
+
+    Used for converting between split-adjusted and unadjusted prices.
+
+    Attributes:
+        symbol: Stock symbol
+        date: Date these factors apply from
+        split_factor: Cumulative split adjustment factor
+        dividend_factor: Cumulative dividend adjustment factor
+        combined_factor: Product of split and dividend factors
+    """
+    symbol: str
+    date: str  # ISO format
+    split_factor: float = 1.0
+    dividend_factor: float = 1.0
+
+    @property
+    def combined_factor(self) -> float:
+        """Total adjustment factor (split * dividend)."""
+        return self.split_factor * self.dividend_factor
+
+    def adjust_price(self, price: float) -> float:
+        """Apply adjustment to convert raw price to adjusted price."""
+        return price * self.combined_factor
+
+    def unadjust_price(self, adjusted_price: float) -> float:
+        """Reverse adjustment to get raw price from adjusted price."""
+        if self.combined_factor == 0:
+            return adjusted_price
+        return adjusted_price / self.combined_factor
+
+    def adjust_volume(self, volume: float) -> float:
+        """Adjust volume (inverse of price adjustment for splits)."""
+        if self.split_factor == 0:
+            return volume
+        return volume / self.split_factor
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "symbol": self.symbol,
+            "date": self.date,
+            "split_factor": self.split_factor,
+            "dividend_factor": self.dividend_factor,
+            "combined_factor": self.combined_factor,
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> "AdjustmentFactors":
+        return cls(
+            symbol=str(d.get("symbol", "")),
+            date=str(d.get("date", "")),
+            split_factor=float(d.get("split_factor", 1.0)),
+            dividend_factor=float(d.get("dividend_factor", 1.0)),
+        )

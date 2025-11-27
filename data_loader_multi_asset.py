@@ -641,6 +641,208 @@ def validate_data(
 
 
 # =============================================================================
+# CORPORATE ACTIONS INTEGRATION (Phase 7)
+# =============================================================================
+
+def apply_split_adjustment(
+    df: pd.DataFrame,
+    symbol: str,
+    use_adjusted_close: bool = True,
+) -> pd.DataFrame:
+    """
+    Apply stock split adjustments to OHLCV data.
+
+    For equities, it's recommended to use split-adjusted prices
+    to ensure price continuity across splits.
+
+    Args:
+        df: DataFrame with OHLCV data
+        symbol: Stock symbol
+        use_adjusted_close: If True, uses 'adjusted_close' column if present
+                          (common in Yahoo/Polygon data)
+
+    Returns:
+        DataFrame with split-adjusted prices
+    """
+    df = df.copy()
+
+    # Check if data already has adjusted prices
+    if use_adjusted_close and "adjusted_close" in df.columns:
+        # Compute adjustment factor from close vs adjusted_close
+        adj_factor = df["adjusted_close"] / df["close"]
+        adj_factor = adj_factor.fillna(1.0).replace([np.inf, -np.inf], 1.0)
+
+        # Apply to OHLC
+        df["open"] = df["open"] * adj_factor
+        df["high"] = df["high"] * adj_factor
+        df["low"] = df["low"] * adj_factor
+        df["close"] = df["adjusted_close"]
+
+        # Volume is inverse-adjusted
+        df["volume"] = df["volume"] / adj_factor
+
+        logger.debug(f"Applied adjustment from adjusted_close for {symbol}")
+        return df
+
+    # Use corporate actions service
+    try:
+        from services.corporate_actions import get_service
+
+        service = get_service()
+        df = service.adjust_prices(
+            df,
+            symbol,
+            adjust_splits=True,
+            adjust_dividends=False,
+        )
+
+        # Replace original columns with adjusted
+        for col in ["open", "high", "low", "close"]:
+            adj_col = f"{col}_adjusted"
+            if adj_col in df.columns:
+                df[col] = df[adj_col]
+                df.drop(columns=[adj_col], inplace=True)
+
+        if "volume_adjusted" in df.columns:
+            df["volume"] = df["volume_adjusted"]
+            df.drop(columns=["volume_adjusted"], inplace=True)
+
+        logger.debug(f"Applied split adjustment via service for {symbol}")
+
+    except ImportError:
+        logger.warning("corporate_actions service not available, skipping adjustment")
+    except Exception as e:
+        logger.warning(f"Error applying split adjustment for {symbol}: {e}")
+
+    return df
+
+
+def add_corporate_action_features(
+    df: pd.DataFrame,
+    symbol: str,
+) -> pd.DataFrame:
+    """
+    Add corporate action-related features to DataFrame.
+
+    Features added:
+    - days_to_ex_div: Days until next ex-dividend date
+    - days_to_earnings: Days until next earnings
+    - gap_pct: Pre-market gap percentage
+    - gap_direction: Direction of gap (1/-1/0)
+    - gap_magnitude: Categorized gap size
+
+    Args:
+        df: DataFrame with OHLCV data
+        symbol: Stock symbol
+
+    Returns:
+        DataFrame with additional features
+    """
+    df = df.copy()
+
+    try:
+        from services.corporate_actions import get_service
+
+        service = get_service()
+
+        # Add gap features (doesn't require external data)
+        df = service.compute_gap_features(df)
+
+        # Get date column
+        if "timestamp" in df.columns:
+            dates = pd.to_datetime(df["timestamp"], unit="s").dt.strftime("%Y-%m-%d")
+        elif "date" in df.columns:
+            dates = pd.Series(df["date"]).astype(str)
+        else:
+            logger.warning("No date column found, skipping calendar features")
+            return df
+
+        # Add earnings and dividend features row by row (can be slow for large datasets)
+        # For performance, consider batch fetching
+        days_to_ex_div = []
+        days_to_earnings = []
+
+        # Get all corporate actions upfront
+        all_divs = service.get_dividends(symbol)
+        all_earnings = service.get_earnings(symbol)
+
+        div_dates = sorted([d["ex_date"] for d in all_divs if d.get("ex_date")])
+        earn_dates = sorted([e["report_date"] for e in all_earnings if e.get("report_date")])
+
+        for date in dates:
+            # Days to next dividend
+            future_divs = [d for d in div_dates if d > date]
+            if future_divs:
+                next_div = future_divs[0]
+                days = (datetime.fromisoformat(next_div) - datetime.fromisoformat(date)).days
+                days_to_ex_div.append(min(days, 90))  # Cap at 90
+            else:
+                days_to_ex_div.append(90)
+
+            # Days to next earnings
+            future_earns = [e for e in earn_dates if e > date]
+            if future_earns:
+                next_earn = future_earns[0]
+                days = (datetime.fromisoformat(next_earn) - datetime.fromisoformat(date)).days
+                days_to_earnings.append(min(days, 90))
+            else:
+                days_to_earnings.append(90)
+
+        df["days_to_ex_div"] = days_to_ex_div
+        df["days_to_earnings"] = days_to_earnings
+
+        logger.debug(f"Added corporate action features for {symbol}")
+
+    except ImportError:
+        logger.warning("corporate_actions service not available")
+    except Exception as e:
+        logger.warning(f"Error adding corporate action features for {symbol}: {e}")
+
+    return df
+
+
+def load_equity_data_adjusted(
+    paths: Sequence[Union[str, Path]],
+    timeframe: str = "4h",
+    apply_adjustments: bool = True,
+    add_corp_features: bool = True,
+) -> Tuple[Dict[str, pd.DataFrame], Dict[str, np.ndarray]]:
+    """
+    Load equity data with split adjustments and corporate action features.
+
+    This is the recommended function for loading stock data for backtesting.
+
+    Args:
+        paths: List of data file paths
+        timeframe: Bar timeframe
+        apply_adjustments: Apply split/dividend adjustments
+        add_corp_features: Add corporate action features (gap, earnings, etc.)
+
+    Returns:
+        (all_dfs_dict, all_obs_dict) tuple
+    """
+    # Load base data
+    all_dfs, all_obs = load_multi_asset_data(
+        paths=paths,
+        asset_class=AssetClass.EQUITY,
+        timeframe=timeframe,
+        merge_fear_greed=False,
+    )
+
+    # Apply adjustments and features
+    for symbol, df in all_dfs.items():
+        if apply_adjustments:
+            df = apply_split_adjustment(df, symbol)
+
+        if add_corp_features:
+            df = add_corporate_action_features(df, symbol)
+
+        all_dfs[symbol] = df
+
+    return all_dfs, all_obs
+
+
+# =============================================================================
 # CONVENIENCE FUNCTIONS
 # =============================================================================
 

@@ -674,3 +674,345 @@ class FeaturePipeline:
             stats = payload
             metadata = {}
             return cls(stats=stats, metadata=metadata)
+
+
+# ==============================================================================
+# Gap Analysis Features (Phase 7 - Stock Support)
+# ==============================================================================
+
+def compute_gap_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Compute pre-market gap analysis features.
+
+    Gap analysis is critical for equity trading:
+    - Overnight news creates opening gaps
+    - Gap fill probability varies by gap size
+    - Large gaps often indicate significant events
+
+    Features computed:
+    - gap_pct: Gap percentage from previous close to open
+    - gap_abs: Absolute gap (log-scaled for normalization)
+    - gap_direction: Direction (1 = up, -1 = down, 0 = flat)
+    - gap_magnitude: Categorized size (0-3)
+    - gap_filled: Whether gap was filled intrabar
+    - gap_fill_ratio: How much of gap was filled (0-1+)
+
+    Args:
+        df: DataFrame with OHLCV data
+
+    Returns:
+        DataFrame with gap features added
+
+    Note:
+        For crypto, gaps are less common (24/7 trading) but can occur
+        on weekends or during exchange maintenance.
+    """
+    df = df.copy()
+
+    if "close" not in df.columns or "open" not in df.columns:
+        # Missing required columns, return as-is
+        return df
+
+    # Compute previous close
+    prev_close = df["close"].shift(1)
+
+    # Gap percentage: (open - prev_close) / prev_close * 100
+    # Handle division by zero gracefully
+    gap_pct = np.where(
+        prev_close > 0,
+        (df["open"] - prev_close) / prev_close * 100,
+        0.0
+    )
+    df["gap_pct"] = gap_pct
+
+    # Absolute gap (log-scaled with sign preserved)
+    # log1p(abs(x)) * sign(x) provides bounded feature for ML
+    df["gap_abs"] = np.log1p(np.abs(gap_pct)) * np.sign(gap_pct)
+
+    # Gap direction: 1 for up, -1 for down, 0 for flat
+    df["gap_direction"] = np.sign(gap_pct)
+
+    # Gap magnitude category:
+    # 0 = No gap (< 0.5%)
+    # 1 = Small (0.5% - 2%)
+    # 2 = Medium (2% - 5%)
+    # 3 = Large (> 5%)
+    abs_gap = np.abs(gap_pct)
+    df["gap_magnitude"] = np.select(
+        [abs_gap < 0.5, abs_gap < 2.0, abs_gap < 5.0],
+        [0, 1, 2],
+        default=3
+    )
+
+    # Gap filled detection:
+    # Up gap is filled if low goes below previous close
+    # Down gap is filled if high goes above previous close
+    df["gap_filled"] = 0
+
+    if "high" in df.columns and "low" in df.columns:
+        up_gap_mask = gap_pct > 0
+        down_gap_mask = gap_pct < 0
+
+        # Up gap filled when low reaches prev_close
+        df.loc[up_gap_mask & (df["low"] <= prev_close), "gap_filled"] = 1
+
+        # Down gap filled when high reaches prev_close
+        df.loc[down_gap_mask & (df["high"] >= prev_close), "gap_filled"] = 1
+
+        # Gap fill ratio: how much of the gap was retraced
+        # For up gap: (open - low) / (open - prev_close)
+        # For down gap: (high - open) / (prev_close - open)
+        gap_fill_ratio = np.zeros(len(df))
+
+        # Up gap fill ratio
+        up_gap_size = df["open"] - prev_close
+        up_gap_fill = df["open"] - df["low"]
+        valid_up = up_gap_mask & (up_gap_size > 0)
+        gap_fill_ratio = np.where(
+            valid_up,
+            up_gap_fill / up_gap_size,
+            gap_fill_ratio
+        )
+
+        # Down gap fill ratio
+        down_gap_size = prev_close - df["open"]
+        down_gap_fill = df["high"] - df["open"]
+        valid_down = down_gap_mask & (down_gap_size > 0)
+        gap_fill_ratio = np.where(
+            valid_down,
+            down_gap_fill / down_gap_size,
+            gap_fill_ratio
+        )
+
+        df["gap_fill_ratio"] = np.clip(gap_fill_ratio, 0, 2)  # Cap at 200%
+
+    # Handle NaN in first row (no previous close)
+    df["gap_pct"] = df["gap_pct"].fillna(0)
+    df["gap_abs"] = df["gap_abs"].fillna(0)
+    df["gap_direction"] = df["gap_direction"].fillna(0)
+    df["gap_magnitude"] = df["gap_magnitude"].fillna(0)
+    df["gap_filled"] = df["gap_filled"].fillna(0)
+    if "gap_fill_ratio" in df.columns:
+        df["gap_fill_ratio"] = df["gap_fill_ratio"].fillna(0)
+
+    return df
+
+
+def compute_earnings_proximity_features(
+    df: pd.DataFrame,
+    earnings_dates: Sequence[str],
+) -> pd.DataFrame:
+    """
+    Compute features related to earnings proximity.
+
+    Important for:
+    - Volatility modeling (implied vol rises before earnings)
+    - Position sizing (reduce risk around earnings)
+    - Regime detection (earnings season patterns)
+
+    Features:
+    - days_to_earnings: Days until next earnings (-90 to +90)
+    - earnings_week: Binary flag for week of earnings
+    - post_earnings: First 3 days after earnings
+
+    Args:
+        df: DataFrame with timestamp column
+        earnings_dates: List of earnings dates (ISO format)
+
+    Returns:
+        DataFrame with earnings features
+    """
+    df = df.copy()
+
+    if "timestamp" not in df.columns or not earnings_dates:
+        df["days_to_earnings"] = 90
+        df["earnings_week"] = 0
+        df["post_earnings"] = 0
+        return df
+
+    from datetime import datetime, timedelta
+
+    # Convert timestamps to dates
+    df["_date"] = pd.to_datetime(df["timestamp"], unit="s").dt.strftime("%Y-%m-%d")
+
+    # Sort earnings dates
+    sorted_earnings = sorted(earnings_dates)
+
+    days_to_earnings = []
+    earnings_week = []
+    post_earnings = []
+
+    for date_str in df["_date"]:
+        current_date = datetime.fromisoformat(date_str)
+
+        # Find next and previous earnings
+        next_earnings = None
+        prev_earnings = None
+
+        for e_date in sorted_earnings:
+            e_dt = datetime.fromisoformat(e_date)
+            if e_dt > current_date:
+                next_earnings = e_dt
+                break
+            prev_earnings = e_dt
+
+        # Days to next earnings
+        if next_earnings:
+            days = (next_earnings - current_date).days
+            days_to_earnings.append(min(days, 90))  # Cap at 90
+        else:
+            days_to_earnings.append(90)
+
+        # Earnings week (within 3 days before)
+        is_earnings_week = False
+        if next_earnings:
+            days = (next_earnings - current_date).days
+            is_earnings_week = 0 <= days <= 3
+        earnings_week.append(1 if is_earnings_week else 0)
+
+        # Post earnings (within 3 days after)
+        is_post_earnings = False
+        if prev_earnings:
+            days = (current_date - prev_earnings).days
+            is_post_earnings = 0 <= days <= 3
+        post_earnings.append(1 if is_post_earnings else 0)
+
+    df["days_to_earnings"] = days_to_earnings
+    df["earnings_week"] = earnings_week
+    df["post_earnings"] = post_earnings
+
+    # Clean up temp column
+    df.drop(columns=["_date"], inplace=True)
+
+    return df
+
+
+def compute_dividend_proximity_features(
+    df: pd.DataFrame,
+    dividend_dates: Sequence[str],
+) -> pd.DataFrame:
+    """
+    Compute features related to dividend proximity.
+
+    Important for:
+    - Price adjustment timing
+    - Dividend capture strategies
+    - Ex-date behavior modeling
+
+    Features:
+    - days_to_ex_div: Days until next ex-dividend date
+    - ex_div_week: Binary flag for week of ex-div
+
+    Args:
+        df: DataFrame with timestamp column
+        dividend_dates: List of ex-dividend dates (ISO format)
+
+    Returns:
+        DataFrame with dividend features
+    """
+    df = df.copy()
+
+    if "timestamp" not in df.columns or not dividend_dates:
+        df["days_to_ex_div"] = 90
+        df["ex_div_week"] = 0
+        return df
+
+    from datetime import datetime
+
+    # Convert timestamps to dates
+    df["_date"] = pd.to_datetime(df["timestamp"], unit="s").dt.strftime("%Y-%m-%d")
+
+    # Sort dividend dates
+    sorted_divs = sorted(dividend_dates)
+
+    days_to_ex_div = []
+    ex_div_week = []
+
+    for date_str in df["_date"]:
+        current_date = datetime.fromisoformat(date_str)
+
+        # Find next ex-div date
+        next_ex_div = None
+        for d_date in sorted_divs:
+            d_dt = datetime.fromisoformat(d_date)
+            if d_dt > current_date:
+                next_ex_div = d_dt
+                break
+
+        # Days to next ex-div
+        if next_ex_div:
+            days = (next_ex_div - current_date).days
+            days_to_ex_div.append(min(days, 90))
+            ex_div_week.append(1 if days <= 5 else 0)
+        else:
+            days_to_ex_div.append(90)
+            ex_div_week.append(0)
+
+    df["days_to_ex_div"] = days_to_ex_div
+    df["ex_div_week"] = ex_div_week
+
+    # Clean up
+    df.drop(columns=["_date"], inplace=True)
+
+    return df
+
+
+def add_stock_features(
+    df: pd.DataFrame,
+    symbol: str,
+    earnings_dates: Optional[Sequence[str]] = None,
+    dividend_dates: Optional[Sequence[str]] = None,
+    add_gaps: bool = True,
+    add_earnings: bool = True,
+    add_dividends: bool = True,
+) -> pd.DataFrame:
+    """
+    Add all stock-specific features to a DataFrame.
+
+    This is a convenience function that combines:
+    - Gap analysis features
+    - Earnings proximity features
+    - Dividend proximity features
+
+    Args:
+        df: DataFrame with OHLCV data
+        symbol: Stock symbol (for logging)
+        earnings_dates: List of earnings dates (optional)
+        dividend_dates: List of ex-dividend dates (optional)
+        add_gaps: Whether to compute gap features
+        add_earnings: Whether to compute earnings features
+        add_dividends: Whether to compute dividend features
+
+    Returns:
+        DataFrame with all stock features added
+    """
+    if add_gaps:
+        df = compute_gap_features(df)
+
+    if add_earnings:
+        if earnings_dates is None:
+            # Try to fetch from service
+            try:
+                from services.corporate_actions import get_service
+                service = get_service()
+                earnings = service.get_earnings(symbol)
+                earnings_dates = [e["report_date"] for e in earnings if e.get("report_date")]
+            except Exception:
+                earnings_dates = []
+
+        df = compute_earnings_proximity_features(df, earnings_dates or [])
+
+    if add_dividends:
+        if dividend_dates is None:
+            # Try to fetch from service
+            try:
+                from services.corporate_actions import get_service
+                service = get_service()
+                divs = service.get_dividends(symbol)
+                dividend_dates = [d["ex_date"] for d in divs if d.get("ex_date")]
+            except Exception:
+                dividend_dates = []
+
+        df = compute_dividend_proximity_features(df, dividend_dates or [])
+
+    return df

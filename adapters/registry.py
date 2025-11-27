@@ -54,6 +54,8 @@ from typing import (
 from .models import ExchangeVendor, MarketType
 from .base import (
     BaseAdapter,
+    CorporateActionsAdapter,
+    EarningsAdapter,
     ExchangeAdapter,
     ExchangeInfoAdapter,
     FeeAdapter,
@@ -79,6 +81,8 @@ class AdapterType(str, Enum):
     TRADING_HOURS = "trading_hours"
     ORDER_EXECUTION = "order_execution"
     EXCHANGE_INFO = "exchange_info"
+    CORPORATE_ACTIONS = "corporate_actions"  # Dividends, splits, mergers (Phase 7)
+    EARNINGS = "earnings"  # Earnings calendar and estimates (Phase 7)
     COMBINED = "combined"  # ExchangeAdapter implementing all interfaces
 
 
@@ -89,6 +93,8 @@ ADAPTER_BASE_CLASSES: Dict[AdapterType, Type[BaseAdapter]] = {
     AdapterType.TRADING_HOURS: TradingHoursAdapter,
     AdapterType.ORDER_EXECUTION: OrderExecutionAdapter,
     AdapterType.EXCHANGE_INFO: ExchangeInfoAdapter,
+    AdapterType.CORPORATE_ACTIONS: CorporateActionsAdapter,
+    AdapterType.EARNINGS: EarningsAdapter,
     AdapterType.COMBINED: ExchangeAdapter,
 }
 
@@ -160,6 +166,7 @@ class AdapterRegistry:
             ExchangeVendor.BINANCE: "adapters.binance",
             ExchangeVendor.BINANCE_US: "adapters.binance",
             ExchangeVendor.ALPACA: "adapters.alpaca",
+            ExchangeVendor.YAHOO: "adapters.yahoo",
         }
 
         # Track which vendors have been loaded
@@ -507,6 +514,46 @@ def create_exchange_adapter(
     """
     adapter = get_registry().create_adapter(vendor, AdapterType.COMBINED, config)
     return adapter  # type: ignore
+
+
+def create_corporate_actions_adapter(
+    vendor: Union[ExchangeVendor, str],
+    config: Optional[Mapping[str, Any]] = None,
+) -> CorporateActionsAdapter:
+    """
+    Create corporate actions adapter.
+
+    Args:
+        vendor: Exchange vendor (typically 'yahoo')
+        config: Adapter configuration
+
+    Returns:
+        CorporateActionsAdapter instance
+    """
+    adapter = get_registry().create_adapter(vendor, AdapterType.CORPORATE_ACTIONS, config)
+    if not isinstance(adapter, CorporateActionsAdapter):
+        raise TypeError(f"Expected CorporateActionsAdapter, got {type(adapter)}")
+    return adapter
+
+
+def create_earnings_adapter(
+    vendor: Union[ExchangeVendor, str],
+    config: Optional[Mapping[str, Any]] = None,
+) -> EarningsAdapter:
+    """
+    Create earnings adapter.
+
+    Args:
+        vendor: Exchange vendor (typically 'yahoo')
+        config: Adapter configuration
+
+    Returns:
+        EarningsAdapter instance
+    """
+    adapter = get_registry().create_adapter(vendor, AdapterType.EARNINGS, config)
+    if not isinstance(adapter, EarningsAdapter):
+        raise TypeError(f"Expected EarningsAdapter, got {type(adapter)}")
+    return adapter
 
 
 # =========================
