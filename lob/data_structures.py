@@ -121,6 +121,7 @@ class LimitOrder:
     # Iceberg/hidden order support
     hidden_qty: float = 0.0
     display_qty: float = 0.0
+    _original_display_qty: float = 0.0  # Stored for iceberg replenishment
 
     # Queue tracking
     is_own: bool = False
@@ -139,6 +140,10 @@ class LimitOrder:
         elif self.display_qty == 0.0 and self.hidden_qty == 0.0:
             # Regular limit order - all visible
             self.display_qty = self.remaining_qty
+
+        # Store original display size for iceberg replenishment
+        if self._original_display_qty == 0.0 and self.display_qty > 0:
+            self._original_display_qty = self.display_qty
 
     @property
     def visible_qty(self) -> float:
@@ -189,10 +194,12 @@ class LimitOrder:
                 self.hidden_qty -= remaining_fill
 
             # Replenish display from hidden
+            # FIX: Must reduce hidden_qty by replenished amount to maintain invariant:
+            # remaining_qty = display_qty + hidden_qty
             if self.display_qty == 0 and self.hidden_qty > 0:
                 replenish = min(self.hidden_qty, self._original_display_size())
                 self.display_qty = replenish
-                # Note: hidden_qty already reduced, no double-counting
+                self.hidden_qty -= replenish  # FIX: Reduce hidden_qty
         else:
             # Regular limit or hidden - just reduce display
             self.display_qty = max(0.0, self.display_qty - actual_fill)
@@ -200,13 +207,16 @@ class LimitOrder:
         return actual_fill
 
     def _original_display_size(self) -> float:
-        """Estimate original display size for iceberg replenishment."""
-        # Heuristic: use qty - hidden_qty as original display
+        """Get original display size for iceberg replenishment."""
+        # Use stored value if available, otherwise estimate
+        if self._original_display_qty > 0:
+            return self._original_display_qty
+        # Fallback heuristic: use qty - hidden_qty as original display
         return max(1.0, self.qty - self.hidden_qty)
 
     def clone(self) -> "LimitOrder":
         """Create a deep copy of this order."""
-        return LimitOrder(
+        cloned = LimitOrder(
             order_id=self.order_id,
             price=self.price,
             qty=self.qty,
@@ -215,11 +225,13 @@ class LimitOrder:
             side=self.side,
             hidden_qty=self.hidden_qty,
             display_qty=self.display_qty,
+            _original_display_qty=self._original_display_qty,
             is_own=self.is_own,
             queue_position=self.queue_position,
             order_type=self.order_type,
             participant_id=self.participant_id,
         )
+        return cloned
 
 
 @dataclass

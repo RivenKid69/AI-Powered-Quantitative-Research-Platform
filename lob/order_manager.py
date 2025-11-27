@@ -399,10 +399,11 @@ class OrderManager:
             tags=tags or {},
         )
 
-        # Track order
+        # Track order - store by order_id (which equals client_order_id if provided)
         self._orders[order_id] = managed
-        if client_order_id:
-            self._client_id_map[client_order_id] = internal_id
+        if client_order_id and client_order_id != internal_id:
+            # FIX: Map client_id -> order_id (not internal_id) for correct lookup
+            self._client_id_map[client_order_id] = order_id
         self._stats.total_orders += 1
 
         # Handle by order type
@@ -438,10 +439,12 @@ class OrderManager:
             managed.state = OrderLifecycleState.FILLED
             self._stats.filled_orders += 1
         else:
-            # Partial fill - cancel remaining for market order
-            managed.cancelled_qty = result.total_filled_qty - managed.original_qty
+            # Partial fill - cancel remaining for market order (insufficient liquidity)
+            # FIX: was result.total_filled_qty - managed.original_qty (negative!)
+            managed.cancelled_qty = managed.original_qty - result.total_filled_qty
             managed.state = OrderLifecycleState.FILLED
             self._stats.filled_orders += 1
+            self._stats.total_volume_cancelled += managed.cancelled_qty
 
         self._emit_event(OrderEvent(
             event_type=OrderEventType.FILLED if result.is_complete else OrderEventType.PARTIALLY_FILLED,
@@ -487,16 +490,17 @@ class OrderManager:
             if self._on_fill:
                 self._on_fill(managed, fill)
 
-        # Handle IOC
+        # Handle IOC (Immediate-Or-Cancel)
         if time_in_force == TimeInForce.IOC:
             if result.resting_order:
-                # Cancel unfilled portion
+                # Cancel unfilled portion - IOC doesn't rest in book
                 managed.cancelled_qty = result.resting_order.remaining_qty
-                managed.state = (
-                    OrderLifecycleState.FILLED
-                    if managed.filled_qty > 0
-                    else OrderLifecycleState.CANCELLED
-                )
+                self._stats.total_volume_cancelled += managed.cancelled_qty
+                # FIX: IOC with partial fill should be CANCELLED (not FILLED)
+                # Per FIX protocol: OrdStatus=4 (Canceled) with CumQty > 0
+                # Use CANCELLED state - filled_qty tracks what was executed
+                managed.state = OrderLifecycleState.CANCELLED
+                self._stats.cancelled_orders += 1
                 return managed
 
         # Add resting portion to book

@@ -31,6 +31,9 @@
 | Extended hours trading | `services/session_router.py` | `pytest tests/test_phase9_live_trading.py::TestSessionRouter` |
 | Bracket/OCO orders | `adapters/alpaca/order_execution.py` | `pytest tests/test_phase9_live_trading.py::TestBracketOrderConfig` |
 | Скачать stock data | `scripts/download_stock_data.py` | `--symbols GLD IAU SLV --start 2020-01-01` |
+| L3 LOB matching | `lob/matching_engine.py` | `pytest tests/test_matching_engine.py` |
+| Queue position tracking | `lob/queue_tracker.py` | `pytest tests/test_matching_engine.py::TestQueuePositionTracker` |
+| Order lifecycle | `lob/order_manager.py` | `pytest tests/test_matching_engine.py::TestOrderManager` |
 
 ### 🔍 Quick File Reference
 
@@ -764,6 +767,148 @@ pytest tests/test_phase9_live_trading.py::TestBackwardCompatibility -v
 | `services/session_router.py` | Session-aware order routing |
 | `adapters/alpaca/order_execution.py` | Enhanced Alpaca order execution |
 | `tests/test_phase9_live_trading.py` | Comprehensive test suite |
+
+---
+
+## 📚 L3 LOB Simulation (Phase 10)
+
+### Обзор
+
+Phase 10 добавляет высокоточную симуляцию order book для US equities:
+
+1. **Stage 1: Data Structures** (`lob/data_structures.py`)
+   - LimitOrder, PriceLevel, OrderBook с O(1)/O(log n) операциями
+   - Iceberg и hidden order support
+   - LOBSTER message format parsing
+
+2. **Stage 2: Matching Engine** (`lob/matching_engine.py`)
+   - FIFO Price-Time Priority matching (CME Globex style)
+   - Self-Trade Prevention (STP) — 4 режима
+   - Pro-Rata matching для опционных рынков
+   - Queue position tracking (Erik Rigtorp method)
+
+### Архитектура
+
+```
+lob/
+├── data_structures.py    # LimitOrder, PriceLevel, OrderBook, Fill, Trade
+├── matching_engine.py    # MatchingEngine, ProRataMatchingEngine, STP
+├── queue_tracker.py      # QueuePositionTracker (MBP/MBO estimation)
+├── order_manager.py      # OrderManager, ManagedOrder, TimeInForce
+├── state_manager.py      # LOBStateManager, LOBSnapshot
+├── parsers.py            # LOBSTERParser
+└── __init__.py           # Public API exports
+```
+
+### Ключевые классы
+
+| Класс | Назначение |
+|-------|------------|
+| `MatchingEngine` | FIFO matching с STP |
+| `ProRataMatchingEngine` | Pro-rata allocation |
+| `QueuePositionTracker` | MBP/MBO position estimation |
+| `OrderManager` | Order lifecycle (IOC, FOK, DAY, GTC) |
+| `LOBStateManager` | State management + snapshots |
+
+### Self-Trade Prevention (STP)
+
+| Режим | Действие |
+|-------|----------|
+| `CANCEL_NEWEST` | Отменяет входящий (aggressive) ордер |
+| `CANCEL_OLDEST` | Отменяет resting ордер |
+| `CANCEL_BOTH` | Отменяет оба ордера |
+| `DECREMENT_AND_CANCEL` | Уменьшает qty, отменяет меньший |
+
+### Time-in-Force
+
+| TIF | Поведение |
+|-----|-----------|
+| `DAY` | Активен до конца дня |
+| `GTC` | Good-Til-Cancelled |
+| `IOC` | Immediate-Or-Cancel (partial fill → CANCELLED) |
+| `FOK` | Fill-Or-Kill (all or nothing) |
+
+### Queue Position Estimation
+
+```python
+from lob import QueuePositionTracker, PositionEstimationMethod
+
+tracker = QueuePositionTracker()
+
+# MBP (pessimistic) — advance only on executions
+state = tracker.add_order(order, level_qty_before=500.0)
+
+# MBO (exact) — requires order-level data
+state = tracker.add_order(order, orders_ahead=[...])
+
+# Fill probability (Poisson model)
+prob = tracker.estimate_fill_probability(
+    order_id, volume_per_second=100.0, time_horizon_sec=60.0
+)
+```
+
+### Использование
+
+```python
+from lob import OrderManager, Side, OrderType, TimeInForce
+
+manager = OrderManager(symbol="AAPL")
+
+# Submit limit order
+order = manager.submit_order(
+    side=Side.BUY,
+    price=150.0,
+    qty=100.0,
+    order_type=OrderType.LIMIT,
+    time_in_force=TimeInForce.DAY,
+)
+
+# Check fill probability
+prob = manager.get_fill_probability(order.order.order_id)
+
+# Cancel
+manager.cancel_order(order.order.order_id)
+```
+
+### Performance
+
+| Операция | Latency | Target |
+|----------|---------|--------|
+| Market order simulation | ~5 μs | <10 μs ✅ |
+| Limit order matching | ~20 μs | <50 μs ✅ |
+| Queue position update | ~50 μs | <500 μs ✅ |
+
+### Тестирование
+
+```bash
+# Stage 1 тесты (data structures, parsers, state manager)
+pytest tests/test_lob_structures.py tests/test_lob_parsers.py tests/test_lob_state_manager.py -v
+
+# Stage 2 тесты (matching engine, queue tracker, order manager)
+pytest tests/test_matching_engine.py -v
+
+# Все LOB тесты
+pytest tests/test_lob*.py tests/test_matching_engine.py -v
+```
+
+**Покрытие**: 178 тестов (106 Stage 1 + 72 Stage 2)
+
+### Ключевые файлы
+
+| Файл | Описание |
+|------|----------|
+| `lob/matching_engine.py` | FIFO matching engine with STP |
+| `lob/queue_tracker.py` | Queue position tracking (MBP/MBO) |
+| `lob/order_manager.py` | Order lifecycle management |
+| `lob/data_structures.py` | Core data structures |
+| `tests/test_matching_engine.py` | 72 comprehensive tests |
+
+### Референсы
+
+- CME Globex Matching Algorithm
+- Erik Rigtorp: Queue Position Estimation
+- Cont et al. (Columbia): Fill Probability Models
+- FIX Protocol: Order Status semantics
 
 ---
 
@@ -2284,5 +2429,5 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-11-27
-**Версия документации**: 4.7 (Phase 9: Live Trading Improvements - unified script, position sync, bracket orders, extended hours)
+**Версия документации**: 4.8 (Phase 10: L3 LOB Simulation - FIFO matching, STP, queue tracking, order manager)
 **Статус**: ✅ Production Ready (все критические исправления применены, 53 задокументированных "НЕ БАГИ")

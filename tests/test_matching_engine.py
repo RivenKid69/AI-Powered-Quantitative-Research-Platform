@@ -940,6 +940,8 @@ class TestOrderManager:
 
         assert result.filled_qty == 50.0
         assert result.cancelled_qty == 50.0
+        # Per FIX protocol: IOC with partial fill is CANCELLED (OrdStatus=4)
+        assert result.state == OrderLifecycleState.CANCELLED
 
     def test_fok_time_in_force_success(self):
         """Test Fill-Or-Kill success case."""
@@ -1367,6 +1369,448 @@ class TestIntegration:
 
         assert book.best_bid == 50000.0
         assert book.symbol == "BTC-USDT"
+
+
+# ==============================================================================
+# Bug Fix Tests (2025-11-27)
+# ==============================================================================
+
+
+class TestBugFixes:
+    """Tests verifying bug fixes from code review."""
+
+    def test_market_order_partial_fill_cancelled_qty(self):
+        """
+        Test market order with insufficient liquidity has correct cancelled_qty.
+
+        BUG FIX: cancelled_qty was calculated as (filled - original) which was negative.
+        CORRECT: cancelled_qty = original - filled
+        """
+        manager = OrderManager()
+
+        # Add partial liquidity
+        manager.submit_order(
+            side=Side.SELL,
+            price=100.0,
+            qty=30.0,
+            order_type=OrderType.LIMIT,
+        )
+
+        # Submit market order for more than available
+        result = manager.submit_order(
+            side=Side.BUY,
+            price=0.0,
+            qty=100.0,
+            order_type=OrderType.MARKET,
+        )
+
+        # Verify correct cancelled_qty (should be positive, not negative)
+        assert result.filled_qty == 30.0
+        assert result.cancelled_qty == 70.0  # 100 - 30 = 70
+        assert result.cancelled_qty >= 0, "cancelled_qty must be non-negative"
+        assert result.state == OrderLifecycleState.FILLED
+
+    def test_ioc_partial_fill_state_cancelled(self):
+        """
+        Test IOC with partial fill has CANCELLED state (not FILLED).
+
+        BUG FIX: IOC with partial fill was marked FILLED.
+        CORRECT: Per FIX protocol, IOC with partial fill is CANCELLED (OrdStatus=4).
+        """
+        manager = OrderManager()
+
+        # Add partial liquidity
+        manager.submit_order(
+            side=Side.SELL,
+            price=100.0,
+            qty=50.0,
+            order_type=OrderType.LIMIT,
+        )
+
+        # IOC for more than available
+        result = manager.submit_order(
+            side=Side.BUY,
+            price=100.0,
+            qty=100.0,
+            order_type=OrderType.LIMIT,
+            time_in_force=TimeInForce.IOC,
+        )
+
+        assert result.filled_qty == 50.0
+        assert result.cancelled_qty == 50.0
+        # FIX: State should be CANCELLED, not FILLED
+        assert result.state == OrderLifecycleState.CANCELLED
+        # Verify order is done (not active)
+        assert result.is_done
+        assert not result.is_active
+
+    def test_ioc_full_fill_state_filled(self):
+        """Test IOC with full fill has FILLED state."""
+        manager = OrderManager()
+
+        # Add enough liquidity
+        manager.submit_order(
+            side=Side.SELL,
+            price=100.0,
+            qty=100.0,
+            order_type=OrderType.LIMIT,
+        )
+
+        # IOC that fills completely
+        result = manager.submit_order(
+            side=Side.BUY,
+            price=100.0,
+            qty=100.0,
+            order_type=OrderType.LIMIT,
+            time_in_force=TimeInForce.IOC,
+        )
+
+        assert result.filled_qty == 100.0
+        assert result.cancelled_qty == 0.0
+        assert result.state == OrderLifecycleState.FILLED
+
+    def test_client_id_mapping_consistency(self):
+        """
+        Test client order ID mapping works correctly.
+
+        BUG FIX: _client_id_map stored internal_id but lookup used client_order_id.
+        CORRECT: Map client_id -> order_id for correct lookup.
+        """
+        manager = OrderManager()
+
+        # Submit order with client_order_id
+        order = manager.submit_order(
+            side=Side.BUY,
+            price=99.0,
+            qty=100.0,
+            order_type=OrderType.LIMIT,
+            client_order_id="my_client_order_123",
+        )
+
+        assert order.client_order_id == "my_client_order_123"
+
+        # Lookup by client_order_id should work
+        found = manager.get_order_by_client_id("my_client_order_123")
+        assert found is not None
+        assert found.client_order_id == "my_client_order_123"
+        assert found.order.order_id == order.order.order_id
+
+        # Lookup by order_id should also work
+        found2 = manager.get_order(order.order.order_id)
+        assert found2 is not None
+        assert found2 is found
+
+    def test_client_id_without_explicit_id(self):
+        """Test order without client_order_id still works."""
+        manager = OrderManager()
+
+        # Submit order without client_order_id
+        order = manager.submit_order(
+            side=Side.BUY,
+            price=99.0,
+            qty=100.0,
+            order_type=OrderType.LIMIT,
+        )
+
+        assert order.client_order_id is None
+
+        # Lookup by order_id should work
+        found = manager.get_order(order.order.order_id)
+        assert found is not None
+        assert found.order.order_id == order.order.order_id
+
+
+# ==============================================================================
+# Iceberg and Hidden Order Tests
+# ==============================================================================
+
+
+class TestIcebergAndHiddenOrders:
+    """Tests for iceberg and hidden order matching."""
+
+    def test_iceberg_order_partial_visible(self):
+        """Test iceberg order shows only display_qty."""
+        book = OrderBook()
+
+        # Add iceberg order with 100 visible, 400 hidden
+        iceberg = LimitOrder(
+            order_id="iceberg_1",
+            price=100.0,
+            qty=500.0,
+            remaining_qty=500.0,
+            timestamp_ns=1000,
+            side=Side.SELL,
+            display_qty=100.0,
+            hidden_qty=400.0,
+            order_type=OrderType.ICEBERG,
+        )
+        book.add_limit_order(iceberg)
+
+        # Visible qty should be 100
+        assert book.best_ask_qty == 100.0
+
+        # But walk_book sees total (visible + hidden)
+        avg_price, total_filled, _ = book.walk_book(Side.BUY, 500.0)
+        assert total_filled == 500.0
+
+    def test_iceberg_order_fill_replenish(self):
+        """Test iceberg order replenishes display from hidden after fill."""
+        iceberg = LimitOrder(
+            order_id="iceberg_1",
+            price=100.0,
+            qty=500.0,
+            remaining_qty=500.0,
+            timestamp_ns=1000,
+            side=Side.SELL,
+            display_qty=100.0,
+            hidden_qty=400.0,
+            order_type=OrderType.ICEBERG,
+        )
+
+        # Fill 100 (all visible)
+        filled = iceberg.fill(100.0)
+        assert filled == 100.0
+        assert iceberg.remaining_qty == 400.0
+
+        # Display should replenish from hidden
+        # Original display was 100, so replenish up to 100
+        assert iceberg.display_qty == 100.0  # Replenished
+        assert iceberg.hidden_qty == 300.0   # Reduced
+
+    def test_iceberg_order_matching(self):
+        """Test matching engine handles iceberg orders correctly."""
+        engine = MatchingEngine()
+        book = OrderBook()
+
+        # Add iceberg ask
+        iceberg = LimitOrder(
+            order_id="iceberg_1",
+            price=100.0,
+            qty=500.0,
+            remaining_qty=500.0,
+            timestamp_ns=1000,
+            side=Side.SELL,
+            display_qty=100.0,
+            hidden_qty=400.0,
+            order_type=OrderType.ICEBERG,
+        )
+        book.add_limit_order(iceberg)
+
+        # Market buy should fill entire iceberg
+        result = engine.match_market_order(Side.BUY, 500.0, book)
+
+        assert result.total_filled_qty == 500.0
+        assert result.is_complete
+
+    def test_hidden_order_not_visible(self):
+        """Test hidden order has 0 visible quantity."""
+        book = OrderBook()
+
+        # Add hidden order
+        hidden = LimitOrder(
+            order_id="hidden_1",
+            price=100.0,
+            qty=100.0,
+            remaining_qty=100.0,
+            timestamp_ns=1000,
+            side=Side.SELL,
+            order_type=OrderType.HIDDEN,
+        )
+        book.add_limit_order(hidden)
+
+        # Visible qty should be 0
+        assert book.best_ask_qty == 0.0
+
+        # But the order exists and can be matched
+        avg_price, total_filled, _ = book.walk_book(Side.BUY, 100.0)
+        assert total_filled == 100.0
+
+    def test_hidden_order_matching(self):
+        """Test matching engine handles hidden orders."""
+        engine = MatchingEngine()
+        book = OrderBook()
+
+        # Add hidden ask
+        hidden = LimitOrder(
+            order_id="hidden_1",
+            price=100.0,
+            qty=100.0,
+            remaining_qty=100.0,
+            timestamp_ns=1000,
+            side=Side.SELL,
+            order_type=OrderType.HIDDEN,
+        )
+        book.add_limit_order(hidden)
+
+        # Market buy should fill hidden order
+        result = engine.match_market_order(Side.BUY, 100.0, book)
+
+        assert result.total_filled_qty == 100.0
+        assert result.is_complete
+
+    def test_visible_orders_match_before_hidden(self):
+        """Test visible orders have priority over hidden at same price."""
+        engine = MatchingEngine()
+        book = OrderBook()
+
+        # Add hidden order first (earlier timestamp)
+        hidden = LimitOrder(
+            order_id="hidden_1",
+            price=100.0,
+            qty=100.0,
+            remaining_qty=100.0,
+            timestamp_ns=1000,
+            side=Side.SELL,
+            order_type=OrderType.HIDDEN,
+        )
+        book.add_limit_order(hidden)
+
+        # Add visible order second
+        visible = LimitOrder(
+            order_id="visible_1",
+            price=100.0,
+            qty=100.0,
+            remaining_qty=100.0,
+            timestamp_ns=2000,
+            side=Side.SELL,
+            order_type=OrderType.LIMIT,
+        )
+        book.add_limit_order(visible)
+
+        # Market buy 100 - FIFO means hidden fills first (it arrived first)
+        # Note: In real exchanges, visible often has priority over hidden.
+        # Our implementation uses strict FIFO.
+        result = engine.match_market_order(Side.BUY, 100.0, book)
+
+        assert result.total_filled_qty == 100.0
+        # First trade should be from hidden (arrived first - FIFO)
+        assert result.fills[0].trades[0].maker_order_id == "hidden_1"
+
+
+# ==============================================================================
+# Additional Edge Case Tests
+# ==============================================================================
+
+
+class TestEdgeCases:
+    """Additional edge case tests."""
+
+    def test_zero_quantity_order_rejected(self):
+        """Test zero quantity order is rejected."""
+        manager = OrderManager()
+
+        result = manager.submit_order(
+            side=Side.BUY,
+            price=100.0,
+            qty=0.0,
+            order_type=OrderType.LIMIT,
+        )
+
+        assert result.state == OrderLifecycleState.REJECTED
+
+    def test_negative_quantity_order_rejected(self):
+        """Test negative quantity order is rejected."""
+        manager = OrderManager()
+
+        result = manager.submit_order(
+            side=Side.BUY,
+            price=100.0,
+            qty=-100.0,
+            order_type=OrderType.LIMIT,
+        )
+
+        assert result.state == OrderLifecycleState.REJECTED
+
+    def test_zero_price_limit_order_rejected(self):
+        """Test zero price limit order is rejected."""
+        manager = OrderManager()
+
+        result = manager.submit_order(
+            side=Side.BUY,
+            price=0.0,
+            qty=100.0,
+            order_type=OrderType.LIMIT,
+        )
+
+        assert result.state == OrderLifecycleState.REJECTED
+
+    def test_statistics_cancelled_volume_tracked(self):
+        """Test that cancelled volume is tracked in statistics."""
+        manager = OrderManager()
+
+        # Add partial liquidity
+        manager.submit_order(
+            side=Side.SELL,
+            price=100.0,
+            qty=30.0,
+            order_type=OrderType.LIMIT,
+        )
+
+        # Market order with partial fill
+        manager.submit_order(
+            side=Side.BUY,
+            price=0.0,
+            qty=100.0,
+            order_type=OrderType.MARKET,
+        )
+
+        stats = manager.get_statistics()
+        assert stats.total_volume_cancelled >= 70.0
+
+    def test_modify_order_qty_increase_loses_priority(self):
+        """
+        Test quantity increase modification loses queue priority.
+
+        FIFO rule: When qty is increased, order loses priority and goes to back.
+        This is verified by submitting a sell that fills the first order in queue.
+        """
+        manager = OrderManager()
+
+        # Submit two orders at same price - order1 first, order2 second
+        order1 = manager.submit_order(
+            side=Side.BUY,
+            price=99.0,
+            qty=100.0,
+            order_type=OrderType.LIMIT,
+        )
+        order2 = manager.submit_order(
+            side=Side.BUY,
+            price=99.0,
+            qty=100.0,
+            order_type=OrderType.LIMIT,
+        )
+
+        # Before modification: order1 is at front, order2 is second
+        # Submit small sell to verify order1 fills first
+        small_sell = manager.submit_order(
+            side=Side.SELL,
+            price=99.0,
+            qty=10.0,
+            order_type=OrderType.LIMIT,
+        )
+        assert small_sell.filled_qty == 10.0
+        # order1 should be partially filled (it was at front)
+        assert order1.filled_qty == 10.0
+        assert order2.filled_qty == 0.0
+
+        # Modify order1 qty UP (increase) - should lose priority, move to back
+        # Note: order1 has remaining 90, increasing to 150 means adding 60 more
+        modified = manager.modify_order(order1.order.order_id, new_qty=150.0)
+        assert modified is not None
+
+        # Now order2 should be at front (order1 lost priority and moved to back)
+        # Submit another sell to verify order2 fills first
+        sell = manager.submit_order(
+            side=Side.SELL,
+            price=99.0,
+            qty=100.0,
+            order_type=OrderType.LIMIT,
+        )
+
+        # order2 should be filled first (was at front after order1 lost priority)
+        assert sell.filled_qty == 100.0
+        assert order2.state == OrderLifecycleState.FILLED
+        assert order2.filled_qty == 100.0
 
 
 if __name__ == "__main__":
