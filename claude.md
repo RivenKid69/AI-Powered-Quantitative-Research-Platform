@@ -34,6 +34,9 @@
 | L3 LOB matching | `lob/matching_engine.py` | `pytest tests/test_matching_engine.py` |
 | Queue position tracking | `lob/queue_tracker.py` | `pytest tests/test_matching_engine.py::TestQueuePositionTracker` |
 | Order lifecycle | `lob/order_manager.py` | `pytest tests/test_matching_engine.py::TestOrderManager` |
+| Fill probability models | `lob/fill_probability.py` | `pytest tests/test_fill_probability_queue_value.py` |
+| Queue value (Moallemi) | `lob/queue_value.py` | `pytest tests/test_fill_probability_queue_value.py::TestQueueValueModel` |
+| LOB calibration | `lob/calibration.py` | `pytest tests/test_fill_probability_queue_value.py::TestCalibrationPipeline` |
 
 ### 🔍 Quick File Reference
 
@@ -787,6 +790,12 @@ Phase 10 добавляет высокоточную симуляцию order bo
    - Pro-Rata matching для опционных рынков
    - Queue position tracking (Erik Rigtorp method)
 
+3. **Stage 3: Fill Probability & Queue Value** (`lob/fill_probability.py`, `lob/queue_value.py`)
+   - Analytical Poisson fill probability: `P(fill in T) = 1 - exp(-λT / position)`
+   - Queue-Reactive intensity model (Huang et al.): `λ_i = f(q_i, spread, volatility, imbalance)`
+   - Queue Value computation (Moallemi & Yuan): `V = P(fill) * spread/2 - adverse_selection`
+   - Calibration pipeline from historical LOB data (`lob/calibration.py`)
+
 ### Архитектура
 
 ```
@@ -797,6 +806,9 @@ lob/
 ├── order_manager.py      # OrderManager, ManagedOrder, TimeInForce
 ├── state_manager.py      # LOBStateManager, LOBSnapshot
 ├── parsers.py            # LOBSTERParser
+├── fill_probability.py   # Poisson, Queue-Reactive, Historical models (Stage 3)
+├── queue_value.py        # Queue value computation (Moallemi & Yuan) (Stage 3)
+├── calibration.py        # Model calibration from historical data (Stage 3)
 └── __init__.py           # Public API exports
 ```
 
@@ -809,6 +821,9 @@ lob/
 | `QueuePositionTracker` | MBP/MBO position estimation |
 | `OrderManager` | Order lifecycle (IOC, FOK, DAY, GTC) |
 | `LOBStateManager` | State management + snapshots |
+| `QueueReactiveModel` | Fill probability с intensity = f(queue, spread, vol) |
+| `QueueValueModel` | Queue position value (Moallemi & Yuan) |
+| `CalibrationPipeline` | MLE parameter fitting from historical data |
 
 ### Self-Trade Prevention (STP)
 
@@ -878,6 +893,61 @@ manager.cancel_order(order.order.order_id)
 | Limit order matching | ~20 μs | <50 μs ✅ |
 | Queue position update | ~50 μs | <500 μs ✅ |
 
+### Stage 3: Fill Probability & Queue Value
+
+```python
+from lob import (
+    QueueReactiveModel,
+    QueueValueModel,
+    CalibrationPipeline,
+    LOBState,
+    TradeRecord,
+    Side,
+)
+
+# 1. Create fill probability model
+fill_model = QueueReactiveModel(
+    base_rate=100.0,           # Base volume rate (qty/sec)
+    queue_decay_alpha=0.01,    # Queue size impact
+    spread_sensitivity_beta=0.5,  # Spread impact
+)
+
+# 2. Estimate fill probability
+lob_state = LOBState(
+    mid_price=150.0,
+    spread_bps=5.0,
+    volatility=0.02,
+    imbalance=0.1,
+)
+
+prob_result = fill_model.compute_fill_probability(
+    queue_position=10,
+    qty_ahead=500.0,
+    order_qty=100.0,
+    time_horizon_sec=60.0,
+    market_state=lob_state,
+)
+print(f"P(fill in 60s) = {prob_result.prob_fill:.2%}")
+
+# 3. Compute queue value (Moallemi & Yuan)
+value_model = QueueValueModel(fill_model=fill_model)
+value_result = value_model.compute_queue_value(order, lob_state, queue_state)
+print(f"Queue value: ${value_result.queue_value:.4f}")
+print(f"Decision: {value_result.decision.name}")  # HOLD or CANCEL
+
+# 4. Calibrate from historical data
+pipeline = CalibrationPipeline()
+for trade in historical_trades:
+    pipeline.add_trade(TradeRecord(
+        timestamp_ns=trade.ts,
+        price=trade.price,
+        qty=trade.qty,
+        side=Side.BUY if trade.is_buy else Side.SELL,
+    ))
+results = pipeline.run_calibration()
+calibrated_model = pipeline.get_best_model("queue_reactive")
+```
+
 ### Тестирование
 
 ```bash
@@ -887,11 +957,14 @@ pytest tests/test_lob_structures.py tests/test_lob_parsers.py tests/test_lob_sta
 # Stage 2 тесты (matching engine, queue tracker, order manager)
 pytest tests/test_matching_engine.py -v
 
+# Stage 3 тесты (fill probability, queue value, calibration)
+pytest tests/test_fill_probability_queue_value.py -v
+
 # Все LOB тесты
-pytest tests/test_lob*.py tests/test_matching_engine.py -v
+pytest tests/test_lob*.py tests/test_matching_engine.py tests/test_fill_probability_queue_value.py -v
 ```
 
-**Покрытие**: 178 тестов (106 Stage 1 + 72 Stage 2)
+**Покрытие**: 244 теста (106 Stage 1 + 72 Stage 2 + 66 Stage 3)
 
 ### Ключевые файлы
 
@@ -901,7 +974,11 @@ pytest tests/test_lob*.py tests/test_matching_engine.py -v
 | `lob/queue_tracker.py` | Queue position tracking (MBP/MBO) |
 | `lob/order_manager.py` | Order lifecycle management |
 | `lob/data_structures.py` | Core data structures |
-| `tests/test_matching_engine.py` | 72 comprehensive tests |
+| `lob/fill_probability.py` | Poisson, Queue-Reactive, Historical models |
+| `lob/queue_value.py` | Queue value computation (Moallemi & Yuan) |
+| `lob/calibration.py` | MLE calibration from historical data |
+| `tests/test_matching_engine.py` | 72 Stage 2 tests |
+| `tests/test_fill_probability_queue_value.py` | 66 Stage 3 tests |
 
 ### Референсы
 
@@ -909,6 +986,8 @@ pytest tests/test_lob*.py tests/test_matching_engine.py -v
 - Erik Rigtorp: Queue Position Estimation
 - Cont et al. (Columbia): Fill Probability Models
 - FIX Protocol: Order Status semantics
+- Huang et al. (2015): Queue-Reactive Model
+- Moallemi & Yuan (2017): Queue Position Valuation
 
 ---
 
@@ -2429,5 +2508,5 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-11-27
-**Версия документации**: 4.8 (Phase 10: L3 LOB Simulation - FIFO matching, STP, queue tracking, order manager)
+**Версия документации**: 4.9 (Phase 10: L3 LOB Simulation - Stage 3: Fill Probability & Queue Value)
 **Статус**: ✅ Production Ready (все критические исправления применены, 53 задокументированных "НЕ БАГИ")
