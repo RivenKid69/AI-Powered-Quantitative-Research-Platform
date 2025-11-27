@@ -13,6 +13,9 @@ supporting full market microstructure modeling including:
 - Fill probability models (Poisson, Queue-Reactive, Historical)
 - Queue value computation (Moallemi & Yuan)
 - Model calibration from historical data
+- Market impact models (Kyle, Almgren-Chriss, Gatheral)
+- Impact effects on LOB state (quote shifting, liquidity reaction)
+- Impact calibration from historical trade data
 
 Architecture:
     This module is SEPARATE from the Cython LOB implementations (fast_lob.pyx,
@@ -23,6 +26,7 @@ Architecture:
 Stage 1 (v1.0): Data structures, parsers, state manager
 Stage 2 (v2.0): Matching engine, queue tracker, order manager
 Stage 3 (v3.0): Fill probability models, queue value, calibration
+Stage 4 (v4.0): Market impact models, effects, impact calibration
 
 Usage:
     from lob import OrderBook, LimitOrder, PriceLevel
@@ -36,6 +40,11 @@ Usage:
     )
     from lob.queue_value import QueueValueModel, create_queue_value_model
     from lob.calibration import CalibrationPipeline, create_calibration_pipeline
+    from lob.market_impact import (
+        MarketImpactModel, AlmgrenChrissModel, GatheralModel, create_impact_model
+    )
+    from lob.impact_effects import ImpactEffects, LOBImpactSimulator
+    from lob.impact_calibration import ImpactCalibrationPipeline
 
 Note:
     This module does NOT affect crypto execution paths. Crypto continues
@@ -137,6 +146,53 @@ from lob.calibration import (
     estimate_arrival_rate,
 )
 
+# Stage 4: Market Impact Models (v4.0)
+from lob.market_impact import (
+    MarketImpactModel,
+    ImpactModelType,
+    ImpactParameters,
+    ImpactResult,
+    ImpactState,
+    DecayType,
+    KyleLambdaModel,
+    AlmgrenChrissModel,
+    GatheralModel,
+    CompositeImpactModel,
+    ImpactTracker,
+    create_impact_model,
+    create_impact_tracker,
+)
+
+from lob.impact_effects import (
+    ImpactEffects,
+    ImpactEffectConfig,
+    LOBImpactSimulator,
+    QuoteShiftType,
+    QuoteShiftResult,
+    LiquidityReaction,
+    LiquidityReactionResult,
+    MomentumSignal,
+    MomentumResult,
+    AdverseSelectionResult,
+    create_impact_effects,
+    create_lob_impact_simulator,
+)
+
+from lob.impact_calibration import (
+    ImpactCalibrationPipeline,
+    TradeObservation,
+    CalibrationDataset,
+    CalibrationResult as ImpactCalibrationResult,
+    CrossValidationResult as ImpactCrossValidationResult,
+    AlmgrenChrissCalibrator,
+    GatheralDecayCalibrator,
+    KyleLambdaCalibrator,
+    RollingImpactCalibrator,
+    create_calibrator,
+    create_calibration_pipeline as create_impact_calibration_pipeline,
+    calibrate_from_trades as calibrate_impact_from_trades,
+)
+
 __all__ = [
     # Core data structures
     "Side",
@@ -214,6 +270,46 @@ __all__ = [
     "create_calibration_pipeline",
     "calibrate_from_trades",
     "estimate_arrival_rate",
+    # Market Impact Models (Stage 4)
+    "MarketImpactModel",
+    "ImpactModelType",
+    "ImpactParameters",
+    "ImpactResult",
+    "ImpactState",
+    "DecayType",
+    "KyleLambdaModel",
+    "AlmgrenChrissModel",
+    "GatheralModel",
+    "CompositeImpactModel",
+    "ImpactTracker",
+    "create_impact_model",
+    "create_impact_tracker",
+    # Impact Effects (Stage 4)
+    "ImpactEffects",
+    "ImpactEffectConfig",
+    "LOBImpactSimulator",
+    "QuoteShiftType",
+    "QuoteShiftResult",
+    "LiquidityReaction",
+    "LiquidityReactionResult",
+    "MomentumSignal",
+    "MomentumResult",
+    "AdverseSelectionResult",
+    "create_impact_effects",
+    "create_lob_impact_simulator",
+    # Impact Calibration (Stage 4)
+    "ImpactCalibrationPipeline",
+    "TradeObservation",
+    "CalibrationDataset",
+    "ImpactCalibrationResult",
+    "ImpactCrossValidationResult",
+    "AlmgrenChrissCalibrator",
+    "GatheralDecayCalibrator",
+    "KyleLambdaCalibrator",
+    "RollingImpactCalibrator",
+    "create_calibrator",
+    "create_impact_calibration_pipeline",
+    "calibrate_impact_from_trades",
 ]
 
-__version__ = "3.0.0"
+__version__ = "4.0.0"
