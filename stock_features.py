@@ -662,6 +662,118 @@ def _extract_vix_from_row(row: Any) -> Optional[float]:
 # DATAFRAME UTILITIES
 # =============================================================================
 
+
+def _align_benchmark_by_timestamp(
+    df: pd.DataFrame,
+    benchmark_df: Optional[pd.DataFrame],
+    value_col: str = "close",
+    timestamp_col: str = "timestamp",
+) -> List[Optional[float]]:
+    """
+    Align benchmark data with main DataFrame using timestamp-based merge_asof.
+
+    FIX (2025-11-29): This function replaces positional indexing with proper
+    temporal alignment to prevent look-ahead bias when benchmark data has
+    different date ranges or gaps than the main data.
+
+    The issue was that the previous implementation used positional indexing:
+        benchmark_values[i] for row i
+    This fails when:
+    - Benchmark data starts earlier/later than main data
+    - Benchmark has different gaps
+    - Timestamps don't align exactly
+
+    The fix uses merge_asof with direction="backward" which:
+    - Finds the nearest benchmark value <= each timestamp
+    - Ensures only PAST information is used (no look-ahead)
+    - Handles misaligned timestamps correctly
+
+    Args:
+        df: Main DataFrame with timestamp column
+        benchmark_df: Benchmark DataFrame to align (SPY, QQQ, VIX)
+        value_col: Column to extract values from
+        timestamp_col: Timestamp column name
+
+    Returns:
+        List of aligned values (same length as df), None for missing
+
+    Reference: López de Prado (2018) Ch.4 - Proper temporal alignment in financial ML
+    """
+    n_rows = len(df)
+
+    if benchmark_df is None or benchmark_df.empty:
+        return [None] * n_rows
+
+    # Ensure timestamp column exists
+    if timestamp_col not in df.columns:
+        # Try alternative timestamp columns
+        for alt_col in ["timestamp", "ts", "time", "date"]:
+            if alt_col in df.columns:
+                timestamp_col = alt_col
+                break
+        else:
+            # No timestamp column - fall back to positional (with warning)
+            import warnings
+            warnings.warn(
+                "No timestamp column found in DataFrame. "
+                "Falling back to positional indexing which may cause temporal misalignment. "
+                "Add 'timestamp' column for proper alignment.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            if value_col in benchmark_df.columns:
+                vals = benchmark_df[value_col].tolist()
+                return [vals[i] if i < len(vals) else None for i in range(n_rows)]
+            return [None] * n_rows
+
+    if timestamp_col not in benchmark_df.columns:
+        # Benchmark has no timestamp - fall back to positional
+        if value_col in benchmark_df.columns:
+            vals = benchmark_df[value_col].tolist()
+            return [vals[i] if i < len(vals) else None for i in range(n_rows)]
+        return [None] * n_rows
+
+    # Find value column in benchmark
+    actual_value_col = None
+    for col_candidate in [value_col, "close", "Close", "VIX", "vix_close", "value"]:
+        if col_candidate in benchmark_df.columns:
+            actual_value_col = col_candidate
+            break
+
+    if actual_value_col is None:
+        return [None] * n_rows
+
+    # Prepare data for merge_asof
+    df_sorted = df[[timestamp_col]].copy()
+    df_sorted = df_sorted.sort_values(timestamp_col).reset_index()
+    df_sorted.rename(columns={"index": "_orig_idx"}, inplace=True)
+
+    benchmark_sorted = benchmark_df[[timestamp_col, actual_value_col]].copy()
+    benchmark_sorted = benchmark_sorted.dropna(subset=[timestamp_col, actual_value_col])
+    benchmark_sorted = benchmark_sorted.sort_values(timestamp_col)
+    benchmark_sorted.rename(columns={actual_value_col: "_benchmark_value"}, inplace=True)
+
+    # Perform merge_asof with direction="backward"
+    # This ensures we only use benchmark values from BEFORE or AT the timestamp
+    merged = pd.merge_asof(
+        df_sorted,
+        benchmark_sorted,
+        on=timestamp_col,
+        direction="backward",
+    )
+
+    # Restore original order
+    merged = merged.sort_values("_orig_idx")
+
+    # Extract values in original order
+    result = merged["_benchmark_value"].tolist()
+
+    # Convert NaN to None for consistency
+    result = [None if pd.isna(v) else float(v) for v in result]
+
+    return result
+
+
 def add_stock_features_to_dataframe(
     df: pd.DataFrame,
     symbol: str,
@@ -675,6 +787,10 @@ def add_stock_features_to_dataframe(
 
     This function adds all stock features as new columns to the input DataFrame.
     Used during data preparation for training/inference.
+
+    FIX (2025-11-29): Now uses timestamp-based merge_asof for benchmark alignment
+    instead of positional indexing. This prevents temporal misalignment when
+    benchmark data (VIX/SPY/QQQ) has different date ranges than the main data.
 
     Args:
         df: Main DataFrame with OHLCV data
@@ -715,35 +831,47 @@ def add_stock_features_to_dataframe(
 
     stock_prices = df[close_col].tolist()
 
-    # Prepare benchmark data
-    spy_prices = []
-    qqq_prices = []
-    vix_values = []
+    # FIX (2025-11-29): Use timestamp-based alignment instead of positional indexing
+    # This prevents temporal misalignment when benchmark data has different date ranges
+    #
+    # The old code used positional indexing:
+    #   spy_prices = spy_df["close"].tolist()
+    #   current_spy_prices = spy_prices[:i+1]  # BUG: position i != timestamp at row i
+    #
+    # The fix aligns benchmark data by timestamp FIRST, then uses the aligned values:
+    #   spy_aligned = _align_benchmark_by_timestamp(df, spy_df, "close")
+    #   current_spy = spy_aligned[i]  # CORRECT: aligned by timestamp
+    spy_aligned = _align_benchmark_by_timestamp(df, spy_df, "close")
+    qqq_aligned = _align_benchmark_by_timestamp(df, qqq_df, "close")
+    vix_aligned = _align_benchmark_by_timestamp(df, vix_df, "close")
 
-    if spy_df is not None and "close" in spy_df.columns:
-        spy_prices = spy_df["close"].tolist()
-
-    if qqq_df is not None and "close" in qqq_df.columns:
-        qqq_prices = qqq_df["close"].tolist()
-
-    if vix_df is not None:
-        vix_col = "close" if "close" in vix_df.columns else "VIX"
-        if vix_col in vix_df.columns:
-            vix_values = vix_df[vix_col].tolist()
+    # Build cumulative lists from aligned values for rolling calculations
+    # For relative strength, we need historical prices aligned by timestamp
+    spy_cumulative: List[float] = []
+    qqq_cumulative: List[float] = []
 
     # Calculate rolling features
     for i in range(n_rows):
-        # Build historical data up to current point
+        # Build historical data up to current point using ALIGNED values
         current_stock_prices = stock_prices[:i+1]
-        current_spy_prices = spy_prices[:i+1] if spy_prices else []
-        current_qqq_prices = qqq_prices[:i+1] if qqq_prices else []
-        current_vix = vix_values[i] if i < len(vix_values) else None
+
+        # FIX: Build cumulative benchmark prices from aligned values
+        if spy_aligned[i] is not None:
+            spy_cumulative.append(spy_aligned[i])
+        current_spy_prices = spy_cumulative.copy()
+
+        if qqq_aligned[i] is not None:
+            qqq_cumulative.append(qqq_aligned[i])
+        current_qqq_prices = qqq_cumulative.copy()
+
+        # FIX: Use aligned VIX value at current position
+        current_vix = vix_aligned[i]
 
         # Build benchmark data
         benchmark = BenchmarkData(
             spy_prices=current_spy_prices,
             qqq_prices=current_qqq_prices,
-            vix_values=[current_vix] if current_vix else [],
+            vix_values=[current_vix] if current_vix is not None else [],
         )
 
         # Extract features

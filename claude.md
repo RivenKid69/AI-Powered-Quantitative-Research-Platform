@@ -36,6 +36,7 @@
 | Скачать VIX данные | `scripts/download_stock_data.py` | `--vix --start 2020-01-01` или `--symbols ^VIX` |
 | Скачать macro данные | `scripts/download_stock_data.py` | `--macro --start 2020-01-01` (VIX, DXY, Treasury) |
 | Yahoo market data | `adapters/yahoo/market_data.py` | Auto-used for ^VIX, DX-Y.NYB, indices |
+| Benchmark temporal alignment | `stock_features.py` | `pytest tests/test_benchmark_temporal_alignment.py` |
 | Alpaca streaming | `adapters/alpaca/market_data.py` | `stream_bars_async()`, `stream_ticks_async()` |
 | L3 LOB matching | `lob/matching_engine.py` | `pytest tests/test_matching_engine.py` |
 | Queue position tracking | `lob/queue_tracker.py` | `pytest tests/test_matching_engine.py::TestQueuePositionTracker` |
@@ -1845,6 +1846,7 @@ pytest tests/test_lob*.py tests/test_matching_engine.py tests/test_fill_probabil
 | DarkPoolSimulator memory leak | `_leakage_history`, `_fill_history` росли unbounded | ✅ Фикс 2025-11-27: `deque(maxlen=max_history_size)` |
 | DarkPoolConfig division by zero | `impact_size_normalization=0` не валидировался | ✅ Фикс 2025-11-27: `__post_init__` validation |
 | DarkPoolSimulator TypeError on deque slice | `_should_block_for_leakage` использовал slice на deque | ✅ Фикс 2025-11-27: convert to list before slicing |
+| VIX/SPY/QQQ benchmark temporal misalignment | Positional indexing вместо timestamp merge → look-ahead | ✅ Фикс 2025-11-29: `merge_asof(direction="backward")` |
 
 ---
 
@@ -1880,6 +1882,9 @@ pytest tests/test_lob*.py tests/test_matching_engine.py tests/test_fill_probabil
 | "VGS race condition в PBT?" | ⚠️ **НЕ issue**. Separate workers, unique checkpoint files, Python GIL. См. #47. |
 | "CVaR ~16% approximation error?" | ⚠️ **Documented limitation**. Trade-off: speed vs accuracy. N=51 gives ~5% error. |
 | "Winsorization [1%,99%] insufficient for crypto?" | ⚠️ **Configurable**. Can adjust in features_pipeline.py:181. |
+| "tanh в potential shaping нарушает Ng theorem?" | ⚠️ **НЕ баг**. Ng et al. (1999) разрешает ЛЮБУЮ функцию Φ(s). tanh(net_worth) валиден. |
+| "gap_filled look-ahead bias?" | ⚠️ **НЕ баг**. Feature shifting (shift(1)) применяется ПОСЛЕ вычисления. См. features_pipeline.py:441-442. |
+| "Earnings unbounded future window?" | ⚠️ **Документация**. Пользователь обязан гарантировать актуальность earnings calendar. Не code bug. |
 
 ---
 
@@ -2927,6 +2932,7 @@ if ratio > 1.0:
 
 | Дата | Исправление | Влияние |
 |------|-------------|---------|
+| **2025-11-29** | fix(stocks): Benchmark temporal alignment via merge_asof | VIX/SPY/QQQ used positional index → look-ahead bias for equities |
 | **2025-11-28** | feat(equity): EquityParametricSlippageProvider | L2+ smart TCA model for US equities, 9 factors, 86 tests |
 | **2025-11-28** | feat(crypto): CryptoParametricSlippageProvider | L2+ smart TCA model with 6 factors, 84 tests |
 | **2025-11-27** | Stage 6: DarkPoolSimulator memory leak fix | unbounded List → deque(maxlen=N), prevents OOM in long simulations |
@@ -3384,6 +3390,6 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 
 ---
 
-**Последнее обновление**: 2025-11-28
-**Версия документации**: 10.2 (Phase 10 + Crypto & Equity Parametric TCA)
-**Статус**: ✅ Production Ready (все критические исправления применены, 53 задокументированных "НЕ БАГИ")
+**Последнее обновление**: 2025-11-29
+**Версия документации**: 10.3 (Phase 10 + Benchmark Temporal Alignment Fix)
+**Статус**: ✅ Production Ready (все критические исправления применены, 56 задокументированных "НЕ БАГИ")
