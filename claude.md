@@ -21,6 +21,7 @@
 | Изменить логику исполнения | `execution_sim.py`, `execution_providers.py` | `pytest tests/test_execution*.py` |
 | Execution providers (L2/L3) | `execution_providers.py` | `pytest tests/test_execution_providers.py` |
 | Crypto Parametric TCA | `execution_providers.py` | `pytest tests/test_crypto_parametric_tca.py` |
+| Equity Parametric TCA | `execution_providers.py` | `pytest tests/test_equity_parametric_tca.py` |
 | Настроить риск-менеджмент | `configs/risk.yaml`, `risk_guard.py` | Проверить `test_risk*.py` |
 | Обновить модель PPO | `distributional_ppo.py` | Проверить все `test_distributional_ppo*.py` |
 | Добавить новую метрику | `services/monitoring.py` | Обновить `metrics.json` schema |
@@ -52,6 +53,9 @@
 | Dark pool simulation | `lob/dark_pool.py` | `pytest tests/test_hidden_liquidity_dark_pools.py::TestDarkPoolSimulator` |
 | L3 execution provider | `execution_providers_l3.py` | `pytest tests/test_execution_providers_l3.py` |
 | L3 config models | `lob/config.py` | `pytest tests/test_execution_providers_l3.py::TestL3ExecutionConfig` |
+| Conformal prediction | `core_conformal.py`, `impl_conformal.py`, `service_conformal.py` | `pytest tests/test_conformal_prediction.py` |
+| Uncertainty bounds | `service_conformal.py` | `pytest tests/test_conformal_prediction.py::TestUncertaintyTracker` |
+| CVaR bounds | `impl_conformal.py` | `pytest tests/test_conformal_prediction.py::TestConformalCVaREstimator` |
 
 ### 🔍 Quick File Reference
 
@@ -732,6 +736,213 @@ pytest tests/test_crypto_parametric_tca.py::TestAdaptiveImpact -v
 ```
 
 **Покрытие**: 84 теста (100% pass)
+
+---
+
+## 📈 Equity Parametric TCA (L2+)
+
+### Обзор
+
+Smart parametric Transaction Cost Analysis model для US equities. Расширяет базовую √participation модель (Almgren-Chriss) с equity-специфичными факторами.
+
+**Статус**: ✅ Production Ready | **Тесты**: 86 (100% pass)
+
+### Формула Total Slippage
+
+```
+slippage = half_spread
+    × (1 + k × √participation)      # Almgren-Chriss impact
+    × volatility_regime_mult        # Volatility regime (Hasbrouck 2007)
+    × market_cap_mult               # Market cap tier (Kissell 2013)
+    × (1 + beta_stress)             # Systematic risk adjustment
+    × intraday_factor               # U-curve liquidity (ITG 2012)
+    × auction_factor                # Opening/closing auction proximity
+    × (1 + short_penalty)           # Short squeeze risk
+    × event_mult                    # Earnings/news events
+    × (1 + sector_penalty)          # Sector rotation
+    × imbalance_factor              # Order book imbalance
+```
+
+### 9 Slippage Factors
+
+| Factor | Формула | Референс |
+|--------|---------|----------|
+| **√Participation** | `k × √(Q/ADV)`, k ∈ [0.03, 0.08] | Almgren-Chriss (2001) |
+| **Market Cap Tier** | mega=0.7, large=1.0, mid=1.3, small=1.8, micro=2.5 | Kissell (2013) |
+| **Intraday U-Curve** | open=1.5 → midday=1.0 → close=1.3 | ITG (2012) |
+| **Auction Proximity** | `1 + 0.3 × exp(-minutes/10)` | NYSE/NASDAQ mechanics |
+| **Beta Stress** | `1 + |β-1| × SPY_move × 0.1` | Systematic risk |
+| **Short Interest** | `log1p(ratio/threshold) × max_penalty` | GME-style squeeze |
+| **Events** | Earnings=2.5×, News=1.5× | Event-driven volatility |
+| **Sector Rotation** | Penalty when sector ETF down >1% | Cross-asset signal |
+| **Volatility Regime** | LOW=0.85, NORMAL=1.0, HIGH=1.4 | Hasbrouck (2007) |
+
+### Smart Features
+
+| Feature | Описание |
+|---------|----------|
+| **Market Cap Auto-Detection** | Классификация MEGA/LARGE/MID/SMALL/MICRO по market cap |
+| **Trading Session Detection** | PRE_MARKET, OPEN_AUCTION, REGULAR, CLOSE_AUCTION, AFTER_HOURS, CLOSED |
+| **Adaptive Impact** | Коэффициент k адаптируется по trailing fill quality |
+| **Auction Detector** | Экспоненциальный decay вблизи 9:30/16:00 ET |
+| **Earnings Calendar** | Автоматическое определение T-1 to T+1 earnings window |
+| **Cross-Asset Signal** | SPY volatility spike → все акции получают penalty |
+| **Sector Rotation** | XLF/XLK/XLV down >1% → соответствующие акции получают penalty |
+
+### Market Cap Tiers
+
+| Tier | Threshold | Multiplier | Примеры |
+|------|-----------|------------|---------|
+| **MEGA** | >$200B | 0.7 | AAPL, MSFT, GOOGL |
+| **LARGE** | $10B-$200B | 1.0 | Most S&P 500 |
+| **MID** | $2B-$10B | 1.3 | Mid-cap stocks |
+| **SMALL** | $300M-$2B | 1.8 | Regional banks |
+| **MICRO** | <$300M | 2.5 | Penny stocks |
+
+### Intraday U-Curve (US Eastern Time)
+
+| Session | Часы (ET) | Factor | Описание |
+|---------|-----------|--------|----------|
+| Pre-market | 4:00-9:30 | 2.0-2.5 | Very low liquidity |
+| Open auction | 9:30-10:00 | ~1.5 | High volume, wide spreads |
+| Morning | 10:00-12:00 | 1.1-1.2 | Improving liquidity |
+| Midday | 12:00-14:00 | **1.0** | Peak liquidity (best execution) |
+| Afternoon | 14:00-15:00 | 1.05-1.1 | Still good |
+| Pre-close | 15:00-16:00 | ~1.3 | Rising activity |
+| After-hours | 16:00-20:00 | 2.0-2.5 | Low liquidity |
+
+### Использование
+
+```python
+from execution_providers import (
+    EquityParametricSlippageProvider,
+    EquityParametricConfig,
+    MarketCapTier,
+    TradingSession,
+    Order,
+    MarketState,
+    AssetClass,
+)
+
+# 1. Базовое использование (defaults)
+provider = EquityParametricSlippageProvider()
+
+# 2. С кастомной конфигурацией
+config = EquityParametricConfig(
+    impact_coef_base=0.06,
+    spread_bps=2.5,
+    market_cap_multipliers={"mega": 0.6, "large": 1.0, ...},
+)
+provider = EquityParametricSlippageProvider(config=config)
+
+# 3. Из профиля
+provider = EquityParametricSlippageProvider.from_profile("large_cap")
+# Профили: "default", "conservative", "aggressive", "retail", "large_cap", "small_cap"
+
+# 4. Вычисление slippage с полным набором параметров
+slippage_bps = provider.compute_slippage_bps(
+    order=Order("AAPL", "BUY", 1000, "MARKET", asset_class=AssetClass.EQUITY),
+    market=MarketState(timestamp=0, bid=175.0, ask=175.02, adv=80_000_000),
+    participation_ratio=0.002,
+    market_cap=2.8e12,           # $2.8T (MEGA cap)
+    beta=1.2,                    # Stock beta vs SPY
+    time_et=12,                  # 12:00 ET (midday - best liquidity)
+    spy_return_today=-0.015,     # SPY down 1.5%
+    short_interest_ratio=3.0,    # 3 days to cover
+    has_earnings_soon=False,
+    sector="technology",
+    sector_etf_return=-0.02,     # XLK down 2%
+)
+
+# 5. Pre-trade cost estimation с рекомендациями
+estimate = provider.estimate_impact_cost(
+    notional=1_000_000,
+    adv=50_000_000,
+    market_cap=50e9,
+    beta=1.3,
+    time_et=14,
+    has_earnings_soon=True,
+)
+print(f"Impact: {estimate['impact_bps']:.2f} bps")
+print(f"Cost: ${estimate['impact_cost']:.2f}")
+print(f"Market Cap Tier: {estimate['market_cap_tier']}")
+print(f"Trading Session: {estimate['trading_session']}")
+print(f"Recommendation: {estimate['recommendation']}")
+```
+
+### Конфигурация (EquityParametricConfig)
+
+| Параметр | Default | Описание |
+|----------|---------|----------|
+| `impact_coef_base` | 0.05 | Base k coefficient (lower than crypto!) |
+| `impact_coef_range` | (0.03, 0.08) | Adaptive k bounds |
+| `spread_bps` | 2.0 | Default spread (tighter than crypto) |
+| `market_cap_multipliers` | {mega: 0.7, ..., micro: 2.5} | Tier multipliers |
+| `market_cap_thresholds` | {mega: 200e9, large: 10e9, ...} | USD thresholds |
+| `intraday_curve` | {hour: factor} | 24-hour liquidity curve (ET) |
+| `auction_decay_minutes` | 10.0 | Exponential decay parameter |
+| `auction_premium` | 0.3 | Max 30% auction premium |
+| `vol_regime_multipliers` | {low: 0.85, normal: 1.0, high: 1.4} | Volatility scaling |
+| `beta_stress_sensitivity` | 0.1 | 10% per unit beta deviation × SPY move |
+| `short_interest_max_penalty` | 0.3 | Max 30% short squeeze penalty |
+| `short_interest_threshold` | 5.0 | 5 days to cover threshold |
+| `earnings_event_multiplier` | 2.5 | 2.5× during earnings |
+| `news_event_multiplier` | 1.5 | 1.5× during news |
+| `sector_penalty_threshold` | -0.01 | -1% sector ETF return triggers penalty |
+| `sector_penalty_max` | 0.15 | Max 15% sector penalty |
+| `min_slippage_bps` | 0.5 | Floor (lower than crypto) |
+| `max_slippage_bps` | 200.0 | Cap (lower than crypto) |
+
+### Профили
+
+| Профиль | impact_coef | spread_bps | min_bps | Применение |
+|---------|-------------|------------|---------|------------|
+| `default` | 0.05 | 2.0 | 0.5 | Standard institutional |
+| `conservative` | 0.07 | 3.0 | 1.0 | Safer estimates |
+| `aggressive` | 0.04 | 1.5 | 0.3 | Tighter estimates |
+| `retail` | 0.06 | 4.0 | 1.5 | Retail flow (wider spreads) |
+| `large_cap` | 0.04 | 1.5 | 0.3 | MEGA/LARGE caps |
+| `small_cap` | 0.08 | 5.0 | 2.0 | SMALL/MICRO caps |
+
+### Сравнение Crypto vs Equity TCA
+
+| Параметр | Crypto | Equity |
+|----------|--------|--------|
+| Base k coefficient | 0.10 | 0.05 |
+| Default spread | 5.0 bps | 2.0 bps |
+| Max slippage | 500 bps | 200 bps |
+| Time-of-day | 24h UTC curve | US Eastern U-curve |
+| Special factors | Funding rate, BTC correlation | Beta stress, earnings, sector rotation |
+| Market structure | 24/7 trading | 9:30-16:00 ET + extended |
+
+### Тестирование
+
+```bash
+# Все тесты equity parametric TCA
+pytest tests/test_equity_parametric_tca.py -v
+
+# По категориям
+pytest tests/test_equity_parametric_tca.py::TestMarketCapTierClassification -v
+pytest tests/test_equity_parametric_tca.py::TestIntradayUCurve -v
+pytest tests/test_equity_parametric_tca.py::TestAuctionProximityFactor -v
+pytest tests/test_equity_parametric_tca.py::TestBetaStress -v
+pytest tests/test_equity_parametric_tca.py::TestShortSqueeze -v
+pytest tests/test_equity_parametric_tca.py::TestEarningsWindow -v
+pytest tests/test_equity_parametric_tca.py::TestSectorRotation -v
+pytest tests/test_equity_parametric_tca.py::TestL2Integration -v
+```
+
+**Покрытие**: 86 тестов (100% pass)
+
+### Референсы
+
+- Almgren & Chriss (2001): "Optimal Execution of Portfolio Transactions"
+- Kissell & Glantz (2013): "Optimal Trading Strategies"
+- Hasbrouck (2007): "Empirical Market Microstructure"
+- Kyle (1985): "Continuous Auctions and Insider Trading"
+- ITG (2012): "Global Cost Review" — intraday patterns
+- Cont, Kukanov, Stoikov (2014): "Price Impact of Order Book Events"
+- Pagano & Schwartz (2003): "Opening and Closing Auctions"
 
 ---
 
@@ -2672,7 +2883,7 @@ if ratio > 1.0:
 
 ### ✅ Production Ready
 
-Все критические исправления применены и протестированы. **300+ тестов** с 97%+ pass rate.
+Все критические исправления применены и протестированы. **400+ тестов** с 97%+ pass rate.
 
 | Компонент | Статус | Тесты |
 |-----------|--------|-------|
@@ -2689,7 +2900,8 @@ if ratio > 1.0:
 | Data Leakage Prevention | ✅ Production | 46/47 |
 | Technical Indicators | ✅ Production | 11/16 (C++ pending) |
 | Fear & Greed Detection | ✅ Production | 13/13 |
-| Crypto Parametric TCA | ✅ Production | 84/84 (NEW) |
+| Crypto Parametric TCA | ✅ Production | 84/84 |
+| Equity Parametric TCA | ✅ Production | 86/86 (NEW) |
 | Bug Fixes 2025-11-26 | ✅ Production | 22/22 (includes projection+YZ fixes) |
 
 ### ⚠️ Требуется действие
@@ -2715,6 +2927,7 @@ if ratio > 1.0:
 
 | Дата | Исправление | Влияние |
 |------|-------------|---------|
+| **2025-11-28** | feat(equity): EquityParametricSlippageProvider | L2+ smart TCA model for US equities, 9 factors, 86 tests |
 | **2025-11-28** | feat(crypto): CryptoParametricSlippageProvider | L2+ smart TCA model with 6 factors, 84 tests |
 | **2025-11-27** | Stage 6: DarkPoolSimulator memory leak fix | unbounded List → deque(maxlen=N), prevents OOM in long simulations |
 | **2025-11-27** | Stage 6: DarkPoolConfig validation | Division by zero prevented with ValueError for invalid params |
@@ -2874,6 +3087,89 @@ adversarial:
     attack_steps: 3
     attack_lr: 0.03
 ```
+
+### 6. Conformal Prediction
+
+**Статус**: ✅ Production Ready | **Тесты**: 59 (100% pass)
+
+Distribution-free uncertainty bounds на CVaR и value estimates.
+
+**Методы**:
+- **CQR** (Conformalized Quantile Regression) — Romano et al., 2019
+- **EnbPI** (Ensemble batch Prediction Intervals) — Xu & Xie, ICML 2021
+- **ACI** (Adaptive Conformal Inference) — Gibbs & Candes, 2021
+
+**Архитектура**:
+```
+core_conformal.py → impl_conformal.py → service_conformal.py
+```
+
+**Конфигурация** (`configs/conformal.yaml`):
+```yaml
+conformal:
+  enabled: true
+  calibration:
+    method: "cqr"           # cqr, enbpi, aci, naive
+    coverage_target: 0.90   # P(Y ∈ interval) ≥ 90%
+    min_calibration_samples: 500
+    recalibrate_interval: 1000
+  cvar_bounds:
+    enabled: true
+    use_for_gae: false      # Conservative, experimental
+  risk_integration:
+    enabled: true
+    uncertainty_position_scaling: true
+    baseline_interval_width: 0.1
+    max_uncertainty_reduction: 0.5
+  escalation:
+    enabled: true
+    warning_percentile: 90
+    critical_percentile: 99
+    action_on_warning: "log"
+    action_on_critical: "reduce_position"
+```
+
+**Использование**:
+```python
+from service_conformal import (
+    ConformalPredictionService,
+    create_conformal_config,
+    wrap_cvar_with_bounds,
+    create_risk_guard_integration,
+)
+
+# 1. Создание сервиса из YAML
+config = create_conformal_config(yaml_dict["conformal"])
+service = ConformalPredictionService(config)
+
+# 2. Калибровка после training
+service.calibrate(predictions, true_values)
+
+# 3. Получение prediction interval
+interval = service.predict_interval(point_estimate)
+print(f"[{interval.lower_bound:.3f}, {interval.upper_bound:.3f}]")
+
+# 4. CVaR bounds
+bounds = service.compute_cvar_bounds(quantiles)
+print(f"CVaR worst-case: {bounds.worst_case_cvar:.3f}")
+
+# 5. Position scaling
+scale = service.get_position_scale()  # 0.5-1.0 based on uncertainty
+
+# 6. Integration с risk_guard
+position_scale_fn = create_risk_guard_integration(service, lambda: 1.0)
+```
+
+**Тестирование**:
+```bash
+pytest tests/test_conformal_prediction.py -v
+```
+
+**Референсы**:
+- Romano et al. (2019): [CQR](https://arxiv.org/abs/1905.03222)
+- Xu & Xie (ICML 2021): EnbPI
+- Gibbs & Candes (2021): ACI
+- MAPIE: https://mapie.readthedocs.io/
 
 ---
 
@@ -3089,5 +3385,5 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-11-28
-**Версия документации**: 10.1 (Phase 10 + Crypto Parametric TCA)
+**Версия документации**: 10.2 (Phase 10 + Crypto & Equity Parametric TCA)
 **Статус**: ✅ Production Ready (все критические исправления применены, 53 задокументированных "НЕ БАГИ")
