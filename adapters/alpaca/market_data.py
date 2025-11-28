@@ -3,12 +3,23 @@
 adapters/alpaca/market_data.py
 Alpaca market data adapter for US equities.
 
-Status: STUB - Full implementation pending for Phase 2
+Status: Production Ready (Phase 2 Complete)
 
 Alpaca provides:
-- REST API for historical data
-- WebSocket for real-time quotes/trades
+- REST API for historical data (get_bars, get_latest_bar, get_tick)
+- WebSocket for real-time quotes/trades:
+  - Sync iterators: stream_bars(), stream_ticks()
+  - Async generators: stream_bars_async(), stream_ticks_async()
 - Both IEX (free) and SIP (paid) data feeds
+
+Usage:
+    # Sync streaming (blocking)
+    for bar in adapter.stream_bars(["AAPL", "MSFT"], 60000):
+        print(f"Bar: {bar}")
+
+    # Async streaming (for live trading)
+    async for bar in adapter.stream_bars_async(["AAPL", "MSFT"]):
+        await process_bar(bar)
 """
 
 from __future__ import annotations
@@ -203,24 +214,32 @@ class AlpacaMarketDataAdapter(MarketDataAdapter):
         interval_ms: int,
     ) -> Iterator[Bar]:
         """
-        Stream real-time bars via WebSocket.
+        Stream real-time bars via WebSocket (sync iterator).
 
-        Note: Alpaca streams trades/quotes; bars are aggregated client-side.
+        This is a blocking generator that yields bars as they arrive.
+        For async usage, use stream_bars_async() instead.
+
+        Note: Alpaca provides 1-minute bars via WebSocket.
 
         Args:
             symbols: Symbols to stream
-            interval_ms: Bar interval in milliseconds
+            interval_ms: Bar interval in milliseconds (for reference only)
 
         Yields:
             Bar objects
         """
-        self._ensure_alpaca_sdk()
+        import queue
+        import threading
 
+        self._ensure_alpaca_sdk()
         from alpaca.data.live import StockDataStream
 
         api_key = self._config.get("api_key")
         api_secret = self._config.get("api_secret")
         feed = self._config.get("feed", "iex")
+
+        bar_queue: queue.Queue = queue.Queue()
+        stop_event = threading.Event()
 
         stream = StockDataStream(
             api_key=api_key,
@@ -228,27 +247,119 @@ class AlpacaMarketDataAdapter(MarketDataAdapter):
             feed=feed,
         )
 
-        # Bar aggregation state
-        bar_builders: Dict[str, Dict] = {}
-        interval_sec = interval_ms / 1000
+        async def handle_bar(bar):
+            """Handle incoming bar from stream."""
+            converted = self._convert_bar(bar.symbol, bar)
+            if converted:
+                bar_queue.put(converted)
+
+        def run_stream():
+            """Run stream in background thread."""
+            stream.subscribe_bars(handle_bar, *symbols)
+            try:
+                stream.run()
+            except Exception as e:
+                logger.error(f"Stream error: {e}")
+                bar_queue.put(None)  # Signal end
+
+        # Start stream in background thread
+        stream_thread = threading.Thread(target=run_stream, daemon=True)
+        stream_thread.start()
+
+        # Yield bars from queue
+        try:
+            while not stop_event.is_set():
+                try:
+                    bar = bar_queue.get(timeout=1.0)
+                    if bar is None:
+                        break
+                    yield bar
+                except queue.Empty:
+                    continue
+        finally:
+            stop_event.set()
+            stream.stop()
+
+    async def stream_bars_async(
+        self,
+        symbols: Sequence[str],
+        interval_ms: int = 60000,
+    ):
+        """
+        Stream real-time bars via WebSocket (async generator).
+
+        This is an async generator for use with asyncio-based live trading.
+
+        Args:
+            symbols: Symbols to stream
+            interval_ms: Bar interval in milliseconds (for reference only)
+
+        Yields:
+            Bar objects
+
+        Example:
+            async for bar in adapter.stream_bars_async(["AAPL", "MSFT"]):
+                print(f"New bar: {bar.symbol} @ {bar.close}")
+        """
+        import asyncio
+
+        self._ensure_alpaca_sdk()
+        from alpaca.data.live import StockDataStream
+
+        api_key = self._config.get("api_key")
+        api_secret = self._config.get("api_secret")
+        feed = self._config.get("feed", "iex")
+
+        bar_queue: asyncio.Queue = asyncio.Queue()
+
+        stream = StockDataStream(
+            api_key=api_key,
+            secret_key=api_secret,
+            feed=feed,
+        )
 
         async def handle_bar(bar):
             """Handle incoming bar from stream."""
-            yield self._convert_bar(bar.symbol, bar)
+            converted = self._convert_bar(bar.symbol, bar)
+            if converted:
+                await bar_queue.put(converted)
 
-        # Subscribe to bars
         stream.subscribe_bars(handle_bar, *symbols)
 
-        # Run stream (blocking)
-        # Note: In production, this should be run in a separate thread
-        stream.run()
+        # Run stream in background task
+        async def run_stream():
+            try:
+                await stream._run_forever()
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.error(f"Async stream error: {e}")
+                await bar_queue.put(None)
+
+        stream_task = asyncio.create_task(run_stream())
+
+        try:
+            while True:
+                bar = await bar_queue.get()
+                if bar is None:
+                    break
+                yield bar
+        finally:
+            stream_task.cancel()
+            try:
+                await stream_task
+            except asyncio.CancelledError:
+                pass
 
     def stream_ticks(
         self,
         symbols: Sequence[str],
     ) -> Iterator[Tick]:
         """
-        Stream real-time quotes via WebSocket.
+        Stream real-time quotes via WebSocket (sync iterator).
+
+        This is a blocking generator that yields ticks as they arrive.
+        For async usage, use stream_ticks_async() instead.
 
         Args:
             symbols: Symbols to stream
@@ -256,13 +367,18 @@ class AlpacaMarketDataAdapter(MarketDataAdapter):
         Yields:
             Tick objects
         """
-        self._ensure_alpaca_sdk()
+        import queue
+        import threading
 
+        self._ensure_alpaca_sdk()
         from alpaca.data.live import StockDataStream
 
         api_key = self._config.get("api_key")
         api_secret = self._config.get("api_secret")
         feed = self._config.get("feed", "iex")
+
+        tick_queue: queue.Queue = queue.Queue()
+        stop_event = threading.Event()
 
         stream = StockDataStream(
             api_key=api_key,
@@ -272,17 +388,123 @@ class AlpacaMarketDataAdapter(MarketDataAdapter):
 
         async def handle_quote(quote):
             """Handle incoming quote."""
-            yield Tick(
-                ts=int(quote.timestamp.timestamp() * 1000),
-                symbol=quote.symbol,
-                bid=Decimal(str(quote.bid_price)) if quote.bid_price else None,
-                ask=Decimal(str(quote.ask_price)) if quote.ask_price else None,
-                bid_qty=Decimal(str(quote.bid_size)) if quote.bid_size else None,
-                ask_qty=Decimal(str(quote.ask_size)) if quote.ask_size else None,
-            )
+            try:
+                tick = Tick(
+                    ts=int(quote.timestamp.timestamp() * 1000),
+                    symbol=quote.symbol,
+                    bid=Decimal(str(quote.bid_price)) if quote.bid_price else None,
+                    ask=Decimal(str(quote.ask_price)) if quote.ask_price else None,
+                    bid_qty=Decimal(str(quote.bid_size)) if quote.bid_size else None,
+                    ask_qty=Decimal(str(quote.ask_size)) if quote.ask_size else None,
+                )
+                tick_queue.put(tick)
+            except Exception as e:
+                logger.debug(f"Quote conversion error: {e}")
+
+        def run_stream():
+            """Run stream in background thread."""
+            stream.subscribe_quotes(handle_quote, *symbols)
+            try:
+                stream.run()
+            except Exception as e:
+                logger.error(f"Stream error: {e}")
+                tick_queue.put(None)
+
+        # Start stream in background thread
+        stream_thread = threading.Thread(target=run_stream, daemon=True)
+        stream_thread.start()
+
+        # Yield ticks from queue
+        try:
+            while not stop_event.is_set():
+                try:
+                    tick = tick_queue.get(timeout=1.0)
+                    if tick is None:
+                        break
+                    yield tick
+                except queue.Empty:
+                    continue
+        finally:
+            stop_event.set()
+            stream.stop()
+
+    async def stream_ticks_async(
+        self,
+        symbols: Sequence[str],
+    ):
+        """
+        Stream real-time quotes via WebSocket (async generator).
+
+        This is an async generator for use with asyncio-based live trading.
+
+        Args:
+            symbols: Symbols to stream
+
+        Yields:
+            Tick objects
+
+        Example:
+            async for tick in adapter.stream_ticks_async(["AAPL", "MSFT"]):
+                print(f"New tick: {tick.symbol} bid={tick.bid} ask={tick.ask}")
+        """
+        import asyncio
+
+        self._ensure_alpaca_sdk()
+        from alpaca.data.live import StockDataStream
+
+        api_key = self._config.get("api_key")
+        api_secret = self._config.get("api_secret")
+        feed = self._config.get("feed", "iex")
+
+        tick_queue: asyncio.Queue = asyncio.Queue()
+
+        stream = StockDataStream(
+            api_key=api_key,
+            secret_key=api_secret,
+            feed=feed,
+        )
+
+        async def handle_quote(quote):
+            """Handle incoming quote."""
+            try:
+                tick = Tick(
+                    ts=int(quote.timestamp.timestamp() * 1000),
+                    symbol=quote.symbol,
+                    bid=Decimal(str(quote.bid_price)) if quote.bid_price else None,
+                    ask=Decimal(str(quote.ask_price)) if quote.ask_price else None,
+                    bid_qty=Decimal(str(quote.bid_size)) if quote.bid_size else None,
+                    ask_qty=Decimal(str(quote.ask_size)) if quote.ask_size else None,
+                )
+                await tick_queue.put(tick)
+            except Exception as e:
+                logger.debug(f"Quote conversion error: {e}")
 
         stream.subscribe_quotes(handle_quote, *symbols)
-        stream.run()
+
+        # Run stream in background task
+        async def run_stream():
+            try:
+                await stream._run_forever()
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.error(f"Async stream error: {e}")
+                await tick_queue.put(None)
+
+        stream_task = asyncio.create_task(run_stream())
+
+        try:
+            while True:
+                tick = await tick_queue.get()
+                if tick is None:
+                    break
+                yield tick
+        finally:
+            stream_task.cancel()
+            try:
+                await stream_task
+            except asyncio.CancelledError:
+                pass
 
     def _convert_bar(self, symbol: str, alpaca_bar: Any) -> Optional[Bar]:
         """Convert Alpaca bar to our Bar model."""

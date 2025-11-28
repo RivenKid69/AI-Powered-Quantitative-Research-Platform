@@ -1,25 +1,40 @@
 # -*- coding: utf-8 -*-
 """
 scripts/download_stock_data.py
-Download historical stock data from Alpaca/Polygon for training.
+Download historical stock data from Alpaca/Polygon/Yahoo Finance for training.
 
-This script downloads OHLCV data for US equities and prepares it for the training pipeline.
-It supports both Alpaca (free/paid) and Polygon (paid) data providers.
+This script downloads OHLCV data for US equities and indices, preparing it for
+the training pipeline. Supports multiple data providers with auto-detection.
 
 Features:
 - Multi-symbol parallel downloads
+- Auto-detection: Yahoo Finance for indices (^VIX), Alpaca/Polygon for stocks
 - Automatic rate limiting
 - Resume capability (skip already downloaded symbols)
 - Market hours filtering (regular + extended)
 - NYSE holiday calendar
 - Output compatible with existing training pipeline
 
+Providers:
+- Alpaca (default): Free IEX feed or paid SIP feed for stocks
+- Polygon: Paid provider with comprehensive market data
+- Yahoo Finance: Free indices data (VIX, DXY, Treasury yields)
+
 Usage:
+    # Download VIX (auto-uses Yahoo Finance)
+    python scripts/download_stock_data.py --symbols ^VIX --start 2020-01-01
+
+    # Download VIX with convenience flag
+    python scripts/download_stock_data.py --vix --start 2020-01-01
+
+    # Download macro indicators (VIX, DXY, Treasury yields)
+    python scripts/download_stock_data.py --macro --start 2020-01-01
+
     # Download popular stocks using Alpaca
     python scripts/download_stock_data.py --symbols AAPL MSFT GOOGL --provider alpaca
 
     # Download from file
-    python scripts/download_stock_data.py --symbols-file data/universe/sp500.txt --provider alpaca
+    python scripts/download_stock_data.py --symbols-file data/universe/sp500.txt
 
     # Use Polygon provider
     python scripts/download_stock_data.py --symbols AAPL --provider polygon --api-key YOUR_KEY
@@ -28,12 +43,12 @@ Usage:
     python scripts/download_stock_data.py --symbols AAPL --start 2020-01-01 --end 2024-01-01
 
 Output:
+    data/raw_stocks/VIX.parquet      # ^VIX sanitized to VIX
     data/raw_stocks/AAPL.parquet
-    data/raw_stocks/MSFT.parquet
-    ...
+    data/raw_stocks/DX-Y_NYB.parquet  # DX-Y.NYB sanitized
 
 Author: AI-Powered Quantitative Research Platform Team
-Date: 2025-11-27
+Date: 2025-11-28
 """
 
 from __future__ import annotations
@@ -307,6 +322,91 @@ def download_symbol_alpaca(
         return symbol, None, str(e)
 
 
+def download_symbol_yahoo(
+    symbol: str,
+    config: DownloadConfig,
+) -> Tuple[str, Optional[pd.DataFrame], Optional[str]]:
+    """
+    Download historical data for a single symbol from Yahoo Finance.
+
+    Best for: VIX (^VIX), DXY, Treasury yields, and other indices.
+
+    Args:
+        symbol: Yahoo symbol (e.g., "^VIX", "DX-Y.NYB")
+        config: Download configuration
+
+    Returns:
+        (symbol, dataframe, error_message)
+    """
+    try:
+        from adapters.yahoo.market_data import YahooMarketDataAdapter
+
+        adapter = YahooMarketDataAdapter()
+
+        # Calculate date range
+        end_dt = datetime.now(timezone.utc)
+        if config.end_date:
+            end_dt = datetime.strptime(config.end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+
+        if config.start_date:
+            start_dt = datetime.strptime(config.start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        else:
+            start_dt = end_dt - timedelta(days=config.lookback_days)
+
+        start_ts = int(start_dt.timestamp() * 1000)
+        end_ts = int(end_dt.timestamp() * 1000)
+
+        logger.info(f"Downloading {symbol} from Yahoo Finance: {start_dt.date()} to {end_dt.date()}")
+
+        # Download bars
+        bars = adapter.get_bars(
+            symbol=symbol,
+            timeframe=config.timeframe,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            limit=50000,
+        )
+
+        if not bars:
+            return symbol, None, "No data returned"
+
+        # Convert to DataFrame
+        records = []
+        for bar in bars:
+            records.append({
+                "timestamp": bar.ts // 1000,  # Convert to seconds
+                "open": float(bar.open),
+                "high": float(bar.high),
+                "low": float(bar.low),
+                "close": float(bar.close),
+                "volume": float(bar.volume_base),
+            })
+
+        df = pd.DataFrame(records)
+
+        # Sort by timestamp
+        df = df.sort_values("timestamp").reset_index(drop=True)
+
+        # Add symbol column (sanitize for filename)
+        df["symbol"] = symbol
+
+        # Note: Yahoo indices don't have typical market hours, skip filtering
+        # But VIX is based on SPX options which trade during market hours
+
+        # Resample if requested
+        if config.resample_to:
+            df = _resample_bars(df, config.resample_to)
+
+        logger.info(f"Downloaded {symbol} from Yahoo: {len(df)} bars")
+        return symbol, df, None
+
+    except ImportError as e:
+        return symbol, None, f"yfinance not installed: {e}"
+    except Exception as e:
+        logger.exception(f"Error downloading {symbol} from Yahoo")
+        return symbol, None, str(e)
+
+
 def download_symbol_polygon(
     symbol: str,
     config: DownloadConfig,
@@ -496,6 +596,25 @@ def _resample_bars(
 # Main Download Functions
 # =========================
 
+def sanitize_filename(symbol: str) -> str:
+    """
+    Sanitize symbol for use as filename.
+
+    Handles special characters in Yahoo symbols like ^VIX, DX-Y.NYB, GC=F
+    """
+    # Replace special chars with underscores
+    replacements = {
+        "^": "",      # ^VIX -> VIX
+        "=": "_",     # GC=F -> GC_F
+        ".": "_",     # DX-Y.NYB -> DX-Y_NYB
+        " ": "_",
+    }
+    result = symbol
+    for old, new in replacements.items():
+        result = result.replace(old, new)
+    return result
+
+
 def download_all_symbols(config: DownloadConfig) -> Dict[str, Any]:
     """
     Download data for all configured symbols.
@@ -530,13 +649,22 @@ def download_all_symbols(config: DownloadConfig) -> Dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Select download function
-    download_func = {
+    download_funcs = {
         "alpaca": download_symbol_alpaca,
         "polygon": download_symbol_polygon,
-    }.get(config.provider.lower())
+        "yahoo": download_symbol_yahoo,
+    }
 
-    if not download_func:
+    default_func = download_funcs.get(config.provider.lower())
+    if not default_func:
         raise ValueError(f"Unknown provider: {config.provider}")
+
+    def get_download_func(symbol: str):
+        """Auto-select provider based on symbol type."""
+        # Yahoo symbols: ^VIX, DX-Y.NYB, futures (=F), etc.
+        if symbol.startswith("^") or "=" in symbol or "-Y." in symbol:
+            return download_symbol_yahoo
+        return default_func
 
     # Track results
     results = {
@@ -551,16 +679,18 @@ def download_all_symbols(config: DownloadConfig) -> Dict[str, Any]:
         futures = {}
 
         for symbol in symbols:
-            # Check if already exists
+            # Check if already exists (sanitize filename for special chars)
             ext = "parquet" if config.output_format == "parquet" else "feather"
-            output_path = output_dir / f"{symbol}.{ext}"
+            safe_symbol = sanitize_filename(symbol)
+            output_path = output_dir / f"{safe_symbol}.{ext}"
 
             if config.skip_existing and output_path.exists():
                 logger.info(f"Skipping {symbol} (already exists)")
                 results["skipped"] += 1
                 continue
 
-            # Submit download task
+            # Submit download task (auto-select provider for indices)
+            download_func = get_download_func(symbol)
             future = executor.submit(download_func, symbol, config)
             futures[future] = symbol
 
@@ -579,9 +709,10 @@ def download_all_symbols(config: DownloadConfig) -> Dict[str, Any]:
                     results["failed"] += 1
                     results["errors"][symbol] = error
                 elif df is not None and not df.empty:
-                    # Save to file
+                    # Save to file (sanitize filename for special chars)
                     ext = "parquet" if config.output_format == "parquet" else "feather"
-                    output_path = output_dir / f"{symbol}.{ext}"
+                    safe_symbol = sanitize_filename(symbol)
+                    output_path = output_dir / f"{safe_symbol}.{ext}"
 
                     if config.output_format == "parquet":
                         df.to_parquet(output_path, index=False)
@@ -645,13 +776,23 @@ Examples:
         action="store_true",
         help="Download popular tech stocks (AAPL, MSFT, GOOGL, AMZN, NVDA, META, TSLA)",
     )
+    parser.add_argument(
+        "--vix",
+        action="store_true",
+        help="Download VIX and related volatility indices (^VIX, ^VXN)",
+    )
+    parser.add_argument(
+        "--macro",
+        action="store_true",
+        help="Download macro indicators (^VIX, DX-Y.NYB, ^TNX, ^TYX)",
+    )
 
     # Provider
     parser.add_argument(
         "--provider",
-        choices=["alpaca", "polygon"],
+        choices=["alpaca", "polygon", "yahoo"],
         default="alpaca",
-        help="Data provider (default: alpaca)",
+        help="Data provider: alpaca (default), polygon, or yahoo (for indices)",
     )
     parser.add_argument(
         "--api-key",
@@ -761,6 +902,10 @@ def main() -> int:
     symbols = list(args.symbols)
     if args.popular:
         symbols.extend(["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA"])
+    if args.vix:
+        symbols.extend(["^VIX", "^VXN"])
+    if args.macro:
+        symbols.extend(["^VIX", "DX-Y.NYB", "^TNX", "^TYX"])
 
     config = DownloadConfig(
         provider=args.provider,
