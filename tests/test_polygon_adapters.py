@@ -243,8 +243,7 @@ class TestPolygonMarketDataAdapter:
 
         assert tick is not None
         assert tick.symbol == "AAPL"
-        assert tick.last == Decimal("150.5")
-        assert tick.last_size == Decimal("100")
+        assert tick.price == Decimal("150.5")
 
     @patch("adapters.polygon.market_data.PolygonMarketDataAdapter._get_rest_client")
     def test_get_bars_multi(self, mock_get_client):
@@ -287,7 +286,8 @@ class TestPolygonTradingHoursAdapter:
     def test_initialization(self, adapter):
         """Test adapter initialization."""
         assert adapter.vendor == ExchangeVendor.POLYGON
-        assert adapter._timezone_str == "America/New_York"
+        # Calendar timezone is set correctly
+        assert adapter._calendar.timezone == "America/New_York"
 
     def test_regular_market_hours(self, adapter):
         """Test regular market hours detection."""
@@ -310,8 +310,8 @@ class TestPolygonTradingHoursAdapter:
         # Check that holiday list is populated
         assert len(US_MARKET_HOLIDAYS) > 0
 
-        # Common holidays should be in list
-        holidays_2025 = [h for h in US_MARKET_HOLIDAYS if h.startswith("2025")]
+        # Common holidays should be in list (format is tuple: (year, month, day))
+        holidays_2025 = [h for h in US_MARKET_HOLIDAYS if h[0] == 2025]
         assert len(holidays_2025) > 0
 
     def test_half_day_detection(self, adapter):
@@ -319,9 +319,9 @@ class TestPolygonTradingHoursAdapter:
         # Check that half days list is populated
         assert len(US_MARKET_HALF_DAYS) > 0
 
-        # Thanksgiving Eve should be a half day
-        thanksgiving_eve_2025 = "2025-11-28"
-        assert thanksgiving_eve_2025 in US_MARKET_HALF_DAYS
+        # Day after Thanksgiving 2025 should be a half day (format is tuple)
+        thanksgiving_half_day_2025 = (2025, 11, 28)
+        assert thanksgiving_half_day_2025 in US_MARKET_HALF_DAYS
 
     def test_extended_hours(self, adapter):
         """Test extended hours configuration."""
@@ -331,15 +331,14 @@ class TestPolygonTradingHoursAdapter:
 
         assert adapter_extended._extended_hours is True
 
-    def test_get_schedule(self, adapter):
-        """Test getting trading schedule."""
-        # Get schedule for a trading day
-        ts = 1705312800000  # 2024-01-15 (Monday)
+    def test_get_calendar(self, adapter):
+        """Test getting trading calendar."""
+        calendar = adapter.get_calendar()
 
-        schedule = adapter.get_schedule(ts)
-
-        assert schedule is not None
-        # Schedule should have open/close times
+        assert calendar is not None
+        # Calendar should have sessions defined
+        assert len(calendar.sessions) > 0
+        assert calendar.timezone == "America/New_York"
 
     def test_next_open(self, adapter):
         """Test finding next market open."""
@@ -418,16 +417,16 @@ class TestPolygonExchangeInfoAdapter:
     def test_get_symbol_info(self, mock_get_client):
         """Test getting symbol info."""
         mock_client = MagicMock()
-        mock_details = MagicMock()
-        mock_details.name = "Apple Inc."
-        mock_details.sic_description = "Technology"
-        mock_details.type = "CS"
-        mock_details.active = True
-        mock_details.list_date = "1980-12-12"
-        mock_details.__dict__ = {
-            "name": "Apple Inc.",
-            "sic_description": "Technology",
-        }
+
+        # Use a simple class instead of MagicMock to avoid __dict__ conflicts
+        class MockDetails:
+            name = "Apple Inc."
+            sic_description = "Technology"
+            type = "CS"
+            active = True
+            list_date = "1980-12-12"
+
+        mock_details = MockDetails()
 
         mock_client.get_ticker_details.return_value = mock_details
         mock_get_client.return_value = mock_client
@@ -445,12 +444,15 @@ class TestPolygonExchangeInfoAdapter:
     def test_get_symbol_info_caching(self, mock_get_client):
         """Test symbol info caching."""
         mock_client = MagicMock()
-        mock_details = MagicMock()
-        mock_details.name = "Apple Inc."
-        mock_details.sic_description = "Technology"
-        mock_details.type = "CS"
-        mock_details.active = True
-        mock_details.__dict__ = {}
+
+        # Use a simple class instead of MagicMock to avoid __dict__ conflicts
+        class MockDetails:
+            name = "Apple Inc."
+            sic_description = "Technology"
+            type = "CS"
+            active = True
+
+        mock_details = MockDetails()
 
         mock_client.get_ticker_details.return_value = mock_details
         mock_get_client.return_value = mock_client
@@ -511,12 +513,15 @@ class TestPolygonExchangeInfoAdapter:
     def test_get_exchange_rules(self, mock_get_client):
         """Test getting exchange rules."""
         mock_client = MagicMock()
-        mock_details = MagicMock()
-        mock_details.name = "Apple Inc."
-        mock_details.sic_description = "Technology"
-        mock_details.type = "CS"
-        mock_details.active = True
-        mock_details.__dict__ = {}
+
+        # Use a simple class instead of MagicMock to avoid __dict__ conflicts
+        class MockDetails:
+            name = "Apple Inc."
+            sic_description = "Technology"
+            type = "CS"
+            active = True
+
+        mock_details = MockDetails()
 
         mock_client.get_ticker_details.return_value = mock_details
         mock_get_client.return_value = mock_client

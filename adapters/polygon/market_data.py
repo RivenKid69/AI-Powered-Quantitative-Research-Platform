@@ -311,12 +311,11 @@ class PolygonMarketDataAdapter(MarketDataAdapter):
                 return Tick(
                     ts=ts,
                     symbol=symbol.upper(),
+                    price=Decimal(str(trade.price)),
                     bid=None,  # Not available in trade
                     ask=None,
-                    bid_size=None,
-                    ask_size=None,
-                    last=Decimal(str(trade.price)),
-                    last_size=Decimal(str(trade.size)),
+                    bid_qty=None,
+                    ask_qty=None,
                 )
         except Exception as e:
             logger.error(f"Failed to get tick for {symbol}: {e}")
