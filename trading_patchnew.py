@@ -254,9 +254,48 @@ class TradingEnv(gym.Env):
         decision_delay_ms: int = 0,
         liquidity_seasonality_path: str | None = None,
         liquidity_seasonality_hash: str | None = None,
+        # Asset class specification (Phase 4.5 Unification)
+        asset_class: str | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__()
+
+        # =========================================================================
+        # Asset Class Configuration (Phase 4.5 Unification)
+        # =========================================================================
+        # Determines asset-class-specific behavior:
+        #   - "crypto": 24/7 trading, no dividend adjustment, no trading halts
+        #   - "equity": NYSE hours, dividend-adjusted rewards, trading halts (LULD)
+        #
+        # If not specified, defaults to "crypto" for backward compatibility.
+        # =========================================================================
+        _asset_class_raw = asset_class or kwargs.get("asset_class", "crypto")
+        self._asset_class: str = str(_asset_class_raw).lower().strip()
+        if self._asset_class not in ("crypto", "equity", "crypto_futures"):
+            logger.warning(
+                f"Unknown asset_class '{self._asset_class}', defaulting to 'crypto'"
+            )
+            self._asset_class = "crypto"
+
+        # Dividend adjustment for equities (Phase 4.5)
+        # When enabled, reward calculation adds back dividends on ex-dates
+        # to compute total return instead of price return only.
+        self._dividend_adjust_enabled = (
+            self._asset_class == "equity"
+            and kwargs.get("dividend_adjust_reward", True)
+        )
+        # Dividend column name in DataFrame (if present)
+        self._dividend_col: str | None = None
+        for _div_col in ("dividend", "dividend_amount", "ex_dividend", "div_amount"):
+            if _div_col in df.columns:
+                self._dividend_col = _div_col
+                break
+
+        # Trading halts for equities (LULD circuit breakers)
+        self._trading_halts_enabled = (
+            self._asset_class == "equity"
+            and kwargs.get("trading_halts_enabled", True)
+        )
 
         # store seed and initialize per-instance RNG
         self.seed_value = seed
@@ -2180,6 +2219,46 @@ class TradingEnv(gym.Env):
                 # ═══════════════════════════════════════════════════════════════
                 reward_raw_fraction = math.log(ratio_clipped) * prev_signal_pos
 
+        # ═══════════════════════════════════════════════════════════════════════════
+        # DIVIDEND ADJUSTMENT FOR EQUITIES (Phase 4.5)
+        # ═══════════════════════════════════════════════════════════════════════════
+        # On ex-dividend dates, stock price drops by ~dividend amount, but stockholders
+        # RECEIVE the dividend. Without adjustment:
+        #   - Ex-date: price drops 2% → reward = log(0.98) * pos ≈ -2% * pos
+        #   - But total return = 0% (price drop offset by dividend income)
+        #
+        # Solution: Add dividend yield to log return to compute total return:
+        #   total_return ≈ log(price_t / price_{t-1}) + (dividend_t / price_{t-1})
+        #
+        # This only applies to equities (not crypto) and when dividend data is available.
+        # References:
+        #   - CRSP Total Return methodology
+        #   - Campbell, Lo & MacKinlay (1997) "Econometrics of Financial Markets"
+        # ═══════════════════════════════════════════════════════════════════════════
+        dividend_adjustment = 0.0
+        if self._dividend_adjust_enabled and self._dividend_col is not None:
+            try:
+                div_value = self._safe_float(row.get(self._dividend_col, 0.0))
+                if (
+                    div_value is not None
+                    and math.isfinite(div_value)
+                    and div_value > 0.0
+                    and reward_price_prev > 0.0
+                ):
+                    # Dividend yield = dividend / previous price
+                    dividend_yield = div_value / reward_price_prev
+                    # Add to reward: total return = price return + dividend yield
+                    # Multiply by position to be consistent with reward_raw_fraction
+                    dividend_adjustment = dividend_yield * prev_signal_pos
+                    if math.isfinite(dividend_adjustment):
+                        reward_raw_fraction += dividend_adjustment
+                        logger.debug(
+                            f"Dividend adjustment: +{dividend_adjustment:.6f} "
+                            f"(div=${div_value:.4f}, yield={dividend_yield:.4%})"
+                        )
+            except Exception as _div_err:
+                logger.debug(f"Dividend adjustment error: {_div_err}")
+
         atr_fraction = self._safe_float(row.get("_reward_clip_atr_fraction", 0.0))
         if atr_fraction is None or not math.isfinite(atr_fraction) or atr_fraction < 0.0:
             atr_fraction = 0.0
@@ -2310,6 +2389,9 @@ class TradingEnv(gym.Env):
         info["reward_used_fraction_before_costs"] = float(
             reward_used_fraction_before_costs
         )
+        # Dividend adjustment info (Phase 4.5 - equity total return)
+        info["dividend_adjustment"] = float(dividend_adjustment)
+        info["asset_class"] = str(self._asset_class)
         if self._reward_signal_only:
             info["turnover_notional"] = 0.0
             info["turnover"] = 0.0
@@ -2506,6 +2588,40 @@ class TradingEnv(gym.Env):
                     ms._rng = self._rng
                 except Exception:
                     pass
+
+    # ======================= Asset Class Properties (Phase 4.5) =======================
+
+    @property
+    def asset_class(self) -> str:
+        """
+        Get the asset class for this environment.
+
+        Returns:
+            str: "crypto", "equity", or "crypto_futures"
+        """
+        return self._asset_class
+
+    @property
+    def is_equity(self) -> bool:
+        """Check if this is an equity (stock) environment."""
+        return self._asset_class == "equity"
+
+    @property
+    def is_crypto(self) -> bool:
+        """Check if this is a crypto environment."""
+        return self._asset_class in ("crypto", "crypto_futures")
+
+    @property
+    def dividend_adjust_enabled(self) -> bool:
+        """Check if dividend adjustment is enabled for reward calculation."""
+        return self._dividend_adjust_enabled
+
+    @property
+    def trading_halts_enabled(self) -> bool:
+        """Check if trading halts (LULD) simulation is enabled."""
+        return self._trading_halts_enabled
+
+
 # ----------------------- Simple market-sim stub (unchanged) -----------------------
 class _SimpleMarketSim:
     def __init__(self, rng: np.random.Generator | None = None) -> None:
@@ -2558,4 +2674,5 @@ class _SimpleMarketSim:
     def regime_distribution(self) -> np.ndarray:
         return self._regime_distribution.copy()
 
-all = ["TradingEnv", "MarketRegime"]
+
+__all__ = ["TradingEnv", "MarketRegime"]
