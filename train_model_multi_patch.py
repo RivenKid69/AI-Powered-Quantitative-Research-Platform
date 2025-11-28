@@ -4548,35 +4548,104 @@ def main():
         shutil.rmtree(trials_dir)
     os.makedirs(trials_dir, exist_ok=True)
 
-    print("Loading all pre-processed data...")
-    print(f"Looking for feather files in: {processed_data_dir}")
-    all_feather_files = glob.glob(os.path.join(processed_data_dir, "*.feather"))
-    if not all_feather_files:
-        error_msg = (
-            f"\n{'='*80}\n"
-            f"ERROR: No training data found!\n"
-            f"{'='*80}\n\n"
-            f"No .feather files found in: {processed_data_dir}\n\n"
-            f"The training pipeline requires preprocessed market data in feather format.\n\n"
-            f"Prepare Real Market Data:\n"
-            f"  1. Run: python prepare_advanced_data.py    # Fetch Fear & Greed index\n"
-            f"  2. Run: python prepare_events.py           # Fetch economic events\n"
-            f"  3. Run: python incremental_klines_4h.py    # Fetch 4h OHLCV candles (migration from 1h)\n"
-            f"  4. Run: python prepare_and_run.py          # Merge and export to feather\n\n"
-            f"After preparing data, you should see files like:\n"
-            f"  {processed_data_dir}/BTCUSDT.feather\n"
-            f"  {processed_data_dir}/ETHUSDT.feather\n\n"
-            f"Then re-run training.\n"
-            f"{'='*80}\n"
-        )
-        raise FileNotFoundError(error_msg)
+    # ==========================================================================
+    # ASSET CLASS DETECTION (Phase 11: Stock Training Integration)
+    # ==========================================================================
+    # Determine asset_class from config. Default is "crypto" for backward compatibility.
+    # When asset_class="equity", data is loaded from config.data.paths and stock
+    # features (VIX, RS, sector momentum) are automatically added.
+    # ==========================================================================
+    asset_class = (
+        getattr(cfg, "asset_class", None)
+        or getattr(cfg.data, "asset_class", None)
+        or "crypto"
+    ).lower()
 
-    print(f"Found {len(all_feather_files)} feather files:")
+    # Get timeframe for equity data processing
+    data_timeframe = getattr(cfg.data, "timeframe", "4h")
+
+    print("Loading all pre-processed data...")
+    print(f"Asset class: {asset_class.upper()}")
+
+    if asset_class == "equity":
+        # EQUITY: Load from config.data.paths (supports .parquet and .feather)
+        data_paths = getattr(cfg.data, "paths", None) or []
+        if not data_paths:
+            # Fallback to processed_dir with both .feather and .parquet
+            data_paths = [
+                os.path.join(processed_data_dir, "*.feather"),
+                os.path.join(processed_data_dir, "*.parquet"),
+                "data/raw_stocks/*.parquet",
+                "data/stocks/*.parquet",
+            ]
+
+        all_data_files = []
+        for pattern in data_paths:
+            all_data_files.extend(glob.glob(pattern))
+
+        # Remove duplicates while preserving order
+        seen = set()
+        all_feather_files = []
+        for f in all_data_files:
+            if f not in seen:
+                seen.add(f)
+                all_feather_files.append(f)
+
+        if not all_feather_files:
+            error_msg = (
+                f"\n{'='*80}\n"
+                f"ERROR: No stock training data found!\n"
+                f"{'='*80}\n\n"
+                f"No .feather/.parquet files found in paths:\n"
+                f"  {data_paths}\n\n"
+                f"Prepare Stock Data:\n"
+                f"  1. Run: python scripts/download_stock_data.py --symbols AAPL MSFT GOOGL SPY QQQ --start 2023-01-01\n"
+                f"  2. Run: python scripts/download_stock_data.py --vix --start 2023-01-01\n\n"
+                f"Then re-run training.\n"
+                f"{'='*80}\n"
+            )
+            raise FileNotFoundError(error_msg)
+
+        print(f"Looking for stock data files in: {data_paths}")
+    else:
+        # CRYPTO (default): Original behavior - look in processed_data_dir
+        print(f"Looking for feather files in: {processed_data_dir}")
+        all_feather_files = glob.glob(os.path.join(processed_data_dir, "*.feather"))
+        if not all_feather_files:
+            error_msg = (
+                f"\n{'='*80}\n"
+                f"ERROR: No training data found!\n"
+                f"{'='*80}\n\n"
+                f"No .feather files found in: {processed_data_dir}\n\n"
+                f"The training pipeline requires preprocessed market data in feather format.\n\n"
+                f"Prepare Real Market Data:\n"
+                f"  1. Run: python prepare_advanced_data.py    # Fetch Fear & Greed index\n"
+                f"  2. Run: python prepare_events.py           # Fetch economic events\n"
+                f"  3. Run: python incremental_klines_4h.py    # Fetch 4h OHLCV candles (migration from 1h)\n"
+                f"  4. Run: python prepare_and_run.py          # Merge and export to feather\n\n"
+                f"After preparing data, you should see files like:\n"
+                f"  {processed_data_dir}/BTCUSDT.feather\n"
+                f"  {processed_data_dir}/ETHUSDT.feather\n\n"
+                f"Then re-run training.\n"
+                f"{'='*80}\n"
+            )
+            raise FileNotFoundError(error_msg)
+
+    print(f"Found {len(all_feather_files)} data files:")
     for fpath in sorted(all_feather_files):
         print(f"  - {os.path.basename(fpath)}")
     print()
 
-    all_dfs_dict, all_obs_dict = load_all_data(all_feather_files, synthetic_fraction=0, seed=42)
+    # Load data with asset-class specific processing
+    # - crypto: Merges Fear & Greed index
+    # - equity: Auto-loads VIX/SPY/QQQ, adds stock features
+    all_dfs_dict, all_obs_dict = load_all_data(
+        all_feather_files,
+        synthetic_fraction=0,
+        seed=42,
+        asset_class=asset_class,
+        timeframe=data_timeframe,
+    )
 
     # === АВТОМАТИЧЕСКОЕ ОПРЕДЕЛЕНИЕ ДИАПАЗОНА ДАННЫХ ===
     print(f"\n{'='*80}")
@@ -4965,15 +5034,15 @@ def main():
     # See NORMALIZATION_ANALYSIS.md for details.
     norm_stats = {}  # Empty dict maintained for backward compatibility with test fixtures
 
-    HPO_TRIALS = 20 # Общее количество испытаний
-    HPO_BUDGET_PER_TRIAL = 1_000_000 # Таймстепы для каждого испытания
+    HPO_TRIALS = 1 # Общее количество испытаний (DEMO: was 20)
+    HPO_BUDGET_PER_TRIAL = 150_000 # Таймстепы для каждого испытания (DEMO: was 1_000_000)
 
     print(f"\n===== Starting Unified HPO Process ({HPO_TRIALS} trials) =====")
 
     sampler = TPESampler(n_startup_trials=5, seed=42)
     # ``objective`` only begins reporting metrics after 50k steps, so configure the
     # pruner to wait until that point before considering early termination.
-    pruner = HyperbandPruner(min_resource=50_000)
+    pruner = HyperbandPruner(min_resource=10_000)  # DEMO: was 50_000
     study = optuna.create_study(direction="maximize", sampler=sampler, pruner=pruner)
 
     # Запускаем оптимизацию на ПОЛНОМ, диверсифицированном наборе данных
