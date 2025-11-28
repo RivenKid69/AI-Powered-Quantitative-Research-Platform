@@ -1,4 +1,4 @@
-# Claude Documentation - TradingBot2
+# Claude Documentation - AI-Powered Quantitative Research Platform
 
 ---
 
@@ -20,6 +20,7 @@
 | Исправить ошибку в feature | `features/` + `feature_config.py` | `pytest tests/test_features*.py` |
 | Изменить логику исполнения | `execution_sim.py`, `execution_providers.py` | `pytest tests/test_execution*.py` |
 | Execution providers (L2/L3) | `execution_providers.py` | `pytest tests/test_execution_providers.py` |
+| Crypto Parametric TCA | `execution_providers.py` | `pytest tests/test_crypto_parametric_tca.py` |
 | Настроить риск-менеджмент | `configs/risk.yaml`, `risk_guard.py` | Проверить `test_risk*.py` |
 | Обновить модель PPO | `distributional_ppo.py` | Проверить все `test_distributional_ppo*.py` |
 | Добавить новую метрику | `services/monitoring.py` | Обновить `metrics.json` schema |
@@ -31,6 +32,10 @@
 | Extended hours trading | `services/session_router.py` | `pytest tests/test_phase9_live_trading.py::TestSessionRouter` |
 | Bracket/OCO orders | `adapters/alpaca/order_execution.py` | `pytest tests/test_phase9_live_trading.py::TestBracketOrderConfig` |
 | Скачать stock data | `scripts/download_stock_data.py` | `--symbols GLD IAU SLV --start 2020-01-01` |
+| Скачать VIX данные | `scripts/download_stock_data.py` | `--vix --start 2020-01-01` или `--symbols ^VIX` |
+| Скачать macro данные | `scripts/download_stock_data.py` | `--macro --start 2020-01-01` (VIX, DXY, Treasury) |
+| Yahoo market data | `adapters/yahoo/market_data.py` | Auto-used for ^VIX, DX-Y.NYB, indices |
+| Alpaca streaming | `adapters/alpaca/market_data.py` | `stream_bars_async()`, `stream_ticks_async()` |
 | L3 LOB matching | `lob/matching_engine.py` | `pytest tests/test_matching_engine.py` |
 | Queue position tracking | `lob/queue_tracker.py` | `pytest tests/test_matching_engine.py::TestQueuePositionTracker` |
 | Order lifecycle | `lob/order_manager.py` | `pytest tests/test_matching_engine.py::TestOrderManager` |
@@ -85,6 +90,11 @@ python -m services.universe --output data/universe/symbols.json
 python scripts/fetch_alpaca_universe.py --output data/universe/alpaca_symbols.json --popular
 python scripts/download_stock_data.py --symbols GLD IAU SGOL SLV --start 2020-01-01 --timeframe 1h --resample 4h
 
+# Обновление данных (VIX / Macro indicators)
+python scripts/download_stock_data.py --vix --start 2020-01-01 --timeframe 1d
+python scripts/download_stock_data.py --macro --start 2020-01-01 --timeframe 1d
+python scripts/download_stock_data.py --symbols ^VIX DX-Y.NYB ^TNX --start 2020-01-01
+
 # Live Trading (Stocks - Alpaca)
 python script_live.py --config configs/config_live_alpaca.yaml
 python script_live.py --config configs/config_live_alpaca.yaml --asset-class equity --paper
@@ -109,8 +119,9 @@ python script_backtest.py --config configs/config_backtest_stocks.yaml
 | Биржа | Тип | Статус | Адаптеры |
 |-------|-----|--------|----------|
 | **Binance** | Crypto (Spot/Futures) | ✅ Production | MarketData, Fee, TradingHours, ExchangeInfo |
-| **Alpaca** | US Equities | ✅ Production | MarketData, Fee, TradingHours, ExchangeInfo, OrderExecution |
+| **Alpaca** | US Equities | ✅ Production | MarketData (REST + WebSocket), Fee, TradingHours, ExchangeInfo, OrderExecution |
 | **Polygon** | US Equities (Data) | ✅ Production | MarketData, TradingHours, ExchangeInfo |
+| **Yahoo** | Indices/Macro | ✅ Production | MarketData (VIX, DXY, Treasury), CorporateActions, Earnings |
 
 ### Архитектура адаптеров
 
@@ -127,15 +138,19 @@ adapters/
 │   ├── trading_hours.py
 │   └── exchange_info.py
 ├── alpaca/           # Alpaca реализация (stocks)
-│   ├── market_data.py
+│   ├── market_data.py  # REST + WebSocket streaming (sync/async)
 │   ├── fees.py
 │   ├── trading_hours.py
 │   ├── exchange_info.py
 │   └── order_execution.py
-└── polygon/          # Polygon.io реализация (stocks data)
-    ├── market_data.py
-    ├── trading_hours.py
-    └── exchange_info.py
+├── polygon/          # Polygon.io реализация (stocks data)
+│   ├── market_data.py
+│   ├── trading_hours.py
+│   └── exchange_info.py
+└── yahoo/            # Yahoo Finance реализация (indices/macro)
+    ├── market_data.py      # VIX, DXY, Treasury yields
+    ├── corporate_actions.py # Dividends, splits
+    └── earnings.py          # Earnings calendar
 ```
 
 ### Использование
@@ -154,6 +169,19 @@ alpaca_md = create_market_data_adapter("alpaca", {
     "api_secret": "...",
     "feed": "iex",
 })
+
+# Indices/VIX (Yahoo Finance)
+yahoo_md = create_market_data_adapter("yahoo")
+vix_bars = yahoo_md.get_bars("^VIX", "1d", limit=365)
+dxy_bars = yahoo_md.get_bars("DX-Y.NYB", "1d", limit=365)
+
+# Alpaca Real-time Streaming (sync)
+for bar in alpaca_md.stream_bars(["AAPL", "MSFT"], 60000):
+    print(f"Bar: {bar.symbol} @ {bar.close}")
+
+# Alpaca Real-time Streaming (async - for live trading)
+async for bar in alpaca_md.stream_bars_async(["AAPL", "MSFT"]):
+    await process_bar(bar)
 
 # Через Config
 from adapters.config import ExchangeConfig
@@ -388,7 +416,7 @@ pip install alpaca-py           # Alpaca
 
 Phase 4 добавляет абстракцию execution providers для унифицированной симуляции исполнения crypto и акций.
 
-**Файл**: `execution_providers.py` (~850 строк)
+**Файл**: `execution_providers.py` (~1800 строк)
 
 ### Архитектура
 
@@ -411,6 +439,14 @@ Phase 4 добавляет абстракцию execution providers для ун�
 │    - Auto-selects crypto/equity defaults                     │
 │    - Pre-trade cost estimation                               │
 └──────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────┐
+│            L2+ CryptoParametricSlippageProvider               │
+│    - 6 slippage factors (research-backed)                    │
+│    - Volatility regime detection                             │
+│    - Adaptive impact coefficient                             │
+│    - Whale detection & TWAP adjustment                       │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ### Уровни точности (Fidelity Levels)
@@ -419,7 +455,8 @@ Phase 4 добавляет абстракцию execution providers для ун�
 |-------|--------|--------|----------|
 | **L1** | Constant | N/A | Фиксированный spread/fee (не реализован) |
 | **L2** | Statistical | ✅ Production | √participation impact (Almgren-Chriss) |
-| **L3** | LOB | 🔜 Stub | Full order book simulation (будущее) |
+| **L2+** | Parametric TCA | ✅ Production | 6-factor crypto model (see below) |
+| **L3** | LOB | ✅ Production | Full order book simulation |
 
 ### Ключевые классы
 
@@ -430,6 +467,9 @@ Phase 4 добавляет абстракцию execution providers для ун�
 | `Fill` | Результат исполнения |
 | `BarData` | OHLCV данные бара |
 | `StatisticalSlippageProvider` | √participation slippage модель |
+| `CryptoParametricSlippageProvider` | L2+ Smart parametric TCA (6 факторов) |
+| `CryptoParametricConfig` | Конфигурация для parametric TCA |
+| `VolatilityRegime` | Enum: LOW/NORMAL/HIGH волатильность |
 | `OHLCVFillProvider` | Fill logic на основе bar range |
 | `CryptoFeeProvider` | Maker/taker комиссии (Binance) |
 | `EquityFeeProvider` | Regulatory fees (SEC/TAF) |
@@ -526,13 +566,172 @@ pytest tests/test_execution_providers.py -v
 pytest tests/test_execution_providers.py::TestIntegration -v
 ```
 
-**Покрытие**: 95 тестов (100% pass)
+**Покрытие**: 95 тестов (100% pass) + 84 теста parametric TCA
 
 ### Референсы
 
 - Almgren & Chriss (2001): "Optimal Execution of Portfolio Transactions"
 - Kyle (1985): "Continuous Auctions and Insider Trading"
-- SEC Fee Rates: https://www.sec.gov/divisions/marketreg/mrfreqreq.shtml
+- Cont (2001): "Empirical Properties of Asset Returns"
+- Cont, Kukanov, Stoikov (2014): "The Price Impact of Order Book Events"
+- Cartea, Jaimungal, Penalva (2015): "Algorithmic and HF Trading"
+
+---
+
+## 📊 Crypto Parametric TCA (L2+)
+
+### Обзор
+
+Smart parametric Transaction Cost Analysis model для криптовалютных рынков. Расширяет базовую √participation модель (Almgren-Chriss) с 6 crypto-специфичными факторами.
+
+**Статус**: ✅ Production Ready | **Тесты**: 84 (100% pass)
+
+### Формула Total Slippage
+
+```
+slippage = half_spread
+    × (1 + k × √participation)      # Almgren-Chriss impact
+    × vol_regime_mult               # Volatility regime (Cont 2001)
+    × (1 + imbalance_penalty)       # Order book imbalance (Cont et al. 2014)
+    × funding_stress                # Funding rate stress (perp-specific)
+    × (1 / tod_factor)              # Time-of-day liquidity curve
+    × correlation_decay             # BTC correlation decay (altcoins)
+    × asymmetric_adjustment         # Panic selling premium
+```
+
+### 6 Slippage Factors
+
+| Factor | Формула | Референс |
+|--------|---------|----------|
+| **√Participation** | `k × √(Q/ADV)` | Almgren-Chriss (2001) |
+| **Volatility Regime** | Percentile-based LOW/NORMAL/HIGH | Cont (2001) |
+| **Order Book Imbalance** | `(bid - ask) / (bid + ask)` | Cont et al. (2014) |
+| **Funding Rate Stress** | `1 + |funding| × sensitivity` | Empirical (Binance) |
+| **Time-of-Day** | 24-hour liquidity curve (Asia/EU/US) | Binance research |
+| **BTC Correlation Decay** | `1 + (1 - corr) × decay_factor` | Empirical (altcoins) |
+
+### Smart Features
+
+| Feature | Описание |
+|---------|----------|
+| **Regime Detection** | Автоматическое определение LOW/NORMAL/HIGH volatility |
+| **Adaptive Impact** | Коэффициент k адаптируется по trailing fill quality |
+| **Asymmetric Slippage** | Продажи в downtrend стоят дороже (panic liquidity) |
+| **Whale Detection** | Большие ордеры (Q/ADV > 1%) получают TWAP-adjusted model |
+
+### Использование
+
+```python
+from execution_providers import (
+    CryptoParametricSlippageProvider,
+    CryptoParametricConfig,
+    Order,
+    MarketState,
+)
+
+# 1. Базовое использование (defaults)
+provider = CryptoParametricSlippageProvider()
+
+# 2. С кастомной конфигурацией
+config = CryptoParametricConfig(
+    impact_coef_base=0.12,
+    spread_bps=6.0,
+    whale_threshold=0.02,
+)
+provider = CryptoParametricSlippageProvider(config=config)
+
+# 3. Из профиля
+provider = CryptoParametricSlippageProvider.from_profile("altcoin")
+# Профили: "default", "conservative", "aggressive", "altcoin", "stablecoin"
+
+# 4. Вычисление slippage
+slippage_bps = provider.compute_slippage_bps(
+    order=Order("ETHUSDT", "BUY", 10.0, "MARKET"),
+    market=MarketState(timestamp=0, bid=2000.0, ask=2001.0, adv=50_000_000),
+    participation_ratio=0.005,
+    funding_rate=0.0003,       # Slightly positive
+    btc_correlation=0.85,      # High correlation
+    hour_utc=14,               # EU session
+    recent_returns=[-0.01, 0.005, -0.008],  # For regime detection
+)
+
+# 5. Pre-trade cost estimation
+estimate = provider.estimate_impact_cost(
+    notional=1_000_000,
+    adv=500_000_000,
+    side="BUY",
+    hour_utc=16,
+)
+print(f"Impact: {estimate['impact_bps']:.2f} bps")
+print(f"Cost: ${estimate['impact_cost']:.2f}")
+print(f"Recommendation: {estimate['recommendation']}")
+```
+
+### Конфигурация (CryptoParametricConfig)
+
+| Параметр | Default | Описание |
+|----------|---------|----------|
+| `impact_coef_base` | 0.10 | Base k coefficient |
+| `impact_coef_range` | (0.05, 0.15) | Adaptive k bounds |
+| `spread_bps` | 5.0 | Default spread (if market unavailable) |
+| `vol_regime_multipliers` | {low: 0.8, normal: 1.0, high: 1.5} | Regime scaling |
+| `vol_lookback_periods` | 20 | Periods for regime detection |
+| `vol_regime_thresholds` | (25.0, 75.0) | Percentiles for LOW/HIGH |
+| `imbalance_penalty_max` | 0.3 | Max imbalance penalty (30%) |
+| `funding_stress_sensitivity` | 10.0 | Funding rate multiplier |
+| `tod_curve` | {0-23: factors} | 24-hour liquidity curve |
+| `btc_correlation_decay_factor` | 0.5 | Altcoin decay factor |
+| `whale_threshold` | 0.01 | 1% ADV = whale |
+| `whale_twap_adjustment` | 0.7 | TWAP adjustment |
+| `asymmetric_sell_premium` | 0.2 | 20% panic selling premium |
+| `downtrend_threshold` | -0.02 | -2% = downtrend |
+| `min_slippage_bps` | 1.0 | Floor |
+| `max_slippage_bps` | 500.0 | Cap |
+
+### Профили
+
+| Профиль | impact_coef | spread_bps | Применение |
+|---------|-------------|------------|------------|
+| `default` | 0.10 | 5.0 | BTC/ETH majors |
+| `conservative` | 0.12 | 6.0 | Safer estimates |
+| `aggressive` | 0.08 | 4.0 | Tighter estimates |
+| `altcoin` | 0.15 | 10.0 | Low-cap altcoins |
+| `stablecoin` | 0.05 | 1.0 | USDT/USDC pairs |
+
+### Time-of-Day Curve (Default)
+
+| Session | Часы (UTC) | Factor | Описание |
+|---------|------------|--------|----------|
+| Asia | 00:00-08:00 | 0.70-0.90 | Lower liquidity |
+| EU | 08:00-16:00 | 0.95-1.10 | Increasing liquidity |
+| US/EU overlap | 14:00-18:00 | 1.10-1.15 | Peak liquidity |
+| US | 18:00-24:00 | 0.85-1.05 | Declining liquidity |
+
+### Adaptive Learning
+
+```python
+# После каждого fill обновляем модель
+predicted = provider.compute_slippage_bps(order, market, participation)
+# ... execution happens ...
+actual = (fill_price - expected_price) / expected_price * 10000
+
+provider.update_fill_quality(predicted, actual)
+# k coefficient автоматически адаптируется
+```
+
+### Тестирование
+
+```bash
+# Все тесты parametric TCA
+pytest tests/test_crypto_parametric_tca.py -v
+
+# По категориям
+pytest tests/test_crypto_parametric_tca.py::TestVolatilityRegime -v
+pytest tests/test_crypto_parametric_tca.py::TestWhaleDetection -v
+pytest tests/test_crypto_parametric_tca.py::TestAdaptiveImpact -v
+```
+
+**Покрытие**: 84 теста (100% pass)
 
 ---
 
@@ -2469,11 +2668,11 @@ if ratio > 1.0:
 
 ---
 
-## 📊 СТАТУС ПРОЕКТА (2025-11-26)
+## 📊 СТАТУС ПРОЕКТА (2025-11-28)
 
 ### ✅ Production Ready
 
-Все критические исправления применены и протестированы. **215+ тестов** с 97%+ pass rate.
+Все критические исправления применены и протестированы. **300+ тестов** с 97%+ pass rate.
 
 | Компонент | Статус | Тесты |
 |-----------|--------|-------|
@@ -2482,7 +2681,7 @@ if ratio > 1.0:
 | CLOSE_TO_OPEN Timing | ✅ Production | 5/5 |
 | LongOnlyActionWrapper | ✅ Production | 26/26 |
 | AdaptiveUPGD Optimizer | ✅ Production | 119/121 |
-| UPGDW Optimizer | ✅ Production | 4/4 (NEW) |
+| UPGDW Optimizer | ✅ Production | 4/4 |
 | Twin Critics + VF Clipping | ✅ Production | 49/50 |
 | VGS v3.1 | ✅ Production | 7/7 |
 | PBT | ✅ Production | 14/14 |
@@ -2490,6 +2689,7 @@ if ratio > 1.0:
 | Data Leakage Prevention | ✅ Production | 46/47 |
 | Technical Indicators | ✅ Production | 11/16 (C++ pending) |
 | Fear & Greed Detection | ✅ Production | 13/13 |
+| Crypto Parametric TCA | ✅ Production | 84/84 (NEW) |
 | Bug Fixes 2025-11-26 | ✅ Production | 22/22 (includes projection+YZ fixes) |
 
 ### ⚠️ Требуется действие
@@ -2515,6 +2715,7 @@ if ratio > 1.0:
 
 | Дата | Исправление | Влияние |
 |------|-------------|---------|
+| **2025-11-28** | feat(crypto): CryptoParametricSlippageProvider | L2+ smart TCA model with 6 factors, 84 tests |
 | **2025-11-27** | Stage 6: DarkPoolSimulator memory leak fix | unbounded List → deque(maxlen=N), prevents OOM in long simulations |
 | **2025-11-27** | Stage 6: DarkPoolConfig validation | Division by zero prevented with ValueError for invalid params |
 | **2025-11-27** | Stage 6: deque slice fix in _should_block_for_leakage | TypeError on deque slicing → convert to list first |
@@ -2559,7 +2760,7 @@ if ratio > 1.0:
 
 ## О проекте
 
-**TradingBot2** — высокочастотный торговый бот для криптовалют (Binance spot/futures), использующий reinforcement learning (Distributional PPO) для принятия торговых решений.
+**AI-Powered Quantitative Research Platform** — ML-платформа для количественных исследований и торговли на криптовалютах (Binance spot/futures) и акциях (Alpaca/Polygon), использующая reinforcement learning (Distributional PPO) для принятия торговых решений.
 
 ### Основные характеристики
 
@@ -2888,5 +3089,5 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-11-28
-**Версия документации**: 10.0 (Phase 10: L3 LOB Simulation - Stage 10: Documentation & Deployment)
+**Версия документации**: 10.1 (Phase 10 + Crypto Parametric TCA)
 **Статус**: ✅ Production Ready (все критические исправления применены, 53 задокументированных "НЕ БАГИ")
