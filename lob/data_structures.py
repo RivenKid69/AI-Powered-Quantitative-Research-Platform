@@ -532,6 +532,9 @@ class OrderBook:
         symbol: str = "",
         tick_size: float = 0.01,
         lot_size: float = 1.0,
+        enforce_tick_size: bool = False,
+        enforce_lot_size: bool = False,
+        auto_round_price: bool = True,
     ) -> None:
         """
         Initialize order book.
@@ -540,10 +543,19 @@ class OrderBook:
             symbol: Trading symbol
             tick_size: Minimum price increment (default 0.01 for US equities)
             lot_size: Minimum quantity increment (default 1.0)
+            enforce_tick_size: If True, validate and optionally round prices to tick
+                FIX (2025-11-28): Added for US market structure compliance (Rule 612)
+            enforce_lot_size: If True, validate order quantity against lot size
+                FIX (2025-11-28): Added for US market structure compliance (Rule 600)
+            auto_round_price: If True and enforce_tick_size=True, automatically round
+                prices to nearest valid tick. If False, reject invalid prices.
         """
         self.symbol = symbol
         self.tick_size = tick_size
         self.lot_size = lot_size
+        self.enforce_tick_size = enforce_tick_size
+        self.enforce_lot_size = enforce_lot_size
+        self.auto_round_price = auto_round_price
 
         # Price levels - SortedDict for O(log n) price operations
         # Bids: descending order (highest first) - use negative keys
@@ -643,25 +655,47 @@ class OrderBook:
 
         Returns:
             Queue position at the price level
+
+        Raises:
+            ValueError: If order quantity invalid, duplicate order_id,
+                or invalid tick size (when enforce_tick_size=True and auto_round=False)
+
+        FIX (2025-11-28): Added tick size and lot size validation for US market structure.
+        Reference: CLAUDE.md → Issue #7 "L3 LOB: US Market Structure"
         """
-        # Validate order
+        # Validate order quantity
         if order.remaining_qty <= 0:
             raise ValueError("Order quantity must be positive")
+
+        # FIX (2025-11-28): Lot size validation
+        if self.enforce_lot_size:
+            if order.remaining_qty < self.lot_size:
+                raise ValueError(
+                    f"Order quantity {order.remaining_qty} below minimum lot size {self.lot_size}"
+                )
 
         # Check for duplicate
         if order.order_id in self._orders:
             raise ValueError(f"Duplicate order_id: {order.order_id}")
 
+        # FIX (2025-11-28): Tick size validation and adjustment
+        effective_price = order.price
+        if self.enforce_tick_size:
+            effective_price = self._validate_and_round_tick(order.price)
+            if effective_price != order.price:
+                # Update order price (modifying in place)
+                order.price = effective_price
+
         # Get or create price level
         if order.side == Side.BUY:
-            key = -order.price  # Negative for descending sort
+            key = -effective_price  # Negative for descending sort
             levels = self._bids
         else:
-            key = order.price
+            key = effective_price
             levels = self._asks
 
         if key not in levels:
-            levels[key] = PriceLevel(price=order.price)
+            levels[key] = PriceLevel(price=effective_price)
 
         level = levels[key]
         queue_pos = level.add_order(order)
@@ -672,6 +706,89 @@ class OrderBook:
         self._sequence += 1
 
         return queue_pos
+
+    def _validate_and_round_tick(self, price: float) -> float:
+        """
+        Validate and optionally round price to valid tick increment.
+
+        FIX (2025-11-28): Added for US market structure compliance (Rule 612).
+
+        Args:
+            price: Price to validate
+
+        Returns:
+            Validated/rounded price
+
+        Raises:
+            ValueError: If price invalid and auto_round_price=False
+        """
+        if self.tick_size <= 0:
+            return price  # No tick enforcement
+
+        # Check if price is on valid tick
+        remainder = abs(price % self.tick_size)
+        tolerance = self.tick_size * 1e-9
+
+        if remainder < tolerance or abs(remainder - self.tick_size) < tolerance:
+            return price  # Already on valid tick
+
+        # Price not on valid tick
+        if self.auto_round_price:
+            # Round to nearest tick
+            rounded = round(price / self.tick_size) * self.tick_size
+            return rounded
+        else:
+            raise ValueError(
+                f"Price {price} not on valid tick (tick_size={self.tick_size}). "
+                f"Set auto_round_price=True to automatically round."
+            )
+
+    def is_valid_tick(self, price: float) -> bool:
+        """
+        Check if price is on a valid tick increment.
+
+        FIX (2025-11-28): Added for US market structure validation.
+
+        Args:
+            price: Price to check
+
+        Returns:
+            True if price is on valid tick
+        """
+        if self.tick_size <= 0:
+            return True
+
+        remainder = abs(price % self.tick_size)
+        tolerance = self.tick_size * 1e-9
+
+        return remainder < tolerance or abs(remainder - self.tick_size) < tolerance
+
+    def round_to_tick(self, price: float, direction: str = "nearest") -> float:
+        """
+        Round price to valid tick increment.
+
+        FIX (2025-11-28): Added for US market structure compliance.
+
+        Args:
+            price: Price to round
+            direction: "nearest", "up", or "down"
+
+        Returns:
+            Rounded price
+        """
+        if self.tick_size <= 0:
+            return price
+
+        if direction == "nearest":
+            return round(price / self.tick_size) * self.tick_size
+        elif direction == "down":
+            import math
+            return math.floor(price / self.tick_size) * self.tick_size
+        elif direction == "up":
+            import math
+            return math.ceil(price / self.tick_size) * self.tick_size
+        else:
+            raise ValueError(f"Invalid direction: {direction}")
 
     def cancel_order(self, order_id: str) -> Optional[LimitOrder]:
         """

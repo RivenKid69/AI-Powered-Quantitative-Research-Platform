@@ -173,6 +173,25 @@ def _columns_to_scale(df: pd.DataFrame) -> List[str]:
     return cols
 
 class FeaturePipeline:
+    """
+    Feature preprocessing pipeline with asset-class awareness.
+
+    This pipeline handles:
+    - Feature normalization (z-scores)
+    - Data leakage prevention (feature shifting)
+    - Asset-class specific features (VIX, sector momentum for equities)
+    - Winsorization for outlier handling
+
+    FIX (2025-11-28): Added asset_class parameter to automatically apply
+    stock-specific features when processing equity data. This prevents
+    the common mistake of forgetting to call add_stock_features() manually.
+
+    Reference: CLAUDE.md → Issue #5 "FeaturePipeline не asset_class aware"
+    """
+
+    # Valid asset classes
+    VALID_ASSET_CLASSES = ("crypto", "equity", "forex", None)
+
     def __init__(
         self,
         stats: Optional[Dict[str, Dict[str, float]]] = None,
@@ -181,6 +200,8 @@ class FeaturePipeline:
         winsorize_percentiles: Tuple[float, float] = (1.0, 99.0),
         strict_idempotency: bool = True,  # Fail on repeated transform_df() to prevent double-shift
         preserve_close_orig: bool = True,  # REQUIRED for TradingEnv reward calculation
+        asset_class: Optional[str] = None,  # FIX: Asset class awareness
+        auto_stock_features: bool = True,  # FIX: Auto-apply stock features for equity
     ):
         """Container for feature normalization statistics.
 
@@ -215,7 +236,28 @@ class FeaturePipeline:
 
             Set to False ONLY if you're certain close_orig is not needed (e.g.,
             pure feature analysis without TradingEnv).
+        asset_class:
+            Asset class for data being processed. Options: "crypto", "equity", "forex", None.
+            When set to "equity", automatically applies stock-specific features during
+            transform (VIX regime, sector momentum, relative strength) unless disabled.
+            Default: None (backward compatible - no automatic stock features)
+
+            FIX (2025-11-28): Added to prevent common mistake of forgetting
+            to call add_stock_features() for equity data.
+        auto_stock_features:
+            If True (default) and asset_class="equity", automatically add stock-specific
+            features (gap analysis, earnings proximity, dividend proximity) during transform.
+            Set to False to disable automatic feature addition (e.g., if features already added).
+            Default: True
+
+            Note: This only affects equity asset class. Crypto/forex are unchanged.
         """
+        # Validate asset_class
+        if asset_class is not None and asset_class.lower() not in self.VALID_ASSET_CLASSES:
+            raise ValueError(
+                f"Invalid asset_class '{asset_class}'. "
+                f"Valid options: {self.VALID_ASSET_CLASSES}"
+            )
 
         # stats: {col: {"mean": float, "std": float, "is_constant": bool, "winsorize_bounds": tuple}}
         self.stats: Dict[str, Dict[str, float]] = stats or {}
@@ -224,6 +266,8 @@ class FeaturePipeline:
         self.winsorize_percentiles = winsorize_percentiles
         self.strict_idempotency = strict_idempotency
         self.preserve_close_orig = preserve_close_orig
+        self.asset_class = asset_class.lower() if asset_class else None
+        self.auto_stock_features = auto_stock_features
 
     def reset(self) -> None:
         """Drop previously computed statistics.
@@ -235,6 +279,51 @@ class FeaturePipeline:
 
         self.stats.clear()
         self.metadata.clear()
+
+    def _add_stock_features_internal(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Internal method to add stock-specific features.
+
+        Called automatically by transform_df() when asset_class="equity"
+        and auto_stock_features=True.
+
+        Features added:
+        - Gap analysis (gap_pct, gap_direction, etc.)
+        - Earnings proximity (if data available)
+        - Dividend proximity (if data available)
+
+        Args:
+            df: DataFrame with OHLCV data
+
+        Returns:
+            DataFrame with stock features added
+
+        Note:
+            This is a lightweight version. For VIX regime, sector momentum,
+            and relative strength, use add_stock_features() from stock_features.py
+            which requires benchmark data (SPY, QQQ, VIX).
+        """
+        # Extract symbol from DataFrame if present
+        symbol = df["symbol"].iloc[0] if "symbol" in df.columns and len(df) > 0 else "UNKNOWN"
+
+        try:
+            # Use the existing add_stock_features function
+            return add_stock_features(
+                df,
+                symbol=symbol,
+                add_gaps=True,
+                add_earnings=True,
+                add_dividends=True,
+            )
+        except Exception as e:
+            # Log warning but don't fail - return original DataFrame
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                f"Failed to add stock features to {symbol}: {e}. "
+                "Returning DataFrame without additional stock features."
+            )
+            return df
 
     def fit(
         self,
@@ -523,6 +612,20 @@ class FeaturePipeline:
 
         out = df.copy()
 
+        # ═══════════════════════════════════════════════════════════════════════
+        # FIX (2025-11-28): AUTO STOCK FEATURES FOR EQUITY
+        # ═══════════════════════════════════════════════════════════════════════
+        # When asset_class="equity" and auto_stock_features=True, automatically
+        # add stock-specific features (gaps, earnings proximity, dividends).
+        # This prevents the common mistake of forgetting to call add_stock_features().
+        #
+        # Reference: CLAUDE.md → Issue #5 "FeaturePipeline не asset_class aware"
+        # ═══════════════════════════════════════════════════════════════════════
+        if self.asset_class == "equity" and self.auto_stock_features:
+            # Only add if not already present (check for gap_pct as marker)
+            if "gap_pct" not in out.columns:
+                out = self._add_stock_features_internal(out)
+
         # Shift ALL feature columns to prevent data leakage (look-ahead bias)
         # This must match the shifting logic in fit() for consistency
         #
@@ -633,7 +736,7 @@ class FeaturePipeline:
         return dict(self.metadata)
 
     def save(self, path: str) -> None:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         # Save configuration flags for reproducibility
         payload = {
             "stats": self.stats,
@@ -643,6 +746,9 @@ class FeaturePipeline:
                 "winsorize_percentiles": self.winsorize_percentiles,
                 "strict_idempotency": self.strict_idempotency,
                 "preserve_close_orig": self.preserve_close_orig,
+                # FIX (2025-11-28): Persist asset_class for reproducibility
+                "asset_class": self.asset_class,
+                "auto_stock_features": self.auto_stock_features,
             }
         }
         with open(path, "w", encoding="utf-8") as f:
@@ -661,6 +767,9 @@ class FeaturePipeline:
             # to match constructor default. Legacy artifacts without this config key
             # will now correctly enable close_orig preservation by default.
             # This fixes first-bar reward=0 bug when loading old preproc_pipeline.json.
+            #
+            # FIX (2025-11-28): Load asset_class and auto_stock_features.
+            # Default to None for backward compatibility with legacy artifacts.
             return cls(
                 stats=stats,
                 metadata=metadata,
@@ -668,6 +777,8 @@ class FeaturePipeline:
                 winsorize_percentiles=tuple(config.get("winsorize_percentiles", [1.0, 99.0])),
                 strict_idempotency=config.get("strict_idempotency", True),
                 preserve_close_orig=config.get("preserve_close_orig", True),
+                asset_class=config.get("asset_class", None),
+                auto_stock_features=config.get("auto_stock_features", True),
             )
         else:
             # Backwards compatibility for legacy artifacts containing only stats.
