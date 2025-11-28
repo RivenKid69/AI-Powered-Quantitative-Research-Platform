@@ -40,6 +40,17 @@ from .fees import AlpacaFeeAdapter
 from .trading_hours import AlpacaTradingHoursAdapter
 from .exchange_info import AlpacaExchangeInfoAdapter
 from .order_execution import AlpacaOrderExecutionAdapter
+from .options_execution import (
+    AlpacaOptionsExecutionAdapter,
+    OptionContract,
+    OptionChain,
+    OptionOrderConfig,
+    OptionOrderResult,
+    OptionType,
+    OptionStrategy,
+    create_options_adapter,
+    parse_occ_symbol,
+)
 
 
 # Register adapters with the global registry
@@ -99,4 +110,14 @@ __all__ = [
     "AlpacaTradingHoursAdapter",
     "AlpacaExchangeInfoAdapter",
     "AlpacaOrderExecutionAdapter",
+    # Options Trading (Phase 6)
+    "AlpacaOptionsExecutionAdapter",
+    "OptionContract",
+    "OptionChain",
+    "OptionOrderConfig",
+    "OptionOrderResult",
+    "OptionType",
+    "OptionStrategy",
+    "create_options_adapter",
+    "parse_occ_symbol",
 ]
