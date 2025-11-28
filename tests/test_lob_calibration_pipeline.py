@@ -30,8 +30,10 @@ from lob.calibration_pipeline import (
     QueueDynamicsCalibrator,
     QueueDynamicsResult,
     QuoteObservation,
+    calibrate_from_alpaca,
     calibrate_from_dataframe,
     create_calibration_pipeline,
+    create_equity_calibration_pipeline,
 )
 from lob.config import (
     FillProbabilityModelType,
@@ -893,6 +895,172 @@ class TestBugFixes:
         # Should have impact_eta and impact_gamma CIs
         ci = result.confidence_intervals
         assert any("impact_eta" in k for k in ci.keys()) or any("impact_gamma" in k for k in ci.keys())
+
+
+# ==============================================================================
+# Test Equity Calibration Functions (Task 4 - L3 LOB for Stocks)
+# ==============================================================================
+
+
+class TestEquityCalibrationFunctions:
+    """Tests for equity-specific calibration factory functions."""
+
+    def test_create_equity_calibration_pipeline(self) -> None:
+        """Test creating equity calibration pipeline with defaults."""
+        pipeline = create_equity_calibration_pipeline(
+            symbol="AAPL",
+        )
+
+        assert isinstance(pipeline, L3CalibrationPipeline)
+        assert pipeline.symbol == "AAPL"
+        assert pipeline._avg_adv == 10_000_000  # Default ADV
+        assert pipeline._avg_volatility == 0.02  # Default volatility
+
+    def test_create_equity_calibration_pipeline_custom_params(self) -> None:
+        """Test creating equity calibration pipeline with custom params."""
+        pipeline = create_equity_calibration_pipeline(
+            symbol="MSFT",
+            avg_adv=50_000_000,
+            avg_volatility=0.015,
+        )
+
+        assert pipeline.symbol == "MSFT"
+        assert pipeline._avg_adv == 50_000_000
+        assert pipeline._avg_volatility == 0.015
+
+    def test_create_equity_calibration_pipeline_produces_valid_config(self) -> None:
+        """Test that equity pipeline produces valid L3 config."""
+        pipeline = create_equity_calibration_pipeline(symbol="GOOGL")
+
+        # Add some sample trades
+        for i in range(50):
+            pipeline.add_trade(
+                timestamp_ms=1000 + i * 1000,
+                price=150.0 + i * 0.01,
+                qty=100.0,
+                side=1 if i % 2 == 0 else -1,
+            )
+
+        config = pipeline.run_full_calibration()
+
+        assert isinstance(config, L3ExecutionConfig)
+        assert config.market_impact.enabled
+        assert config.fill_probability.enabled
+
+    def test_calibrate_from_alpaca_no_credentials(self) -> None:
+        """Test calibrate_from_alpaca with no credentials returns default config."""
+        # Without credentials, the adapter will return empty data
+        # The function should fallback to default equity config
+        config = calibrate_from_alpaca(
+            symbol="AAPL",
+            start_date="2025-01-01",
+            end_date="2025-01-02",
+            api_key="",
+            api_secret="",
+        )
+
+        assert isinstance(config, L3ExecutionConfig)
+        # Should get default equity config since no data was retrieved
+        # Default equity config has specific parameters
+
+    def test_calibrate_from_alpaca_mocked(self) -> None:
+        """Test calibrate_from_alpaca with mocked adapter."""
+        from unittest.mock import patch, MagicMock
+
+        # Mock the AlpacaL2Adapter to return test data
+        mock_adapter = MagicMock()
+        mock_adapter.to_calibration_pipeline_data.return_value = {
+            "symbol": "AAPL",
+            "trades": [
+                {
+                    "timestamp_ms": 1705315800000,
+                    "price": 150.0,
+                    "qty": 100.0,
+                    "side": 1,
+                    "pre_mid": 149.98,
+                    "post_mid": 150.02,
+                },
+                {
+                    "timestamp_ms": 1705315801000,
+                    "price": 150.05,
+                    "qty": 75.0,
+                    "side": -1,
+                    "pre_mid": 150.03,
+                    "post_mid": 149.99,
+                },
+            ],
+            "market_params": {
+                "avg_adv": 15_000_000,
+                "avg_volatility": 0.018,
+            },
+        }
+
+        # The import is inside the function, so patch at the source module
+        with patch("lob.data_adapters.AlpacaL2Adapter", return_value=mock_adapter):
+            config = calibrate_from_alpaca(
+                symbol="AAPL",
+                start_date="2025-01-01",
+                end_date="2025-01-31",
+                api_key="test_key",
+                api_secret="test_secret",
+            )
+
+        assert isinstance(config, L3ExecutionConfig)
+        mock_adapter.to_calibration_pipeline_data.assert_called_once_with("AAPL", "2025-01-01", "2025-01-31")
+
+    def test_calibrate_from_alpaca_with_error(self) -> None:
+        """Test calibrate_from_alpaca handles errors gracefully."""
+        from unittest.mock import patch, MagicMock
+
+        # Mock adapter to return error
+        mock_adapter = MagicMock()
+        mock_adapter.to_calibration_pipeline_data.return_value = {
+            "error": "API rate limit exceeded",
+        }
+
+        # The import is inside the function, so patch at the source module
+        with patch("lob.data_adapters.AlpacaL2Adapter", return_value=mock_adapter):
+            config = calibrate_from_alpaca(
+                symbol="AAPL",
+                api_key="test_key",
+                api_secret="test_secret",
+            )
+
+        # Should return default equity config on error
+        assert isinstance(config, L3ExecutionConfig)
+
+    def test_equity_calibration_crypto_backward_compatibility(self) -> None:
+        """Test that crypto calibration still works after equity additions."""
+        # Crypto pipeline should still work
+        crypto_pipeline = L3CalibrationPipeline(symbol="BTCUSDT", asset_class="crypto")
+
+        for i in range(50):
+            crypto_pipeline.add_trade(
+                timestamp_ms=1000 + i * 1000,
+                price=50000.0 + i * 10.0,
+                qty=0.1,
+                side=1 if i % 2 == 0 else -1,
+            )
+
+        config = crypto_pipeline.run_full_calibration()
+
+        assert isinstance(config, L3ExecutionConfig)
+        assert config.market_impact.enabled
+
+        # Equity pipeline should also work
+        equity_pipeline = create_equity_calibration_pipeline("AAPL")
+
+        for i in range(50):
+            equity_pipeline.add_trade(
+                timestamp_ms=1000 + i * 1000,
+                price=150.0 + i * 0.01,
+                qty=100.0,
+                side=1 if i % 2 == 0 else -1,
+            )
+
+        equity_config = equity_pipeline.run_full_calibration()
+
+        assert isinstance(equity_config, L3ExecutionConfig)
 
 
 if __name__ == "__main__":

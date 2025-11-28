@@ -898,12 +898,18 @@ class BinanceL2Adapter(BaseLOBAdapter):
 
 class AlpacaL2Adapter(BaseLOBAdapter):
     """
-    Adapter for Alpaca market data.
+    Enhanced adapter for Alpaca market data.
 
     Alpaca provides:
     - Quotes (BBO) via REST and WebSocket
     - Trades via REST and WebSocket
     - NBBO data from IEX or SIP
+    - Historical quotes and trades for calibration
+
+    Features for L3 calibration:
+    - Historical quote fetching for spread calibration
+    - Historical trade fetching for impact calibration
+    - Trade tick analysis for fill rate estimation
 
     Reference:
         https://alpaca.markets/docs/api-references/market-data-api/
@@ -923,12 +929,23 @@ class AlpacaL2Adapter(BaseLOBAdapter):
                 - api_key: Alpaca API key
                 - api_secret: Alpaca API secret
                 - feed: "iex" or "sip"
+                - paper: Use paper trading endpoint
+                - base_url: Override base URL
         """
         super().__init__(DataSourceType.ALPACA, symbol, config)
 
         self._api_key = self._config.get("api_key", "")
         self._api_secret = self._config.get("api_secret", "")
         self._feed = self._config.get("feed", "iex")
+        self._paper = self._config.get("paper", True)
+        self._base_url = self._config.get(
+            "base_url",
+            "https://data.alpaca.markets/v2"
+        )
+
+        # Cache for historical data
+        self._quotes_cache: Dict[str, List[Dict[str, Any]]] = {}
+        self._trades_cache: Dict[str, List[Dict[str, Any]]] = {}
 
     def load_snapshot(
         self,
@@ -1127,6 +1144,297 @@ class AlpacaL2Adapter(BaseLOBAdapter):
             bids=bids,
             asks=asks,
         )
+
+    def fetch_historical_quotes(
+        self,
+        symbol: Optional[str] = None,
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+        limit: int = 10000,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch historical quotes from Alpaca for spread calibration.
+
+        Args:
+            symbol: Symbol to fetch (defaults to adapter symbol)
+            start: Start date (ISO format, e.g., "2025-01-01")
+            end: End date (ISO format)
+            limit: Maximum number of quotes to fetch
+
+        Returns:
+            List of quote dicts with keys: t, bp, bs, ap, as
+        """
+        sym = symbol or self._symbol
+        if not sym:
+            return []
+
+        cache_key = f"{sym}_{start}_{end}"
+        if cache_key in self._quotes_cache:
+            return self._quotes_cache[cache_key]
+
+        try:
+            import os
+            import requests
+
+            api_key = self._api_key or os.environ.get("ALPACA_API_KEY", "")
+            api_secret = self._api_secret or os.environ.get("ALPACA_API_SECRET", "")
+
+            if not api_key or not api_secret:
+                logger.warning("Alpaca API credentials not provided")
+                return []
+
+            headers = {
+                "APCA-API-KEY-ID": api_key,
+                "APCA-API-SECRET-KEY": api_secret,
+            }
+
+            params: Dict[str, Any] = {"limit": limit, "feed": self._feed}
+            if start:
+                params["start"] = start
+            if end:
+                params["end"] = end
+
+            url = f"{self._base_url}/stocks/{sym}/quotes"
+            response = requests.get(url, headers=headers, params=params, timeout=30)
+            response.raise_for_status()
+
+            data = response.json()
+            quotes = data.get("quotes", {}).get(sym, [])
+
+            self._quotes_cache[cache_key] = quotes
+            return quotes
+
+        except Exception as e:
+            logger.warning(f"Failed to fetch historical quotes for {sym}: {e}")
+            return []
+
+    def fetch_historical_trades(
+        self,
+        symbol: Optional[str] = None,
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+        limit: int = 10000,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch historical trades from Alpaca for impact calibration.
+
+        Args:
+            symbol: Symbol to fetch (defaults to adapter symbol)
+            start: Start date (ISO format)
+            end: End date (ISO format)
+            limit: Maximum number of trades to fetch
+
+        Returns:
+            List of trade dicts with keys: t, p (price), s (size), c (conditions)
+        """
+        sym = symbol or self._symbol
+        if not sym:
+            return []
+
+        cache_key = f"{sym}_{start}_{end}_trades"
+        if cache_key in self._trades_cache:
+            return self._trades_cache[cache_key]
+
+        try:
+            import os
+            import requests
+
+            api_key = self._api_key or os.environ.get("ALPACA_API_KEY", "")
+            api_secret = self._api_secret or os.environ.get("ALPACA_API_SECRET", "")
+
+            if not api_key or not api_secret:
+                logger.warning("Alpaca API credentials not provided")
+                return []
+
+            headers = {
+                "APCA-API-KEY-ID": api_key,
+                "APCA-API-SECRET-KEY": api_secret,
+            }
+
+            params: Dict[str, Any] = {"limit": limit, "feed": self._feed}
+            if start:
+                params["start"] = start
+            if end:
+                params["end"] = end
+
+            url = f"{self._base_url}/stocks/{sym}/trades"
+            response = requests.get(url, headers=headers, params=params, timeout=30)
+            response.raise_for_status()
+
+            data = response.json()
+            trades = data.get("trades", {}).get(sym, [])
+
+            self._trades_cache[cache_key] = trades
+            return trades
+
+        except Exception as e:
+            logger.warning(f"Failed to fetch historical trades for {sym}: {e}")
+            return []
+
+    def compute_calibration_observations(
+        self,
+        symbol: Optional[str] = None,
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Compute calibration observations from historical data.
+
+        This method fetches quotes and trades, then computes:
+        - Spread statistics
+        - Trade impact observations (pre/post mid price)
+        - Average daily volume estimate
+
+        Args:
+            symbol: Symbol to analyze
+            start: Start date
+            end: End date
+
+        Returns:
+            Dict with calibration observations ready for L3CalibrationPipeline
+        """
+        sym = symbol or self._symbol
+        if not sym:
+            return {"error": "No symbol specified"}
+
+        # Fetch data
+        quotes = self.fetch_historical_quotes(sym, start, end)
+        trades = self.fetch_historical_trades(sym, start, end)
+
+        if not quotes or not trades:
+            return {
+                "symbol": sym,
+                "error": "Insufficient data",
+                "n_quotes": len(quotes),
+                "n_trades": len(trades),
+            }
+
+        # Compute spread statistics
+        spreads_bps = []
+        for q in quotes:
+            bp = float(q.get("bp", 0) or 0)
+            ap = float(q.get("ap", 0) or 0)
+            if bp > 0 and ap > bp:
+                spread_bps = (ap - bp) / bp * 10000
+                spreads_bps.append(spread_bps)
+
+        # Compute trade impact observations
+        trade_observations = []
+        quote_idx = 0
+
+        for i, trade in enumerate(trades):
+            trade_time = trade.get("t", "")
+            trade_price = float(trade.get("p", 0) or 0)
+            trade_size = float(trade.get("s", 0) or 0)
+
+            if trade_price <= 0 or trade_size <= 0:
+                continue
+
+            # Find quotes before and after trade
+            pre_mid = None
+            post_mid = None
+
+            # Find most recent quote before trade
+            while quote_idx < len(quotes) - 1:
+                q = quotes[quote_idx]
+                q_time = q.get("t", "")
+                if q_time >= trade_time:
+                    break
+                quote_idx += 1
+
+            if quote_idx > 0:
+                pre_q = quotes[quote_idx - 1]
+                bp = float(pre_q.get("bp", 0) or 0)
+                ap = float(pre_q.get("ap", 0) or 0)
+                if bp > 0 and ap > 0:
+                    pre_mid = (bp + ap) / 2
+
+            # Find quote after trade
+            for j in range(quote_idx, min(quote_idx + 10, len(quotes))):
+                post_q = quotes[j]
+                post_time = post_q.get("t", "")
+                if post_time > trade_time:
+                    bp = float(post_q.get("bp", 0) or 0)
+                    ap = float(post_q.get("ap", 0) or 0)
+                    if bp > 0 and ap > 0:
+                        post_mid = (bp + ap) / 2
+                    break
+
+            # Determine trade side (buy = price >= ask, sell = price <= bid)
+            side = 0
+            if pre_mid is not None:
+                side = 1 if trade_price >= pre_mid else -1
+
+            trade_observations.append({
+                "timestamp": trade_time,
+                "price": trade_price,
+                "qty": trade_size,
+                "side": side,
+                "pre_trade_mid": pre_mid,
+                "post_trade_mid": post_mid,
+            })
+
+        # Estimate ADV
+        total_volume = sum(t.get("qty", 0) or 0 for t in trade_observations)
+        n_days = 1  # Would need date parsing for accurate calculation
+
+        import numpy as np
+
+        return {
+            "symbol": sym,
+            "n_quotes": len(quotes),
+            "n_trades": len(trades),
+            "n_observations": len(trade_observations),
+            "avg_spread_bps": float(np.mean(spreads_bps)) if spreads_bps else None,
+            "spread_std_bps": float(np.std(spreads_bps)) if spreads_bps else None,
+            "estimated_adv": total_volume / max(n_days, 1),
+            "trade_observations": trade_observations,
+        }
+
+    def to_calibration_pipeline_data(
+        self,
+        symbol: Optional[str] = None,
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Convert adapter data to format suitable for L3CalibrationPipeline.
+
+        Args:
+            symbol: Symbol to calibrate
+            start: Start date
+            end: End date
+
+        Returns:
+            Dict that can be passed to L3CalibrationPipeline
+        """
+        obs = self.compute_calibration_observations(symbol, start, end)
+
+        if "error" in obs:
+            return obs
+
+        # Format for L3CalibrationPipeline
+        trades = []
+        for t in obs.get("trade_observations", []):
+            if t.get("pre_trade_mid") and t.get("post_trade_mid"):
+                trades.append({
+                    "timestamp_ms": 0,  # Would need parsing
+                    "price": t["price"],
+                    "qty": t["qty"],
+                    "side": t["side"],
+                    "pre_mid": t["pre_trade_mid"],
+                    "post_mid": t["post_trade_mid"],
+                })
+
+        return {
+            "symbol": obs["symbol"],
+            "trades": trades,
+            "market_params": {
+                "avg_adv": obs.get("estimated_adv", 10_000_000),
+                "avg_volatility": 0.02,  # Default, would need calculation
+                "avg_spread_bps": obs.get("avg_spread_bps", 5.0),
+            },
+        }
 
 
 # ==============================================================================

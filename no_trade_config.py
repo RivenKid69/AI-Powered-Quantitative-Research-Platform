@@ -90,6 +90,34 @@ class DynamicConfig(BaseModel):
     next_bars_block: Dict[str, int] = Field(default_factory=dict)
 
 
+class EarningsConfig(BaseModel):
+    """Configuration for earnings-based trading filters.
+
+    When enabled, prevents trading around earnings announcements:
+    - pre_earnings_bars: Number of bars before earnings to stop trading
+    - post_earnings_bars: Number of bars after earnings to resume trading
+
+    This helps avoid:
+    - Extreme volatility around earnings surprises
+    - Gap risk from overnight moves
+    - Spread widening during uncertain periods
+
+    Example:
+        earnings:
+          enabled: true
+          pre_earnings_bars: 2    # No trading 2 bars before earnings
+          post_earnings_bars: 1   # No trading 1 bar after earnings
+    """
+
+    enabled: bool = False
+    pre_earnings_bars: int = 2
+    post_earnings_bars: int = 1
+    # Optional: apply only to specific symbols
+    symbols: List[str] = Field(default_factory=list)
+    # Cache TTL for earnings data (seconds)
+    cache_ttl_sec: int = 3600
+
+
 class MaintenanceConfig(BaseModel):
     """Time windows for scheduled maintenance."""
 
@@ -111,6 +139,7 @@ class NoTradeConfig(BaseModel):
     dynamic_guard: DynamicGuardConfig = Field(default_factory=DynamicGuardConfig)
     maintenance: MaintenanceConfig = Field(default_factory=MaintenanceConfig)
     dynamic: DynamicConfig = Field(default_factory=DynamicConfig)
+    earnings: EarningsConfig = Field(default_factory=EarningsConfig)
 
 
 class NoTradeState(BaseModel):
@@ -419,6 +448,21 @@ def _normalise_no_trade_payload(raw: Mapping[str, Any]) -> Dict[str, Any]:
     if cooldown is not None:
         dynamic_payload["hysteresis"]["cooldown_bars"] = cooldown
 
+    # Extract earnings configuration
+    earnings_cfg = _ensure_mapping(raw.get("earnings"))
+    earnings_payload: Dict[str, Any] = {
+        "enabled": bool(earnings_cfg.get("enabled", False)),
+        "pre_earnings_bars": _coerce_int(earnings_cfg.get("pre_earnings_bars")) or 2,
+        "post_earnings_bars": _coerce_int(earnings_cfg.get("post_earnings_bars")) or 1,
+        "cache_ttl_sec": _coerce_int(earnings_cfg.get("cache_ttl_sec")) or 3600,
+    }
+    # Handle symbols list
+    symbols = earnings_cfg.get("symbols")
+    if isinstance(symbols, list):
+        earnings_payload["symbols"] = [str(s) for s in symbols if s]
+    else:
+        earnings_payload["symbols"] = []
+
     return {
         "funding_buffer_min": maintenance["funding_buffer_min"],
         "daily_utc": maintenance["daily_utc"],
@@ -426,6 +470,7 @@ def _normalise_no_trade_payload(raw: Mapping[str, Any]) -> Dict[str, Any]:
         "dynamic_guard": dict(guard_data),
         "maintenance": maintenance,
         "dynamic": dynamic_payload,
+        "earnings": earnings_payload,
     }
 
 

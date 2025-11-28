@@ -9,6 +9,18 @@ no_trade:
       - "08:00-08:05"
       - "16:00-16:05"
     custom_ms: []
+
+  # Earnings blackout configuration (for US equities)
+  # Prevents trading around earnings announcements to avoid:
+  # - Extreme volatility from earnings surprises
+  # - Gap risk from overnight/weekend moves
+  # - Spread widening during uncertain periods
+  earnings:
+    enabled: false              # Enable earnings-based trading filter
+    pre_earnings_bars: 2        # Bars before earnings to stop trading
+    post_earnings_bars: 1       # Bars after earnings before resuming
+    symbols: []                 # Optional: specific symbols (empty = use data symbols)
+    cache_ttl_sec: 3600         # Cache TTL for earnings data
   dynamic:
     enabled: false              # master switch; keeps legacy guards disabled by default
     guard:

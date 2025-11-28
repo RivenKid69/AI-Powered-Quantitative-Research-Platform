@@ -692,5 +692,254 @@ class TestBugFixes:
         assert not hasattr(snapshot, "ask_levels")
 
 
+# ==============================================================================
+# Test AlpacaL2Adapter Historical Data Methods (Task 4 - L3 LOB for Stocks)
+# ==============================================================================
+
+
+class TestAlpacaL2AdapterHistorical:
+    """Tests for AlpacaL2Adapter historical data fetching methods."""
+
+    def test_fetch_historical_quotes_no_credentials(self) -> None:
+        """Test fetch_historical_quotes returns empty without credentials."""
+        adapter = AlpacaL2Adapter(
+            symbol="AAPL",
+            config={"api_key": "", "api_secret": ""},
+        )
+
+        quotes = adapter.fetch_historical_quotes("AAPL", "2025-01-01", "2025-01-02")
+        assert quotes == []
+
+    def test_fetch_historical_trades_no_credentials(self) -> None:
+        """Test fetch_historical_trades returns empty without credentials."""
+        adapter = AlpacaL2Adapter(
+            symbol="AAPL",
+            config={"api_key": "", "api_secret": ""},
+        )
+
+        trades = adapter.fetch_historical_trades("AAPL", "2025-01-01", "2025-01-02")
+        assert trades == []
+
+    def test_fetch_historical_quotes_no_symbol(self) -> None:
+        """Test fetch_historical_quotes returns empty with no symbol."""
+        adapter = AlpacaL2Adapter()  # No symbol specified
+
+        quotes = adapter.fetch_historical_quotes()
+        assert quotes == []
+
+    def test_fetch_historical_trades_no_symbol(self) -> None:
+        """Test fetch_historical_trades returns empty with no symbol."""
+        adapter = AlpacaL2Adapter()
+
+        trades = adapter.fetch_historical_trades()
+        assert trades == []
+
+    def test_fetch_historical_quotes_caching(self) -> None:
+        """Test that quotes are cached after fetching."""
+        adapter = AlpacaL2Adapter(
+            symbol="AAPL",
+            config={"api_key": "", "api_secret": ""},
+        )
+
+        # Manually populate cache
+        cache_key = "AAPL_2025-01-01_2025-01-02"
+        cached_quotes = [{"t": "2025-01-01T10:00:00Z", "bp": 150.0, "bs": 100, "ap": 150.05, "as": 200}]
+        adapter._quotes_cache[cache_key] = cached_quotes
+
+        # Should return cached value
+        quotes = adapter.fetch_historical_quotes("AAPL", "2025-01-01", "2025-01-02")
+        assert quotes == cached_quotes
+
+    def test_fetch_historical_trades_caching(self) -> None:
+        """Test that trades are cached after fetching."""
+        adapter = AlpacaL2Adapter(
+            symbol="AAPL",
+            config={"api_key": "", "api_secret": ""},
+        )
+
+        # Manually populate cache
+        cache_key = "AAPL_2025-01-01_2025-01-02_trades"
+        cached_trades = [{"t": "2025-01-01T10:00:00Z", "p": 150.0, "s": 100}]
+        adapter._trades_cache[cache_key] = cached_trades
+
+        # Should return cached value
+        trades = adapter.fetch_historical_trades("AAPL", "2025-01-01", "2025-01-02")
+        assert trades == cached_trades
+
+    def test_compute_calibration_observations_no_symbol(self) -> None:
+        """Test compute_calibration_observations returns error with no symbol."""
+        adapter = AlpacaL2Adapter()
+
+        result = adapter.compute_calibration_observations()
+        assert "error" in result
+        assert result["error"] == "No symbol specified"
+
+    def test_compute_calibration_observations_insufficient_data(self) -> None:
+        """Test compute_calibration_observations handles insufficient data."""
+        adapter = AlpacaL2Adapter(
+            symbol="AAPL",
+            config={"api_key": "", "api_secret": ""},
+        )
+
+        # Empty caches = no data
+        result = adapter.compute_calibration_observations("AAPL", "2025-01-01", "2025-01-02")
+        assert "error" in result
+        assert result["error"] == "Insufficient data"
+        assert result["n_quotes"] == 0
+        assert result["n_trades"] == 0
+
+    def test_compute_calibration_observations_with_data(self) -> None:
+        """Test compute_calibration_observations with mocked data."""
+        adapter = AlpacaL2Adapter(
+            symbol="AAPL",
+            config={"api_key": "", "api_secret": ""},
+        )
+
+        # Pre-populate caches with test data
+        quotes_key = "AAPL_2025-01-01_2025-01-02"
+        trades_key = "AAPL_2025-01-01_2025-01-02_trades"
+
+        adapter._quotes_cache[quotes_key] = [
+            {"t": "2025-01-01T10:00:00Z", "bp": 150.00, "bs": 100, "ap": 150.05, "as": 200},
+            {"t": "2025-01-01T10:00:01Z", "bp": 150.01, "bs": 110, "ap": 150.06, "as": 180},
+            {"t": "2025-01-01T10:00:02Z", "bp": 150.02, "bs": 120, "ap": 150.07, "as": 190},
+        ]
+
+        adapter._trades_cache[trades_key] = [
+            {"t": "2025-01-01T10:00:00.500Z", "p": 150.05, "s": 50},
+            {"t": "2025-01-01T10:00:01.500Z", "p": 150.01, "s": 75},
+        ]
+
+        result = adapter.compute_calibration_observations("AAPL", "2025-01-01", "2025-01-02")
+
+        assert "error" not in result
+        assert result["symbol"] == "AAPL"
+        assert result["n_quotes"] == 3
+        assert result["n_trades"] == 2
+        assert result["avg_spread_bps"] is not None
+        assert result["avg_spread_bps"] > 0
+        assert "trade_observations" in result
+
+    def test_to_calibration_pipeline_data_no_symbol(self) -> None:
+        """Test to_calibration_pipeline_data returns error with no symbol."""
+        adapter = AlpacaL2Adapter()
+
+        result = adapter.to_calibration_pipeline_data()
+        assert "error" in result
+
+    def test_to_calibration_pipeline_data_with_data(self) -> None:
+        """Test to_calibration_pipeline_data formats data correctly."""
+        adapter = AlpacaL2Adapter(
+            symbol="AAPL",
+            config={"api_key": "", "api_secret": ""},
+        )
+
+        # Pre-populate caches
+        quotes_key = "AAPL_None_None"
+        trades_key = "AAPL_None_None_trades"
+
+        adapter._quotes_cache[quotes_key] = [
+            {"t": "2025-01-01T10:00:00Z", "bp": 150.00, "bs": 100, "ap": 150.10, "as": 200},
+            {"t": "2025-01-01T10:00:02Z", "bp": 150.02, "bs": 120, "ap": 150.12, "as": 190},
+        ]
+
+        adapter._trades_cache[trades_key] = [
+            {"t": "2025-01-01T10:00:01Z", "p": 150.10, "s": 50},
+        ]
+
+        result = adapter.to_calibration_pipeline_data("AAPL")
+
+        assert "symbol" in result
+        assert result["symbol"] == "AAPL"
+        assert "trades" in result
+        assert "market_params" in result
+        assert "avg_adv" in result["market_params"]
+        assert "avg_volatility" in result["market_params"]
+
+
+class TestAlpacaL2AdapterMocked:
+    """Tests for AlpacaL2Adapter with mocked API responses."""
+
+    def test_fetch_historical_quotes_mocked(self) -> None:
+        """Test fetch_historical_quotes with mocked API."""
+        from unittest.mock import patch, MagicMock
+
+        adapter = AlpacaL2Adapter(
+            symbol="AAPL",
+            config={"api_key": "test_key", "api_secret": "test_secret"},
+        )
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "quotes": {
+                "AAPL": [
+                    {"t": "2025-01-01T10:00:00Z", "bp": 150.0, "bs": 100, "ap": 150.05, "as": 200},
+                ]
+            }
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("requests.get", return_value=mock_response) as mock_get:
+            quotes = adapter.fetch_historical_quotes("AAPL", "2025-01-01", "2025-01-02")
+
+        assert len(quotes) == 1
+        assert quotes[0]["bp"] == 150.0
+        mock_get.assert_called_once()
+
+    def test_fetch_historical_trades_mocked(self) -> None:
+        """Test fetch_historical_trades with mocked API."""
+        from unittest.mock import patch, MagicMock
+
+        adapter = AlpacaL2Adapter(
+            symbol="AAPL",
+            config={"api_key": "test_key", "api_secret": "test_secret"},
+        )
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "trades": {
+                "AAPL": [
+                    {"t": "2025-01-01T10:00:00Z", "p": 150.02, "s": 50, "c": []},
+                ]
+            }
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("requests.get", return_value=mock_response) as mock_get:
+            trades = adapter.fetch_historical_trades("AAPL", "2025-01-01", "2025-01-02")
+
+        assert len(trades) == 1
+        assert trades[0]["p"] == 150.02
+        mock_get.assert_called_once()
+
+    def test_fetch_historical_quotes_api_error(self) -> None:
+        """Test fetch_historical_quotes handles API errors gracefully."""
+        from unittest.mock import patch
+
+        adapter = AlpacaL2Adapter(
+            symbol="AAPL",
+            config={"api_key": "test_key", "api_secret": "test_secret"},
+        )
+
+        with patch("requests.get", side_effect=Exception("API Error")):
+            quotes = adapter.fetch_historical_quotes("AAPL", "2025-01-01", "2025-01-02")
+
+        assert quotes == []
+
+    def test_fetch_historical_trades_api_error(self) -> None:
+        """Test fetch_historical_trades handles API errors gracefully."""
+        from unittest.mock import patch
+
+        adapter = AlpacaL2Adapter(
+            symbol="AAPL",
+            config={"api_key": "test_key", "api_secret": "test_secret"},
+        )
+
+        with patch("requests.get", side_effect=Exception("API Error")):
+            trades = adapter.fetch_historical_trades("AAPL", "2025-01-01", "2025-01-02")
+
+        assert trades == []
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

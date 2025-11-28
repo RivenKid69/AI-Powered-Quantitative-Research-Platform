@@ -1180,3 +1180,110 @@ def calibrate_from_dataframe(
         )
 
     return pipeline.run_full_calibration()
+
+
+def calibrate_from_alpaca(
+    symbol: str,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    api_key: Optional[str] = None,
+    api_secret: Optional[str] = None,
+    feed: str = "iex",
+) -> L3ExecutionConfig:
+    """
+    Calibrate L3 parameters using Alpaca historical data.
+
+    This function fetches historical quotes and trades from Alpaca
+    and runs the full calibration pipeline for equity assets.
+
+    Args:
+        symbol: Stock symbol (e.g., "AAPL")
+        start_date: Start date (ISO format, e.g., "2025-01-01")
+        end_date: End date (ISO format)
+        api_key: Alpaca API key (uses env var if not provided)
+        api_secret: Alpaca API secret (uses env var if not provided)
+        feed: Data feed ("iex" or "sip")
+
+    Returns:
+        Calibrated L3ExecutionConfig for the equity
+
+    Example:
+        config = calibrate_from_alpaca(
+            "AAPL",
+            start_date="2025-01-01",
+            end_date="2025-01-31"
+        )
+        provider = L3ExecutionProvider(config=config)
+    """
+    import os
+
+    from lob.data_adapters import AlpacaL2Adapter
+
+    # Create adapter with credentials
+    config = {
+        "api_key": api_key or os.environ.get("ALPACA_API_KEY", ""),
+        "api_secret": api_secret or os.environ.get("ALPACA_API_SECRET", ""),
+        "feed": feed,
+    }
+
+    adapter = AlpacaL2Adapter(symbol=symbol, config=config)
+
+    # Get calibration data from adapter
+    cal_data = adapter.to_calibration_pipeline_data(symbol, start_date, end_date)
+
+    if "error" in cal_data:
+        logger.warning(
+            f"Failed to get calibration data for {symbol}: {cal_data.get('error')}"
+        )
+        # Return default equity config
+        return L3ExecutionConfig.for_equity()
+
+    # Create pipeline and add data
+    pipeline = L3CalibrationPipeline(symbol=symbol, asset_class="equity")
+
+    # Set market params
+    market_params = cal_data.get("market_params", {})
+    pipeline.set_market_params(
+        avg_adv=market_params.get("avg_adv", 10_000_000),
+        avg_volatility=market_params.get("avg_volatility", 0.02),
+    )
+
+    # Add trades
+    for trade in cal_data.get("trades", []):
+        pipeline.add_trade(
+            timestamp_ms=trade.get("timestamp_ms", 0),
+            price=trade.get("price", 0.0),
+            qty=trade.get("qty", 0.0),
+            side=trade.get("side", 1),
+            pre_trade_mid=trade.get("pre_mid"),
+            post_trade_mid=trade.get("post_mid"),
+        )
+
+    # Run calibration
+    return pipeline.run_full_calibration()
+
+
+def create_equity_calibration_pipeline(
+    symbol: str,
+    avg_adv: float = 10_000_000,
+    avg_volatility: float = 0.02,
+) -> L3CalibrationPipeline:
+    """
+    Create a calibration pipeline pre-configured for equity assets.
+
+    This function creates a pipeline with equity-specific defaults:
+    - Lower default spread (2 bps vs 5 bps for crypto)
+    - Lower impact coefficients
+    - Equity-typical latency profiles
+
+    Args:
+        symbol: Stock symbol
+        avg_adv: Average daily volume (default: 10M shares)
+        avg_volatility: Average volatility (default: 2%)
+
+    Returns:
+        L3CalibrationPipeline ready for data loading
+    """
+    pipeline = L3CalibrationPipeline(symbol=symbol, asset_class="equity")
+    pipeline.set_market_params(avg_adv=avg_adv, avg_volatility=avg_volatility)
+    return pipeline

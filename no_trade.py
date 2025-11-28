@@ -13,7 +13,12 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from no_trade_config import NoTradeConfig, NoTradeState, get_no_trade_config
+from no_trade_config import (
+    EarningsConfig,
+    NoTradeConfig,
+    NoTradeState,
+    get_no_trade_config,
+)
 from runtime_flags import get_bool as _get_runtime_bool
 
 
@@ -99,6 +104,212 @@ def _in_custom_window(ts_ms: np.ndarray, windows: List[Dict[str, int]]) -> np.nd
             )
 
         mask |= (ts_ms >= s) & (ts_ms <= e)
+
+    return mask
+
+
+# ==============================================================================
+# Earnings Blackout Filter
+# ==============================================================================
+
+# Cache for earnings data to avoid repeated API calls
+_earnings_cache: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
+_earnings_cache_lock = None  # For thread safety in future if needed
+
+
+def _get_earnings_events(
+    symbols: List[str],
+    start_date: str,
+    end_date: str,
+    cache_ttl_sec: int = 3600,
+) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Fetch earnings events for symbols using Yahoo adapter.
+
+    Uses caching to avoid repeated API calls.
+
+    Args:
+        symbols: List of stock symbols
+        start_date: Start date (ISO format)
+        end_date: End date (ISO format)
+        cache_ttl_sec: Cache TTL in seconds
+
+    Returns:
+        Dict mapping symbol to list of earnings events
+    """
+    import time as _time
+
+    result: Dict[str, List[Dict[str, Any]]] = {}
+
+    for symbol in symbols:
+        symbol_upper = symbol.upper()
+        cache_key = f"{symbol_upper}_{start_date}_{end_date}"
+
+        # Check cache
+        if cache_key in _earnings_cache:
+            cached_time, cached_events = _earnings_cache[cache_key]
+            if _time.time() - cached_time < cache_ttl_sec:
+                result[symbol_upper] = cached_events
+                continue
+
+        # Fetch from Yahoo adapter
+        try:
+            from adapters.yahoo.earnings import YahooEarningsAdapter
+
+            adapter = YahooEarningsAdapter()
+            events = adapter.get_earnings_history(
+                symbol_upper,
+                start_date=start_date,
+                end_date=end_date,
+            )
+
+            # Convert EarningsEvent to dict for easier processing
+            events_list = [
+                {
+                    "symbol": e.symbol,
+                    "report_date": e.report_date,
+                    "is_confirmed": e.is_confirmed,
+                }
+                for e in events
+            ]
+
+            # Cache the result
+            _earnings_cache[cache_key] = (_time.time(), events_list)
+            result[symbol_upper] = events_list
+
+        except ImportError:
+            LOGGER.warning(
+                "Could not import YahooEarningsAdapter; earnings filter disabled"
+            )
+            result[symbol_upper] = []
+        except Exception as exc:
+            LOGGER.warning(
+                "Failed to fetch earnings for %s: %s",
+                symbol_upper,
+                exc,
+            )
+            result[symbol_upper] = []
+
+    return result
+
+
+def _build_earnings_blackout_windows(
+    earnings_events: Dict[str, List[Dict[str, Any]]],
+    pre_bars: int,
+    post_bars: int,
+    bar_duration_ms: int = 4 * 60 * 60 * 1000,  # Default 4h bars
+) -> List[Dict[str, Any]]:
+    """
+    Build blackout windows from earnings events.
+
+    Each window spans from (earnings_date - pre_bars * bar_duration)
+    to (earnings_date + post_bars * bar_duration).
+
+    Args:
+        earnings_events: Dict mapping symbol to list of earnings events
+        pre_bars: Number of bars before earnings to block
+        post_bars: Number of bars after earnings to block
+        bar_duration_ms: Bar duration in milliseconds
+
+    Returns:
+        List of blackout windows with start_ts_ms, end_ts_ms, symbol
+    """
+    from datetime import datetime
+
+    windows: List[Dict[str, Any]] = []
+
+    for symbol, events in earnings_events.items():
+        for event in events:
+            report_date = event.get("report_date")
+            if not report_date:
+                continue
+
+            try:
+                # Parse the report date and convert to ms timestamp
+                # Earnings are typically announced after market close or before open
+                # We use end of day as the reference point
+                dt = datetime.fromisoformat(report_date)
+                # Convert to timestamp ms (end of day)
+                base_ts_ms = int(dt.timestamp() * 1000) + 16 * 60 * 60 * 1000
+
+                # Calculate blackout window
+                start_ts_ms = base_ts_ms - (pre_bars * bar_duration_ms)
+                end_ts_ms = base_ts_ms + (post_bars * bar_duration_ms)
+
+                windows.append({
+                    "start_ts_ms": start_ts_ms,
+                    "end_ts_ms": end_ts_ms,
+                    "symbol": symbol,
+                    "reason": "earnings_blackout",
+                    "report_date": report_date,
+                })
+
+            except (ValueError, TypeError) as exc:
+                LOGGER.debug(
+                    "Failed to parse earnings date %s for %s: %s",
+                    report_date,
+                    symbol,
+                    exc,
+                )
+                continue
+
+    return windows
+
+
+def _in_earnings_blackout(
+    ts_ms: np.ndarray,
+    symbols: Optional[pd.Series],
+    windows: List[Dict[str, Any]],
+) -> np.ndarray:
+    """
+    Check if timestamps fall within earnings blackout windows.
+
+    Handles both global windows (no symbol) and per-symbol windows.
+
+    Args:
+        ts_ms: Array of timestamps in milliseconds
+        symbols: Optional Series of symbols per row
+        windows: List of blackout windows
+
+    Returns:
+        Boolean mask where True = in blackout
+    """
+    if ts_ms.size == 0 or not windows:
+        return np.zeros_like(ts_ms, dtype=bool)
+
+    mask = np.zeros_like(ts_ms, dtype=bool)
+
+    # Group windows by symbol
+    global_windows: List[Tuple[int, int]] = []
+    per_symbol_windows: Dict[str, List[Tuple[int, int]]] = defaultdict(list)
+
+    for w in windows:
+        start = int(w.get("start_ts_ms", 0))
+        end = int(w.get("end_ts_ms", 0))
+        symbol = w.get("symbol")
+
+        if start >= end:
+            continue
+
+        if symbol:
+            per_symbol_windows[str(symbol).upper()].append((start, end))
+        else:
+            global_windows.append((start, end))
+
+    # Apply global windows
+    for start, end in global_windows:
+        mask |= (ts_ms >= start) & (ts_ms <= end)
+
+    # Apply per-symbol windows
+    if symbols is not None and per_symbol_windows:
+        symbol_values = symbols.str.upper().to_numpy(dtype=object)
+        for symbol, wins in per_symbol_windows.items():
+            symbol_mask = symbol_values == symbol
+            if not symbol_mask.any():
+                continue
+            symbol_mask = symbol_mask.astype(bool)
+            for start, end in wins:
+                mask |= symbol_mask & (ts_ms >= start) & (ts_ms <= end)
 
     return mask
 
@@ -1331,6 +1542,83 @@ def _compute_no_trade_components(
     window_reasons.loc[~valid_series, :] = False
     window_mask = window_reasons["window"].to_numpy(dtype=bool)
 
+    # Earnings blackout filter
+    earnings_cfg = cfg.earnings if hasattr(cfg, "earnings") else None
+    earnings_mask = np.zeros_like(ts_int, dtype=bool)
+    earnings_meta: Dict[str, Any] = {}
+
+    if earnings_cfg and earnings_cfg.enabled:
+        try:
+            # Determine date range from dataframe timestamps
+            from datetime import datetime as _dt
+
+            ts_valid_values = ts_int[ts_valid]
+            if len(ts_valid_values) > 0:
+                min_ts = int(ts_valid_values.min())
+                max_ts = int(ts_valid_values.max())
+                start_date = _dt.fromtimestamp(min_ts / 1000).strftime("%Y-%m-%d")
+                end_date = _dt.fromtimestamp(max_ts / 1000 + 86400).strftime("%Y-%m-%d")
+
+                # Determine symbols to fetch earnings for
+                if earnings_cfg.symbols:
+                    earnings_symbols = earnings_cfg.symbols
+                elif symbols is not None:
+                    earnings_symbols = list(symbols.unique())
+                else:
+                    earnings_symbols = []
+
+                # Only fetch earnings for equity-like symbols (not crypto)
+                earnings_symbols = [
+                    s for s in earnings_symbols
+                    if s and not s.endswith("USDT") and not s.endswith("USD")
+                ]
+
+                if earnings_symbols:
+                    # Fetch earnings events
+                    earnings_events = _get_earnings_events(
+                        earnings_symbols,
+                        start_date,
+                        end_date,
+                        cache_ttl_sec=earnings_cfg.cache_ttl_sec,
+                    )
+
+                    # Build blackout windows
+                    # Estimate bar duration from data
+                    if len(ts_valid_values) > 1:
+                        diffs = np.diff(np.sort(ts_valid_values))
+                        bar_duration_ms = int(np.median(diffs[diffs > 0])) if len(diffs[diffs > 0]) > 0 else 4 * 60 * 60 * 1000
+                    else:
+                        bar_duration_ms = 4 * 60 * 60 * 1000  # Default 4h
+
+                    blackout_windows = _build_earnings_blackout_windows(
+                        earnings_events,
+                        earnings_cfg.pre_earnings_bars,
+                        earnings_cfg.post_earnings_bars,
+                        bar_duration_ms=bar_duration_ms,
+                    )
+
+                    # Compute earnings mask
+                    if blackout_windows:
+                        earnings_mask = _in_earnings_blackout(ts_int, symbols, blackout_windows)
+                        earnings_meta = {
+                            "enabled": True,
+                            "n_blackout_windows": len(blackout_windows),
+                            "n_symbols_checked": len(earnings_symbols),
+                            "pre_earnings_bars": earnings_cfg.pre_earnings_bars,
+                            "post_earnings_bars": earnings_cfg.post_earnings_bars,
+                        }
+
+        except Exception as exc:
+            LOGGER.warning("Earnings blackout computation failed: %s", exc)
+            earnings_mask = np.zeros_like(ts_int, dtype=bool)
+
+    # Add earnings reason column to window_reasons
+    window_reasons["earnings_blackout"] = pd.Series(earnings_mask, index=df.index, dtype=bool)
+    window_reasons.loc[~valid_series, "earnings_blackout"] = False
+
+    # Update window mask to include earnings blackout
+    window_mask = window_mask | earnings_mask
+
     dyn_cfg = cfg.dynamic_guard if hasattr(cfg, "dynamic_guard") else None
     dyn_mask = pd.Series(False, index=df.index, dtype=bool)
     dyn_reasons = pd.DataFrame(index=df.index)
@@ -1415,6 +1703,10 @@ def _compute_no_trade_components(
         if filtered_meta:
             meta["maintenance_calendar"] = filtered_meta
 
+    # Add earnings meta
+    if earnings_meta:
+        meta["earnings_blackout"] = earnings_meta
+
     reasons = pd.concat([window_reasons, dyn_reasons], axis=1)
     if not dyn_reasons.empty:
         reasons["dynamic_guard"] = dyn_mask.astype(bool)
@@ -1431,6 +1723,7 @@ def _compute_no_trade_components(
         "maintenance_funding": "Maintenance: funding buffer",
         "maintenance_custom": "Maintenance: custom window",
         "maintenance_calendar": "Maintenance: calendar schedule",
+        "earnings_blackout": "Earnings blackout period",
         "dynamic_guard": "Dynamic guard",  # aggregated column
         "dyn_vol_abs": "Dynamic guard: volatility >= abs",
         "dyn_vol_pctile": "Dynamic guard: volatility percentile",
