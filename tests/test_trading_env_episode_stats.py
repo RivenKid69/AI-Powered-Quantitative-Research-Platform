@@ -19,6 +19,10 @@ class _MediatorStub:
         self.calls.clear()
         self._step_calls = 0
 
+    def _build_observation(self, row=None, state=None, mark_price=None):
+        """Build observation for the environment."""
+        return np.zeros(self._env.observation_space.shape, dtype=np.float32)
+
     def step(self, proto):  # pragma: no cover - deterministic stub
         state = self._env.state
         self._step_calls += 1
@@ -30,7 +34,10 @@ class _MediatorStub:
         self.calls.append(proto)
         obs = np.zeros(self._env.observation_space.shape, dtype=np.float32)
         info = {"equity": state.net_worth, "turnover": 0.0}
+        # Set is_bankrupt on state to trigger termination in TradingEnv.step()
         terminated = self._step_calls >= 2
+        if terminated:
+            state.is_bankrupt = True
         truncated = False
         return obs, 0.0, terminated, truncated, info
 
@@ -46,7 +53,8 @@ def test_trading_env_episode_stats_payload():
             "quote_asset_volume": [1_000.0, 1_000.0, 1_000.0],
         }
     )
-    env = TradingEnv(df, seed=0, enable_shocks=False, flash_prob=0.0)
+    # Disable signal_only mode so mediator.step() is called
+    env = TradingEnv(df, seed=0, enable_shocks=False, flash_prob=0.0, reward_signal_only=False)
     env._mediator = _MediatorStub(env)
 
     env.reset()
