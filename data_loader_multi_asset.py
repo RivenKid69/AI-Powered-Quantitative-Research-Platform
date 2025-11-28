@@ -332,6 +332,8 @@ def load_from_adapter(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     config: Optional[Dict[str, Any]] = None,
+    adjust_corporate_actions: bool = True,
+    add_corp_features: bool = False,
 ) -> Tuple[Dict[str, pd.DataFrame], Dict[str, np.ndarray]]:
     """
     Load data from market data adapter.
@@ -343,6 +345,8 @@ def load_from_adapter(
         start_date: Start date (ISO format or YYYY-MM-DD)
         end_date: End date
         config: Adapter configuration
+        adjust_corporate_actions: Apply split/dividend adjustments (equity only)
+        add_corp_features: Add corporate action features (equity only)
 
     Returns:
         (all_dfs_dict, all_obs_dict) tuple
@@ -411,6 +415,14 @@ def load_from_adapter(
 
             df = pd.DataFrame(rows)
             df = _standardize_columns(df, asset_class, timeframe)
+
+            # Apply corporate actions adjustments for equities
+            if asset_class == AssetClass.EQUITY:
+                if adjust_corporate_actions:
+                    df = apply_split_adjustment(df, symbol.upper())
+                if add_corp_features:
+                    df = add_corporate_action_features(df, symbol.upper())
+
             all_dfs[symbol.upper()] = df
 
     except ImportError as e:
@@ -427,6 +439,8 @@ def load_multi_asset_data(
     merge_fear_greed: bool = True,
     synthetic_fraction: float = 0.0,
     seed: int = 42,
+    adjust_corporate_actions: bool = True,
+    add_corp_features: bool = False,
 ) -> Tuple[Dict[str, pd.DataFrame], Dict[str, np.ndarray]]:
     """
     Load data from multiple files with multi-asset support.
@@ -441,6 +455,8 @@ def load_multi_asset_data(
         merge_fear_greed: Merge Fear & Greed data (crypto only)
         synthetic_fraction: Fraction of synthetic data (unused)
         seed: Random seed (unused)
+        adjust_corporate_actions: Apply split/dividend adjustments (equity only)
+        add_corp_features: Add corporate action features like gap_pct, days_to_earnings (equity only)
 
     Returns:
         (all_dfs_dict, all_obs_dict) tuple
@@ -463,6 +479,13 @@ def load_multi_asset_data(
             # Merge Fear & Greed for crypto
             if not fng.empty and asset_class == AssetClass.CRYPTO:
                 df = _merge_fear_greed(df, fng)
+
+            # Apply corporate actions adjustments for equities
+            if asset_class == AssetClass.EQUITY:
+                if adjust_corporate_actions:
+                    df = apply_split_adjustment(df, symbol)
+                if add_corp_features:
+                    df = add_corporate_action_features(df, symbol)
 
             all_dfs[symbol] = df
             logger.debug(f"Loaded {symbol}: {len(df)} rows")
@@ -862,13 +885,28 @@ def load_crypto_data(
 def load_stock_data(
     paths: Sequence[Union[str, Path]],
     timeframe: str = "4h",
+    adjust_corporate_actions: bool = True,
+    add_corp_features: bool = False,
 ) -> Tuple[Dict[str, pd.DataFrame], Dict[str, np.ndarray]]:
-    """Load stock data from files."""
+    """
+    Load stock data from files.
+
+    Args:
+        paths: List of file paths
+        timeframe: Bar timeframe
+        adjust_corporate_actions: Apply split/dividend adjustments
+        add_corp_features: Add gap, earnings, dividend features
+
+    Returns:
+        (all_dfs_dict, all_obs_dict) tuple
+    """
     return load_multi_asset_data(
         paths=paths,
         asset_class=AssetClass.EQUITY,
         timeframe=timeframe,
         merge_fear_greed=False,
+        adjust_corporate_actions=adjust_corporate_actions,
+        add_corp_features=add_corp_features,
     )
 
 
@@ -879,6 +917,8 @@ def load_alpaca_data(
     end_date: Optional[str] = None,
     api_key: Optional[str] = None,
     api_secret: Optional[str] = None,
+    adjust_corporate_actions: bool = True,
+    add_corp_features: bool = False,
 ) -> Tuple[Dict[str, pd.DataFrame], Dict[str, np.ndarray]]:
     """
     Load stock data from Alpaca API.
@@ -890,6 +930,8 @@ def load_alpaca_data(
         end_date: End date (default: today)
         api_key: Alpaca API key (or env ALPACA_API_KEY)
         api_secret: Alpaca API secret
+        adjust_corporate_actions: Apply split/dividend adjustments
+        add_corp_features: Add gap, earnings, dividend features
 
     Returns:
         (all_dfs_dict, all_obs_dict) tuple
@@ -907,6 +949,8 @@ def load_alpaca_data(
         start_date=start_date,
         end_date=end_date,
         config=config,
+        adjust_corporate_actions=adjust_corporate_actions,
+        add_corp_features=add_corp_features,
     )
 
 
@@ -916,6 +960,8 @@ def load_polygon_data(
     start_date: str = "2023-01-01",
     end_date: Optional[str] = None,
     api_key: Optional[str] = None,
+    adjust_corporate_actions: bool = True,
+    add_corp_features: bool = False,
 ) -> Tuple[Dict[str, pd.DataFrame], Dict[str, np.ndarray]]:
     """
     Load stock data from Polygon.io API.
@@ -926,6 +972,8 @@ def load_polygon_data(
         start_date: Start date
         end_date: End date (default: today)
         api_key: Polygon API key (or env POLYGON_API_KEY)
+        adjust_corporate_actions: Apply split/dividend adjustments
+        add_corp_features: Add gap, earnings, dividend features
 
     Returns:
         (all_dfs_dict, all_obs_dict) tuple
@@ -941,4 +989,6 @@ def load_polygon_data(
         start_date=start_date,
         end_date=end_date,
         config=config,
+        adjust_corporate_actions=adjust_corporate_actions,
+        add_corp_features=add_corp_features,
     )
