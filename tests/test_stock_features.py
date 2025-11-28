@@ -646,10 +646,11 @@ class TestFeatureConfig:
     """Test feature_config.py updates."""
 
     def test_ext_norm_dim_expanded(self):
-        """Test EXT_NORM_DIM is expanded to 28."""
+        """Test EXT_NORM_DIM is expanded to 35 (Phase 6)."""
         from feature_config import EXT_NORM_DIM
 
-        assert EXT_NORM_DIM == 28  # 21 crypto + 7 stock
+        # Phase 6 expansion: 21 crypto + 7 stock + 7 macro/corp = 35
+        assert EXT_NORM_DIM == 35
 
     def test_feature_layout_includes_stock_features(self):
         """Test feature layout accounts for stock features."""
@@ -665,7 +666,8 @@ class TestFeatureConfig:
                 break
 
         assert external_block is not None
-        assert external_block["size"] == 28
+        # Phase 6 expansion: 21 crypto + 7 stock + 7 macro/corp = 35
+        assert external_block["size"] == 35
 
 
 # =============================================================================

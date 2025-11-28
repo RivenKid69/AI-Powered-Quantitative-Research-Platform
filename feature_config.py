@@ -31,9 +31,10 @@ MAX_NUM_TOKENS = 1  # Changed from 16 to match mediator and lob_state_cython
 # EXT_NORM_DIM: External normalized features dimension
 # ═══════════════════════════════════════════════════════════════════════════════
 # Phase 5 (2025-11-27): Expanded from 21 to 28 for stock-specific features
+# Phase 6 (2025-11-28): Expanded from 28 to 35 for macro data & earnings/dividend features
 #
 # Indices 0-20:  Original crypto features (cvd, garch, yang_zhang, returns, taker_buy_ratio)
-# Indices 21-27: NEW stock-specific features (backward compatible - validity=False for crypto)
+# Indices 21-27: Stock-specific features (Phase 5 - backward compatible)
 #   [21] vix_normalized     - VIX index value (normalized via tanh)
 #   [22] vix_regime         - VIX regime indicator (0-1 scale: low/normal/elevated/extreme)
 #   [23] market_regime      - Bull/Bear/Sideways indicator (-1 to 1)
@@ -42,12 +43,21 @@ MAX_NUM_TOKENS = 1  # Changed from 16 to match mediator and lob_state_cython
 #   [26] rs_qqq_20d         - 20-day relative strength vs QQQ
 #   [27] sector_momentum    - Sector momentum relative to market
 #
+# Indices 28-34: Macro & Corporate Features (Phase 6 - L3 Stock Simulation)
+#   [28] dxy_normalized     - Dollar Index (normalized via tanh, center at 100)
+#   [29] treasury_10y_yield - 10-Year Treasury Yield (normalized, typical range 2-5%)
+#   [30] real_yield_proxy   - Real yield approximation (10y yield - inflation proxy)
+#   [31] days_until_earnings_norm - Days to next earnings (normalized 0-1, 90 days = 1)
+#   [32] dividend_yield_norm - Trailing 12-month dividend yield (normalized)
+#   [33] earnings_surprise_norm - Last earnings surprise (normalized via tanh)
+#   [34] in_earnings_blackout - 0/1 flag for earnings blackout period (<14 days)
+#
 # Backward Compatibility:
 # - Crypto data won't have stock features → validity flags = False
 # - Default values are sensible (0.0)
 # - No changes to existing crypto observation building
 # ═══════════════════════════════════════════════════════════════════════════════
-EXT_NORM_DIM = 28  # 21 crypto + 7 stock-specific features
+EXT_NORM_DIM = 35  # 21 crypto + 7 stock + 7 macro/corp features
 
 # Initialize feature layout (to be populated by make_layout)
 FEATURES_LAYOUT = []

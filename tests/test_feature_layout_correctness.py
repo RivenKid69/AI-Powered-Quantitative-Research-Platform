@@ -182,8 +182,10 @@ def test_feature_config_has_correct_total_size():
 
     total = sum(block['size'] for block in FEATURES_LAYOUT)
 
-    assert total == 99, f"FEATURES_LAYOUT total size = {total}, expected 99"
-    assert N_FEATURES == 99, f"N_FEATURES = {N_FEATURES}, expected 99"
+    # Phase 6 (2025-11-28): Expanded EXT_NORM_DIM from 28 to 35
+    # New total: 3+2+2+14+2+7+3+2+5+35+35+2+1 = 113
+    assert total == 113, f"FEATURES_LAYOUT total size = {total}, expected 113"
+    assert N_FEATURES == 113, f"N_FEATURES = {N_FEATURES}, expected 113"
 
 
 def test_feature_config_block_order_documentation():
@@ -196,11 +198,11 @@ def test_feature_config_block_order_documentation():
     from feature_config import FEATURES_LAYOUT
 
     # Expected order from obs_builder.pyx (actual implementation)
-    # Phase 5 (2025-11-27): Updated for stock-specific features
+    # Phase 6 (2025-11-28): Updated for macro/corporate features
     # - agent: 6 → 7 (added signal_pos)
-    # - external: 21 → 28 (added 7 stock features: VIX, market_regime, RS, sector)
-    # - external_validity: 21 → 28
-    # - Total: 84 → 99
+    # - external: 21 → 35 (21 crypto + 7 stock + 7 macro/corp features)
+    # - external_validity: 21 → 35
+    # - Total: 99 → 113
     expected_order = [
         ("bar", 3),              # 0-2
         ("ma5", 2),              # 3-4
@@ -211,10 +213,10 @@ def test_feature_config_block_order_documentation():
         ("microstructure", 3),   # 30-32
         ("bb_context", 2),       # 33-34
         ("metadata", 5),         # 35-39
-        ("external", 28),        # 40-67 (21 crypto + 7 stock features)
-        ("external_validity", 28),  # 68-95 (validity flags for external features)
-        ("token_meta", 2),       # 96-97
-        ("token", 1),            # 98
+        ("external", 35),        # 40-74 (21 crypto + 7 stock + 7 macro/corp features)
+        ("external_validity", 35),  # 75-109 (validity flags for external features)
+        ("token_meta", 2),       # 110-111
+        ("token", 1),            # 112
     ]
 
     # Current feature_config.py order

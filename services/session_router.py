@@ -24,7 +24,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
-from typing import Any, Dict, Optional, Protocol
+from typing import Any, Dict, Optional, Protocol, Union
+
+import numpy as np
 from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
@@ -524,4 +526,208 @@ def create_alpaca_session_router(
     return create_session_router(
         trading_hours=alpaca_adapter,
         config=config,
+    )
+
+
+# =============================================================================
+# Extended Hours Feature Functions (Phase 6 - L3 Stock Features)
+# =============================================================================
+
+
+def compute_gap_from_close(
+    current_price: Union[float, np.ndarray],
+    previous_close: Union[float, np.ndarray],
+) -> Union[float, np.ndarray]:
+    """
+    Compute gap from previous close as percentage.
+
+    This is the primary extended hours feature - shows pre/after-market
+    price movement relative to previous regular session close.
+
+    Args:
+        current_price: Current market price (pre/after-market or open).
+            Can be scalar or array.
+        previous_close: Previous regular session close price.
+            Can be scalar or array.
+
+    Returns:
+        Gap as percentage (e.g., 1.5 for 1.5% gap up).
+        Returns array if inputs are arrays.
+    """
+    # Handle scalar case
+    if np.isscalar(current_price) and np.isscalar(previous_close):
+        if previous_close <= 0 or current_price <= 0:
+            return 0.0
+        return ((current_price - previous_close) / previous_close) * 100.0
+
+    # Handle array case
+    current_price = np.asarray(current_price, dtype=float)
+    previous_close = np.asarray(previous_close, dtype=float)
+
+    # Create output array
+    result = np.zeros_like(current_price)
+
+    # Create valid mask
+    valid_mask = (previous_close > 0) & (current_price > 0) & np.isfinite(previous_close) & np.isfinite(current_price)
+
+    # Compute gap where valid
+    with np.errstate(divide='ignore', invalid='ignore'):
+        result[valid_mask] = ((current_price[valid_mask] - previous_close[valid_mask]) / previous_close[valid_mask]) * 100.0
+
+    return result
+
+
+def compute_session_liquidity_factor(
+    session: Optional[TradingSession] = None,
+    ts_ms: Optional[int] = None,
+) -> float:
+    """
+    Compute session liquidity factor.
+
+    Returns a multiplier indicating expected liquidity relative to
+    regular trading hours (1.0 = regular hours, 0.05 = extended hours).
+
+    Args:
+        session: Trading session (None = detect from timestamp)
+        ts_ms: Timestamp in milliseconds
+
+    Returns:
+        Liquidity factor (0.0 to 1.0)
+    """
+    if session is None:
+        session_info = get_current_session(ts_ms)
+        session = session_info.session
+
+    return SESSION_CHARACTERISTICS[session]["typical_volume_fraction"]
+
+
+def compute_extended_hours_spread_mult(
+    session: Optional[TradingSession] = None,
+    ts_ms: Optional[int] = None,
+) -> float:
+    """
+    Compute spread multiplier for current session.
+
+    Extended hours typically have wider spreads due to lower liquidity.
+
+    Args:
+        session: Trading session (None = detect from timestamp)
+        ts_ms: Timestamp in milliseconds
+
+    Returns:
+        Spread multiplier (1.0 for regular, 2.0-2.5 for extended)
+    """
+    if session is None:
+        session_info = get_current_session(ts_ms)
+        session = session_info.session
+
+    multiplier = SESSION_CHARACTERISTICS[session]["typical_spread_multiplier"]
+    return multiplier if multiplier is not None else 1.0
+
+
+def add_extended_hours_features_to_df(
+    df,
+    timestamp_col: str = "timestamp",
+    close_col: str = "close",
+) -> "pd.DataFrame":
+    """
+    Add extended hours features to DataFrame.
+
+    Features added:
+    - gap_from_close: Pre-market gap from previous close (%)
+    - session_liquidity_factor: Expected liquidity (0.05 for extended, 1.0 for regular)
+    - session_spread_mult: Expected spread multiplier
+
+    Args:
+        df: DataFrame with OHLCV data
+        timestamp_col: Name of timestamp column
+        close_col: Name of close price column
+
+    Returns:
+        DataFrame with extended hours features
+    """
+    import pandas as pd
+    import numpy as np
+
+    df = df.copy()
+
+    # Initialize columns
+    df["gap_from_close"] = 0.0
+    df["session_liquidity_factor"] = 1.0
+    df["session_spread_mult"] = 1.0
+
+    # Compute gap from previous close
+    if close_col in df.columns:
+        prev_close = df[close_col].shift(1)
+        df["gap_from_close"] = compute_gap_from_close(
+            df["open"].values if "open" in df.columns else df[close_col].values,
+            prev_close.values,
+        )
+        # Vectorized computation
+        valid_mask = (prev_close > 0) & (df[close_col] > 0)
+        df.loc[~valid_mask, "gap_from_close"] = 0.0
+
+    # Compute session features if we have timestamps
+    if timestamp_col in df.columns:
+        try:
+            for i, row in df.iterrows():
+                ts = row[timestamp_col]
+                if isinstance(ts, (int, float)):
+                    ts_ms = int(ts * 1000) if ts < 1e12 else int(ts)
+                    session_info = get_current_session(ts_ms)
+
+                    df.at[i, "session_liquidity_factor"] = SESSION_CHARACTERISTICS[
+                        session_info.session
+                    ]["typical_volume_fraction"]
+
+                    spread_mult = SESSION_CHARACTERISTICS[
+                        session_info.session
+                    ]["typical_spread_multiplier"]
+                    df.at[i, "session_spread_mult"] = spread_mult if spread_mult else 1.0
+        except Exception as e:
+            logger.debug(f"Could not compute session features: {e}")
+
+    return df
+
+
+@dataclass
+class ExtendedHoursFeatures:
+    """Extended hours feature values for observation."""
+
+    gap_from_close: float = 0.0
+    session_liquidity_factor: float = 1.0
+    session_spread_mult: float = 1.0
+    is_extended_hours: bool = False
+    session: TradingSession = TradingSession.REGULAR
+
+
+def extract_extended_hours_features(
+    current_price: float,
+    previous_close: float,
+    ts_ms: Optional[int] = None,
+) -> ExtendedHoursFeatures:
+    """
+    Extract extended hours features for a single observation.
+
+    Args:
+        current_price: Current market price
+        previous_close: Previous session close
+        ts_ms: Current timestamp in milliseconds
+
+    Returns:
+        ExtendedHoursFeatures dataclass
+    """
+    session_info = get_current_session(ts_ms)
+    session = session_info.session
+
+    gap = compute_gap_from_close(current_price, previous_close)
+    liquidity = SESSION_CHARACTERISTICS[session]["typical_volume_fraction"]
+    spread_mult = SESSION_CHARACTERISTICS[session]["typical_spread_multiplier"]
+
+    return ExtendedHoursFeatures(
+        gap_from_close=gap,
+        session_liquidity_factor=liquidity,
+        session_spread_mult=spread_mult if spread_mult else 1.0,
+        is_extended_hours=session in (TradingSession.PRE_MARKET, TradingSession.AFTER_HOURS),
+        session=session,
     )

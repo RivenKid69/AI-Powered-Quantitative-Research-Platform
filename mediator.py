@@ -1424,11 +1424,11 @@ class Mediator:
         - No changes to existing crypto observation building
 
         Returns:
-            values: (28,) float32 array - feature values (NaN→0.0 fallback)
-            validity: (28,) bool array - True if feature was valid, False if NaN/Inf/None
+            values: (35,) float32 array - feature values (NaN→0.0 fallback)
+            validity: (35,) bool array - True if feature was valid, False if NaN/Inf/None
         """
-        norm_cols_values = np.zeros(28, dtype=np.float32)
-        norm_cols_validity = np.zeros(28, dtype=bool)  # Default to invalid for all
+        norm_cols_values = np.zeros(35, dtype=np.float32)
+        norm_cols_validity = np.zeros(35, dtype=bool)  # Default to invalid for all
 
         # =======================================================================
         # INDICES 0-20: ORIGINAL CRYPTO FEATURES (unchanged)
@@ -1507,6 +1507,82 @@ class Mediator:
         norm_cols_values[27], norm_cols_validity[27] = self._get_safe_float_with_validity(
             row, "sector_momentum", 0.0, min_value=-3.0, max_value=3.0
         )
+
+        # =======================================================================
+        # INDICES 28-34: MACRO & CORPORATE FEATURES (Phase 6 - 2025-11-28)
+        # =======================================================================
+        # These features provide macro context and corporate event awareness.
+        # For crypto data, these columns won't exist → validity=False (default)
+
+        # [28] Dollar Index (DXY) normalized
+        # DXY typically ranges 90-110, center at 100
+        dxy_raw, dxy_valid = self._get_safe_float_with_validity(row, "dxy_value", 100.0)
+        if dxy_valid:
+            # Normalize: (DXY - 100) / 10, then tanh
+            norm_cols_values[28] = float(np.tanh((dxy_raw - 100.0) / 10.0))
+        else:
+            norm_cols_values[28] = 0.0
+        norm_cols_validity[28] = dxy_valid
+
+        # [29] 10-Year Treasury Yield (normalized)
+        # Typical range 2-5%, normalize to [-1, 1] range
+        treasury_raw, treasury_valid = self._get_safe_float_with_validity(row, "treasury_10y_yield", 3.0)
+        if treasury_valid:
+            # Normalize: (yield - 3.5) / 2.0, then tanh
+            norm_cols_values[29] = float(np.tanh((treasury_raw - 3.5) / 2.0))
+        else:
+            norm_cols_values[29] = 0.0
+        norm_cols_validity[29] = treasury_valid
+
+        # [30] Real Yield Proxy
+        # Approximate real yield = nominal yield - inflation proxy
+        # Use VIX as inflation/uncertainty proxy (crude but useful)
+        real_yield_raw, real_yield_valid = self._get_safe_float_with_validity(row, "real_yield_proxy", 0.0)
+        if real_yield_valid:
+            norm_cols_values[30] = float(np.tanh(real_yield_raw / 2.0))
+        else:
+            norm_cols_values[30] = 0.0
+        norm_cols_validity[30] = real_yield_valid
+
+        # [31] Days until earnings (normalized 0-1, 90 days = 1)
+        days_until_raw, days_until_valid = self._get_safe_float_with_validity(
+            row, "days_until_earnings", 90.0, min_value=0.0, max_value=365.0
+        )
+        if days_until_valid:
+            # Normalize to 0-1 range (0 = today, 1 = 90+ days)
+            norm_cols_values[31] = min(float(days_until_raw) / 90.0, 1.0)
+        else:
+            norm_cols_values[31] = 1.0  # Default: far from earnings
+        norm_cols_validity[31] = days_until_valid
+
+        # [32] Trailing dividend yield (normalized)
+        div_yield_raw, div_yield_valid = self._get_safe_float_with_validity(
+            row, "trailing_dividend_yield", 0.0, min_value=0.0, max_value=20.0
+        )
+        if div_yield_valid:
+            # Normalize: typical yield 0-5%, use tanh(yield/3)
+            norm_cols_values[32] = float(np.tanh(div_yield_raw / 3.0))
+        else:
+            norm_cols_values[32] = 0.0
+        norm_cols_validity[32] = div_yield_valid
+
+        # [33] Last earnings surprise (normalized via tanh)
+        surprise_raw, surprise_valid = self._get_safe_float_with_validity(
+            row, "last_earnings_surprise", 0.0, min_value=-100.0, max_value=100.0
+        )
+        if surprise_valid:
+            # Normalize: typical surprise -20% to +20%, use tanh(surprise/15)
+            norm_cols_values[33] = float(np.tanh(surprise_raw / 15.0))
+        else:
+            norm_cols_values[33] = 0.0
+        norm_cols_validity[33] = surprise_valid
+
+        # [34] In earnings blackout (binary flag)
+        blackout_raw, blackout_valid = self._get_safe_float_with_validity(
+            row, "in_earnings_blackout", 0.0, min_value=0.0, max_value=1.0
+        )
+        norm_cols_values[34] = float(blackout_raw) if blackout_valid else 0.0
+        norm_cols_validity[34] = blackout_valid
 
         # NOTE: Normalization (tanh, clip) is applied in obs_builder.pyx when available.
         # In legacy fallback mode (when obs_builder is not available), normalization

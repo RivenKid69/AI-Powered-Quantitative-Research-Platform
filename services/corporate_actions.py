@@ -501,6 +501,184 @@ class CorporateActionsService:
         # Return only requested dates
         return {d: split_factor_at_date.get(d, 1.0) for d in dates}
 
+    def compute_dividend_factors(
+        self,
+        symbol: str,
+        dates: Sequence[str],
+        prices_by_date: Optional[Dict[str, float]] = None,
+    ) -> Dict[str, float]:
+        """
+        Compute cumulative dividend adjustment factors for dates.
+
+        Uses the CRSP methodology: on ex-date, price drops by dividend amount.
+        Adjustment factor = (price - dividend) / price for each ex-date.
+        Cumulative backward from most recent date.
+
+        For total return calculation:
+        - adjusted_price = raw_price * cum_div_factor
+        - This assumes dividend reinvestment at ex-date price
+
+        Args:
+            symbol: Stock symbol
+            dates: List of dates (ISO format)
+            prices_by_date: Dict mapping date to close price (for precise adjustment)
+
+        Returns:
+            Dict mapping date to cumulative dividend adjustment factor
+        """
+        dividends = self.get_dividends(symbol)
+
+        if not dividends:
+            return {d: 1.0 for d in dates}
+
+        # Sort dividends by ex_date descending (most recent first for backward cumulative)
+        dividends_sorted = sorted(dividends, key=lambda d: d["ex_date"], reverse=True)
+
+        # Build cumulative factor from most recent date backward
+        # Factor multiplied when crossing an ex-date into the past
+        all_dates = sorted(set(dates) | {d["ex_date"] for d in dividends_sorted}, reverse=True)
+
+        div_factor_at_date: Dict[str, float] = {}
+        cumulative = 1.0
+
+        div_idx = 0
+        for date in all_dates:
+            # Apply any dividends on this date
+            while div_idx < len(dividends_sorted) and dividends_sorted[div_idx]["ex_date"] >= date:
+                div_record = dividends_sorted[div_idx]
+                div_amount = float(div_record.get("amount", 0))
+
+                if div_amount > 0:
+                    ex_date = div_record["ex_date"]
+                    # Get price at ex-date if available, else use approximation
+                    if prices_by_date and ex_date in prices_by_date:
+                        price_at_ex = prices_by_date[ex_date]
+                    else:
+                        # Fallback: use a reasonable price estimate (100 as baseline)
+                        # In practice, caller should provide prices_by_date for accuracy
+                        price_at_ex = 100.0
+
+                    if price_at_ex > 0:
+                        # Adjustment factor: (price - div) / price
+                        adjustment = (price_at_ex - div_amount) / price_at_ex
+                        cumulative *= max(adjustment, 0.9)  # Floor at 10% drop to prevent extreme adjustments
+
+                div_idx += 1
+
+            div_factor_at_date[date] = cumulative
+
+        # Return only requested dates
+        return {d: div_factor_at_date.get(d, 1.0) for d in dates}
+
+    def compute_dividend_yield(
+        self,
+        symbol: str,
+        as_of_date: str,
+        current_price: float,
+        lookback_days: int = 365,
+    ) -> float:
+        """
+        Compute trailing dividend yield for a symbol.
+
+        Dividend yield = (sum of dividends in past year) / current_price * 100
+
+        Args:
+            symbol: Stock symbol
+            as_of_date: Reference date
+            current_price: Current stock price
+            lookback_days: Lookback period for trailing dividends
+
+        Returns:
+            Dividend yield as percentage (e.g., 2.5 for 2.5%)
+        """
+        if current_price <= 0:
+            return 0.0
+
+        try:
+            as_of_dt = datetime.fromisoformat(as_of_date)
+            start_date = (as_of_dt - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+
+            dividends = self.get_dividends(
+                symbol,
+                start_date=start_date,
+                end_date=as_of_date,
+            )
+
+            total_dividend = sum(float(d.get("amount", 0)) for d in dividends)
+            return (total_dividend / current_price) * 100.0
+
+        except Exception as e:
+            logger.warning(f"Error computing dividend yield for {symbol}: {e}")
+            return 0.0
+
+    def add_dividend_yield_column(
+        self,
+        df: pd.DataFrame,
+        symbol: str,
+    ) -> pd.DataFrame:
+        """
+        Add trailing_dividend_yield column to DataFrame.
+
+        Computes rolling 12-month dividend yield for each row.
+
+        Args:
+            df: DataFrame with OHLCV data
+            symbol: Stock symbol
+
+        Returns:
+            DataFrame with trailing_dividend_yield column
+        """
+        df = df.copy()
+        df["trailing_dividend_yield"] = 0.0
+
+        # Get date column
+        if "timestamp" in df.columns:
+            df["_date"] = pd.to_datetime(df["timestamp"], unit="s").dt.strftime("%Y-%m-%d")
+        elif "date" in df.columns:
+            df["_date"] = df["date"].astype(str)
+        else:
+            return df
+
+        # Get all dividends
+        dividends = self.get_dividends(symbol)
+        if not dividends:
+            df.drop(columns=["_date"], inplace=True)
+            return df
+
+        # Build dividend lookup by date
+        div_by_date = {}
+        for d in dividends:
+            ex_date = d["ex_date"]
+            amount = float(d.get("amount", 0))
+            if ex_date in div_by_date:
+                div_by_date[ex_date] += amount
+            else:
+                div_by_date[ex_date] = amount
+
+        # Calculate trailing yield for each row
+        close_col = "close" if "close" in df.columns else "Close"
+
+        for i, row in df.iterrows():
+            try:
+                as_of_date = row["_date"]
+                as_of_dt = datetime.fromisoformat(as_of_date)
+                start_dt = as_of_dt - timedelta(days=365)
+
+                # Sum dividends in trailing 12 months
+                trailing_divs = sum(
+                    amount for date_str, amount in div_by_date.items()
+                    if start_dt.strftime("%Y-%m-%d") <= date_str <= as_of_date
+                )
+
+                price = float(row[close_col]) if close_col in row.index else 0.0
+                if price > 0:
+                    df.at[i, "trailing_dividend_yield"] = (trailing_divs / price) * 100.0
+            except Exception:
+                continue
+
+        df.drop(columns=["_date"], inplace=True)
+        return df
+
     def adjust_prices(
         self,
         df: pd.DataFrame,
@@ -545,30 +723,43 @@ class CorporateActionsService:
 
         dates = df["_date"].unique().tolist()
 
+        # Initialize adjustment factors
+        combined_factor = {d: 1.0 for d in dates}
+
         # Compute split factors
         if adjust_splits:
             split_factors = self.compute_split_factors(symbol, dates)
+            for d in dates:
+                combined_factor[d] *= split_factors.get(d, 1.0)
 
-            # Apply split adjustment (multiply prices, divide volume)
-            df["_split_factor"] = df["_date"].map(split_factors).fillna(1.0)
+        # Compute dividend factors (for total return adjustment)
+        if adjust_dividends:
+            # Build prices_by_date for accurate dividend adjustment
+            close_col = "close" if "close" in df.columns else "Close"
+            prices_by_date = {}
+            if close_col in df.columns:
+                for _, row in df.iterrows():
+                    date_str = row["_date"]
+                    price = float(row[close_col])
+                    if price > 0:
+                        prices_by_date[date_str] = price
 
-            for col in price_cols:
-                if col in df.columns:
-                    df[f"{col}_adjusted"] = df[col] * df["_split_factor"]
+            dividend_factors = self.compute_dividend_factors(symbol, dates, prices_by_date)
+            for d in dates:
+                combined_factor[d] *= dividend_factors.get(d, 1.0)
 
-            if volume_col in df.columns:
-                # Volume is inverse-adjusted
-                df[f"{volume_col}_adjusted"] = df[volume_col] / df["_split_factor"]
+        # Apply combined adjustment factor
+        df["_combined_factor"] = df["_date"].map(combined_factor).fillna(1.0)
 
-            df.drop(columns=["_split_factor"], inplace=True)
+        for col in price_cols:
+            if col in df.columns:
+                df[f"{col}_adjusted"] = df[col] * df["_combined_factor"]
 
-        else:
-            # No adjustment, just copy columns
-            for col in price_cols:
-                if col in df.columns:
-                    df[f"{col}_adjusted"] = df[col]
-            if volume_col in df.columns:
-                df[f"{volume_col}_adjusted"] = df[volume_col]
+        if volume_col in df.columns:
+            # Volume is inverse-adjusted (more shares after split)
+            df[f"{volume_col}_adjusted"] = df[volume_col] / df["_combined_factor"]
+
+        df.drop(columns=["_combined_factor"], inplace=True)
 
         # Clean up
         df.drop(columns=["_date"], inplace=True)
@@ -800,6 +991,122 @@ class CorporateActionsService:
 
         return df
 
+    def add_earnings_features_to_df(
+        self,
+        df: pd.DataFrame,
+        symbol: str,
+    ) -> pd.DataFrame:
+        """
+        Add earnings-related features to DataFrame.
+
+        Features added:
+        - days_until_earnings: Days until next earnings announcement (0 = today)
+        - days_since_earnings: Days since last earnings
+        - last_earnings_surprise: Last quarter's surprise percentage
+        - in_earnings_blackout: 1 if within 14 days of earnings (common blackout period)
+        - pre_earnings_volatility: Implied volatility typically increases before earnings
+
+        Args:
+            df: DataFrame with OHLCV data
+            symbol: Stock symbol
+
+        Returns:
+            DataFrame with earnings features added
+        """
+        df = df.copy()
+
+        # Initialize columns with default values
+        df["days_until_earnings"] = np.nan
+        df["days_since_earnings"] = np.nan
+        df["last_earnings_surprise"] = 0.0
+        df["in_earnings_blackout"] = 0
+
+        # Get date column
+        if "timestamp" in df.columns:
+            df["_date"] = pd.to_datetime(df["timestamp"], unit="s").dt.strftime("%Y-%m-%d")
+        elif "date" in df.columns:
+            df["_date"] = df["date"].astype(str)
+        else:
+            return df
+
+        # Get date range from data
+        dates_list = df["_date"].tolist()
+        if not dates_list:
+            df.drop(columns=["_date"], inplace=True)
+            return df
+
+        start_date = min(dates_list)
+        end_date = max(dates_list)
+
+        # Extend date range for lookback/lookahead
+        try:
+            start_dt = datetime.fromisoformat(start_date) - timedelta(days=365)
+            end_dt = datetime.fromisoformat(end_date) + timedelta(days=90)
+            extended_start = start_dt.strftime("%Y-%m-%d")
+            extended_end = end_dt.strftime("%Y-%m-%d")
+        except Exception:
+            extended_start = start_date
+            extended_end = end_date
+
+        # Get earnings data
+        try:
+            earnings = self.get_earnings(symbol, start_date=extended_start, end_date=extended_end)
+        except Exception as e:
+            logger.warning(f"Could not fetch earnings for {symbol}: {e}")
+            df.drop(columns=["_date"], inplace=True)
+            return df
+
+        if not earnings:
+            df.drop(columns=["_date"], inplace=True)
+            return df
+
+        # Sort earnings by date
+        earnings_dates = sorted([e["report_date"] for e in earnings if "report_date" in e])
+
+        # Build surprise lookup
+        surprise_by_date = {}
+        for e in earnings:
+            if "report_date" in e and "surprise_pct" in e:
+                surprise_by_date[e["report_date"]] = e.get("surprise_pct", 0.0)
+
+        # Compute features for each row
+        for i, row in df.iterrows():
+            try:
+                as_of_date = row["_date"]
+                as_of_dt = datetime.fromisoformat(as_of_date)
+
+                # Find next earnings
+                future_earnings = [d for d in earnings_dates if d >= as_of_date]
+                if future_earnings:
+                    next_earnings = future_earnings[0]
+                    next_dt = datetime.fromisoformat(next_earnings)
+                    days_until = (next_dt - as_of_dt).days
+                    df.at[i, "days_until_earnings"] = days_until
+
+                    # In earnings blackout if within 14 days
+                    if days_until <= 14:
+                        df.at[i, "in_earnings_blackout"] = 1
+
+                # Find last earnings
+                past_earnings = [d for d in earnings_dates if d < as_of_date]
+                if past_earnings:
+                    last_earnings = past_earnings[-1]
+                    last_dt = datetime.fromisoformat(last_earnings)
+                    days_since = (as_of_dt - last_dt).days
+                    df.at[i, "days_since_earnings"] = days_since
+
+                    # Get last surprise
+                    if last_earnings in surprise_by_date:
+                        surprise = surprise_by_date[last_earnings]
+                        if surprise is not None and not np.isnan(surprise):
+                            df.at[i, "last_earnings_surprise"] = float(surprise)
+
+            except Exception:
+                continue
+
+        df.drop(columns=["_date"], inplace=True)
+        return df
+
     # =========================================================================
     # Batch Operations
     # =========================================================================
@@ -896,3 +1203,57 @@ def adjust_prices_for_splits(
 def compute_gap_features(df: pd.DataFrame) -> pd.DataFrame:
     """Convenience function to compute gap features."""
     return get_service().compute_gap_features(df)
+
+
+def adjust_prices_with_dividends(
+    df: pd.DataFrame,
+    symbol: str,
+) -> pd.DataFrame:
+    """
+    Convenience function to adjust prices for splits and dividends.
+
+    This enables total return backtesting by adjusting historical prices
+    for both stock splits and dividend payments.
+
+    Args:
+        df: DataFrame with OHLCV data
+        symbol: Stock symbol
+
+    Returns:
+        DataFrame with adjusted price columns (open_adjusted, close_adjusted, etc.)
+    """
+    return get_service().adjust_prices(df, symbol, adjust_splits=True, adjust_dividends=True)
+
+
+def add_dividend_yield_to_df(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    """
+    Convenience function to add trailing_dividend_yield column to DataFrame.
+
+    Args:
+        df: DataFrame with OHLCV data
+        symbol: Stock symbol
+
+    Returns:
+        DataFrame with trailing_dividend_yield column
+    """
+    return get_service().add_dividend_yield_column(df, symbol)
+
+
+def add_earnings_features(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    """
+    Convenience function to add earnings features to DataFrame.
+
+    Features added:
+    - days_until_earnings: Days until next earnings (0 = today)
+    - days_since_earnings: Days since last earnings
+    - last_earnings_surprise: Last quarter's surprise percentage
+    - in_earnings_blackout: 1 if within 14 days of earnings
+
+    Args:
+        df: DataFrame with OHLCV data
+        symbol: Stock symbol
+
+    Returns:
+        DataFrame with earnings features
+    """
+    return get_service().add_earnings_features_to_df(df, symbol)
