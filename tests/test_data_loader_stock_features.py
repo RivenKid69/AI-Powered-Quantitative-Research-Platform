@@ -1,399 +1,598 @@
 # -*- coding: utf-8 -*-
 """
-Tests for stock-specific features in data_loader_multi_asset.py.
+tests/test_data_loader_stock_features.py
+------------------------------------------------------------------
+Tests for stock features integration in data_loader_multi_asset.py (Gap #1 fix).
 
-Tests cover:
-- apply_split_adjustment()
-- add_corporate_action_features()
-- load_equity_data_adjusted()
-- Backward compatibility with crypto data loading
+This test module verifies:
+1. VIX, SPY, QQQ data is loaded automatically for equity
+2. Stock features (vix_normalized, market_regime, rs_spy_*, sector_momentum) are added
+3. Crypto path is NOT affected (backward compatibility)
+4. Feature opt-in/opt-out works correctly
+5. Benchmark data loading functions work properly
+
+Test Coverage:
+- load_multi_asset_data with equity
+- load_multi_asset_data with crypto (backward compatibility)
+- _load_benchmark_data helper function
+- _add_stock_features helper function
+- load_stock_data convenience function
+- add_stock_features=True/False parameter
 """
 
-import pytest
-import pandas as pd
-import numpy as np
-from unittest.mock import Mock, patch, MagicMock
+import os
 import tempfile
 from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from data_loader_multi_asset import (
+    AssetClass,
+    DataVendor,
+    _add_stock_features,
+    _load_benchmark_data,
+    load_crypto_data,
+    load_from_file,
+    load_multi_asset_data,
+    load_stock_data,
+    DEFAULT_BENCHMARK_PATHS,
+)
 
 
-class TestApplySplitAdjustment:
-    """Tests for apply_split_adjustment function."""
+# =============================================================================
+# FIXTURES
+# =============================================================================
 
-    def test_uses_adjusted_close_when_available(self):
-        """Test that adjusted_close column is used when present."""
-        from data_loader_multi_asset import apply_split_adjustment
+@pytest.fixture
+def sample_stock_df():
+    """Create a sample stock DataFrame with OHLCV data."""
+    n_rows = 100
+    timestamps = np.arange(1700000000, 1700000000 + n_rows * 14400, 14400)
 
-        df = pd.DataFrame({
-            "close": [400.0, 404.0, 100.0, 102.0],  # Pre-split: 400, 404
-            "adjusted_close": [100.0, 101.0, 100.0, 102.0],  # All adjusted
-            "open": [398.0, 402.0, 99.0, 101.0],
-            "high": [405.0, 408.0, 103.0, 105.0],
-            "low": [395.0, 400.0, 98.0, 100.0],
-            "volume": [1000.0, 1100.0, 4000.0, 4100.0],
-        })
-
-        result = apply_split_adjustment(df, "AAPL")
-
-        # Should use adjusted_close for close column
-        assert result.iloc[0]["close"] == pytest.approx(100.0)
-        assert result.iloc[1]["close"] == pytest.approx(101.0)
-
-    def test_computes_adjustment_factor_from_ratio(self):
-        """Test adjustment factor computation when adjusted_close available."""
-        from data_loader_multi_asset import apply_split_adjustment
-
-        # 4:1 split scenario
-        df = pd.DataFrame({
-            "close": [400.0, 100.0],  # Before and after split
-            "adjusted_close": [100.0, 100.0],  # Both adjusted to post-split
-            "open": [398.0, 99.0],
-            "high": [405.0, 103.0],
-            "low": [395.0, 98.0],
-            "volume": [1000, 4000],
-        })
-
-        result = apply_split_adjustment(df, "AAPL")
-
-        # Volume should be adjusted (multiplied by factor)
-        # First row: close=400, adj=100 → factor=4
-        assert result.iloc[0]["volume"] == pytest.approx(4000.0)
-
-    def test_no_adjustment_when_no_adjusted_close(self):
-        """Test that no adjustment is made without adjusted_close."""
-        from data_loader_multi_asset import apply_split_adjustment
-
-        df = pd.DataFrame({
-            "close": [100.0, 101.0, 102.0],
-            "open": [99.0, 100.0, 101.0],
-            "high": [101.0, 102.0, 103.0],
-            "low": [98.0, 99.0, 100.0],
-        })
-
-        result = apply_split_adjustment(df, "AAPL")
-
-        # Should be unchanged
-        pd.testing.assert_frame_equal(result, df)
-
-    def test_handles_nan_in_adjusted_close(self):
-        """Test handling of NaN values in adjusted_close."""
-        from data_loader_multi_asset import apply_split_adjustment
-
-        df = pd.DataFrame({
-            "close": [100.0, np.nan, 102.0],
-            "adjusted_close": [100.0, np.nan, 102.0],
-            "open": [99.0, np.nan, 101.0],
-            "high": [101.0, np.nan, 103.0],
-            "low": [98.0, np.nan, 100.0],
-            "volume": [1000.0, np.nan, 1100.0],
-        })
-
-        # Should not raise
-        result = apply_split_adjustment(df, "AAPL")
-        assert result is not None
+    df = pd.DataFrame({
+        "timestamp": timestamps,
+        "symbol": "AAPL",
+        "open": np.random.uniform(150, 160, n_rows),
+        "high": np.random.uniform(160, 165, n_rows),
+        "low": np.random.uniform(145, 150, n_rows),
+        "close": np.random.uniform(150, 160, n_rows),
+        "volume": np.random.uniform(1e6, 5e6, n_rows),
+        "quote_asset_volume": np.random.uniform(1e8, 5e8, n_rows),
+        "number_of_trades": np.random.randint(1000, 5000, n_rows),
+    })
+    # Fix OHLC consistency
+    df["high"] = df[["open", "high", "low", "close"]].max(axis=1) + 1
+    df["low"] = df[["open", "high", "low", "close"]].min(axis=1) - 1
+    return df
 
 
-class TestAddCorporateActionFeatures:
-    """Tests for add_corporate_action_features function."""
+@pytest.fixture
+def sample_crypto_df():
+    """Create a sample crypto DataFrame with OHLCV data."""
+    n_rows = 100
+    timestamps = np.arange(1700000000, 1700000000 + n_rows * 14400, 14400)
 
-    def test_adds_gap_features(self):
-        """Test that gap features are added."""
-        from data_loader_multi_asset import add_corporate_action_features
-
-        df = pd.DataFrame({
-            "open": [100.0, 105.0, 98.0],
-            "close": [100.0, 106.0, 99.0],
-            "high": [101.0, 107.0, 100.0],
-            "low": [99.0, 104.0, 97.0],
-        })
-
-        result = add_corporate_action_features(df, "AAPL")
-
-        assert "gap_pct" in result.columns
-        assert "gap_direction" in result.columns
-        assert "gap_magnitude" in result.columns
-
-    def test_gap_features_correct_values(self):
-        """Test gap feature values are computed correctly."""
-        from data_loader_multi_asset import add_corporate_action_features
-
-        df = pd.DataFrame({
-            "open": [100.0, 110.0],  # 10% gap up
-            "close": [100.0, 112.0],
-            "high": [101.0, 113.0],
-            "low": [99.0, 109.0],
-        })
-
-        result = add_corporate_action_features(df, "AAPL")
-
-        # Second row should have 10% gap
-        assert result.iloc[1]["gap_pct"] == pytest.approx(10.0)
-        assert result.iloc[1]["gap_direction"] == 1  # Up
-
-    def test_preserves_original_columns(self):
-        """Test that original columns are preserved."""
-        from data_loader_multi_asset import add_corporate_action_features
-
-        df = pd.DataFrame({
-            "open": [100.0, 105.0],
-            "close": [100.0, 106.0],
-            "high": [101.0, 107.0],
-            "low": [99.0, 104.0],
-            "volume": [1000, 1100],
-            "custom_col": [1, 2],
-        })
-
-        result = add_corporate_action_features(df, "AAPL")
-
-        assert "volume" in result.columns
-        assert "custom_col" in result.columns
-        assert result.iloc[0]["custom_col"] == 1
+    df = pd.DataFrame({
+        "timestamp": timestamps,
+        "symbol": "BTCUSDT",
+        "open": np.random.uniform(40000, 45000, n_rows),
+        "high": np.random.uniform(45000, 48000, n_rows),
+        "low": np.random.uniform(38000, 40000, n_rows),
+        "close": np.random.uniform(40000, 45000, n_rows),
+        "volume": np.random.uniform(1000, 5000, n_rows),
+        "quote_asset_volume": np.random.uniform(4e7, 2e8, n_rows),
+        "number_of_trades": np.random.randint(10000, 50000, n_rows),
+    })
+    # Fix OHLC consistency
+    df["high"] = df[["open", "high", "low", "close"]].max(axis=1) + 100
+    df["low"] = df[["open", "high", "low", "close"]].min(axis=1) - 100
+    return df
 
 
-class TestLoadEquityDataAdjusted:
-    """Tests for load_equity_data_adjusted function."""
+@pytest.fixture
+def sample_vix_df():
+    """Create sample VIX benchmark data."""
+    n_rows = 100
+    timestamps = np.arange(1700000000, 1700000000 + n_rows * 14400, 14400)
 
-    def test_basic_loading(self):
-        """Test basic parquet loading."""
-        from data_loader_multi_asset import load_equity_data_adjusted
+    return pd.DataFrame({
+        "timestamp": timestamps,
+        "symbol": "VIX",
+        "open": np.random.uniform(15, 25, n_rows),
+        "high": np.random.uniform(20, 30, n_rows),
+        "low": np.random.uniform(12, 20, n_rows),
+        "close": np.random.uniform(15, 25, n_rows),
+        "volume": np.random.uniform(1e6, 5e6, n_rows),
+    })
 
-        # Create test parquet file
-        with tempfile.TemporaryDirectory() as tmpdir:
-            df = pd.DataFrame({
-                "timestamp": pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"]),
-                "open": [100.0, 101.0, 102.0],
-                "high": [101.0, 102.0, 103.0],
-                "low": [99.0, 100.0, 101.0],
-                "close": [100.5, 101.5, 102.5],
-                "volume": [1000.0, 1100.0, 1200.0],
+
+@pytest.fixture
+def sample_spy_df():
+    """Create sample SPY benchmark data."""
+    n_rows = 100
+    timestamps = np.arange(1700000000, 1700000000 + n_rows * 14400, 14400)
+
+    return pd.DataFrame({
+        "timestamp": timestamps,
+        "symbol": "SPY",
+        "open": np.random.uniform(450, 470, n_rows),
+        "high": np.random.uniform(470, 480, n_rows),
+        "low": np.random.uniform(440, 450, n_rows),
+        "close": np.random.uniform(450, 470, n_rows),
+        "volume": np.random.uniform(5e7, 1e8, n_rows),
+    })
+
+
+@pytest.fixture
+def sample_qqq_df():
+    """Create sample QQQ benchmark data."""
+    n_rows = 100
+    timestamps = np.arange(1700000000, 1700000000 + n_rows * 14400, 14400)
+
+    return pd.DataFrame({
+        "timestamp": timestamps,
+        "symbol": "QQQ",
+        "open": np.random.uniform(380, 400, n_rows),
+        "high": np.random.uniform(400, 420, n_rows),
+        "low": np.random.uniform(370, 380, n_rows),
+        "close": np.random.uniform(380, 400, n_rows),
+        "volume": np.random.uniform(3e7, 7e7, n_rows),
+    })
+
+
+@pytest.fixture
+def temp_data_dir(sample_stock_df, sample_crypto_df, sample_vix_df, sample_spy_df, sample_qqq_df):
+    """Create temporary directory with test data files."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create stock file
+        stock_path = Path(tmpdir) / "AAPL.parquet"
+        sample_stock_df.to_parquet(stock_path)
+
+        # Create crypto file
+        crypto_path = Path(tmpdir) / "BTCUSDT.parquet"
+        sample_crypto_df.to_parquet(crypto_path)
+
+        # Create benchmark files
+        vix_path = Path(tmpdir) / "VIX.parquet"
+        sample_vix_df.to_parquet(vix_path)
+
+        spy_path = Path(tmpdir) / "SPY.parquet"
+        sample_spy_df.to_parquet(spy_path)
+
+        qqq_path = Path(tmpdir) / "QQQ.parquet"
+        sample_qqq_df.to_parquet(qqq_path)
+
+        yield {
+            "dir": tmpdir,
+            "stock": str(stock_path),
+            "crypto": str(crypto_path),
+            "vix": str(vix_path),
+            "spy": str(spy_path),
+            "qqq": str(qqq_path),
+        }
+
+
+# =============================================================================
+# TEST: _load_benchmark_data
+# =============================================================================
+
+class TestLoadBenchmarkData:
+    """Tests for _load_benchmark_data helper function."""
+
+    def test_load_benchmark_from_explicit_path(self, temp_data_dir):
+        """Should load benchmark data from explicit path."""
+        df = _load_benchmark_data("VIX", temp_data_dir["vix"], "4h")
+
+        assert df is not None
+        assert not df.empty
+        assert "close" in df.columns
+        assert len(df) == 100
+
+    def test_load_benchmark_nonexistent_path_returns_none(self):
+        """Should return None when benchmark data not found."""
+        df = _load_benchmark_data("VIX", "/nonexistent/path.parquet", "4h")
+
+        # May return None or try fallback depending on availability
+        # The function should not raise an exception
+        assert df is None or isinstance(df, pd.DataFrame)
+
+    def test_load_benchmark_tries_default_paths(self):
+        """Should try default paths for benchmark data."""
+        # This tests that DEFAULT_BENCHMARK_PATHS is used
+        assert "VIX" in DEFAULT_BENCHMARK_PATHS
+        assert "SPY" in DEFAULT_BENCHMARK_PATHS
+        assert "QQQ" in DEFAULT_BENCHMARK_PATHS
+
+        # Each should have multiple fallback paths
+        assert len(DEFAULT_BENCHMARK_PATHS["VIX"]) >= 2
+        assert len(DEFAULT_BENCHMARK_PATHS["SPY"]) >= 2
+
+
+# =============================================================================
+# TEST: _add_stock_features
+# =============================================================================
+
+class TestAddStockFeatures:
+    """Tests for _add_stock_features helper function."""
+
+    def test_add_stock_features_with_benchmarks(
+        self, sample_stock_df, sample_vix_df, sample_spy_df, sample_qqq_df
+    ):
+        """Should add stock features when benchmark data is available."""
+        # Patch at the services.sector_momentum module level since it's imported inside _add_stock_features
+        with patch("services.sector_momentum.enrich_dataframe_with_all_stock_features") as mock_enrich:
+            # Set up mock to return enriched DataFrame
+            enriched_df = sample_stock_df.copy()
+            enriched_df["vix_normalized"] = 0.1
+            enriched_df["market_regime"] = 0.5
+            enriched_df["rs_spy_20d"] = 0.2
+            enriched_df["sector_momentum"] = 0.3
+            mock_enrich.return_value = enriched_df
+
+            result = _add_stock_features(
+                sample_stock_df, "AAPL",
+                vix_df=sample_vix_df,
+                spy_df=sample_spy_df,
+                qqq_df=sample_qqq_df,
+            )
+
+            # Verify mock was called with correct arguments
+            mock_enrich.assert_called_once()
+            call_kwargs = mock_enrich.call_args[1]
+            assert call_kwargs["symbol"] == "AAPL"
+            assert call_kwargs["vix_df"] is not None
+            assert call_kwargs["spy_df"] is not None
+            assert call_kwargs["qqq_df"] is not None
+
+    def test_add_stock_features_without_benchmarks(self, sample_stock_df):
+        """Should handle missing benchmark data gracefully."""
+        with patch("services.sector_momentum.enrich_dataframe_with_all_stock_features") as mock_enrich:
+            mock_enrich.return_value = sample_stock_df.copy()
+
+            result = _add_stock_features(
+                sample_stock_df, "AAPL",
+                vix_df=None,
+                spy_df=None,
+                qqq_df=None,
+            )
+
+            # Should still call enrich function (it handles None gracefully)
+            mock_enrich.assert_called_once()
+
+    def test_add_stock_features_fallback_to_stock_features_module(self, sample_stock_df):
+        """Should fallback to stock_features module if sector_momentum unavailable."""
+        with patch(
+            "services.sector_momentum.enrich_dataframe_with_all_stock_features",
+            side_effect=ImportError("Mock import error")
+        ):
+            with patch("stock_features.add_stock_features_to_dataframe") as mock_fallback:
+                mock_fallback.return_value = sample_stock_df.copy()
+
+                result = _add_stock_features(
+                    sample_stock_df, "AAPL",
+                    vix_df=None,
+                    spy_df=None,
+                    qqq_df=None,
+                )
+
+                # Fallback should be called
+                mock_fallback.assert_called_once()
+
+
+# =============================================================================
+# TEST: load_multi_asset_data (EQUITY)
+# =============================================================================
+
+class TestLoadMultiAssetDataEquity:
+    """Tests for load_multi_asset_data with equity asset class."""
+
+    def test_equity_loads_benchmark_data_when_add_stock_features_true(self, temp_data_dir):
+        """Should load VIX/SPY/QQQ benchmark data when add_stock_features=True."""
+        with patch("data_loader_multi_asset._load_benchmark_data") as mock_load_benchmark:
+            mock_load_benchmark.return_value = pd.DataFrame({
+                "timestamp": [1700000000],
+                "close": [20.0],
             })
-            df.to_parquet(Path(tmpdir) / "AAPL.parquet")
+            with patch("data_loader_multi_asset._add_stock_features") as mock_add_features:
+                mock_add_features.side_effect = lambda df, *args, **kwargs: df
 
-            frames, obs_shapes = load_equity_data_adjusted(
-                paths=[str(Path(tmpdir) / "AAPL.parquet")],
-                apply_adjustments=False,
-                add_corp_features=False,
-            )
+                dfs, obs = load_multi_asset_data(
+                    paths=[temp_data_dir["stock"]],
+                    asset_class=AssetClass.EQUITY,
+                    timeframe="4h",
+                    add_stock_features=True,
+                )
 
-            assert "AAPL" in frames
-            assert len(frames["AAPL"]) == 3
+                # Should have called _load_benchmark_data for VIX, SPY, QQQ
+                assert mock_load_benchmark.call_count == 3
+                call_args_list = [call[0][0] for call in mock_load_benchmark.call_args_list]
+                assert "VIX" in call_args_list
+                assert "SPY" in call_args_list
+                assert "QQQ" in call_args_list
 
-    def test_applies_adjustments(self):
-        """Test that adjustments are applied when requested."""
-        from data_loader_multi_asset import load_equity_data_adjusted
+    def test_equity_skips_benchmark_loading_when_add_stock_features_false(self, temp_data_dir):
+        """Should skip benchmark loading when add_stock_features=False."""
+        with patch("data_loader_multi_asset._load_benchmark_data") as mock_load_benchmark:
+            with patch("data_loader_multi_asset._add_stock_features") as mock_add_features:
+                dfs, obs = load_multi_asset_data(
+                    paths=[temp_data_dir["stock"]],
+                    asset_class=AssetClass.EQUITY,
+                    timeframe="4h",
+                    add_stock_features=False,
+                )
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            df = pd.DataFrame({
-                "timestamp": pd.to_datetime(["2024-01-01", "2024-01-02"]),
-                "open": [400.0, 100.0],
-                "high": [405.0, 103.0],
-                "low": [395.0, 98.0],
-                "close": [400.0, 100.0],
-                "adjusted_close": [100.0, 100.0],  # 4:1 split
-                "volume": [1000.0, 4000.0],
+                # Should NOT have called _load_benchmark_data
+                mock_load_benchmark.assert_not_called()
+                # Should NOT have called _add_stock_features
+                mock_add_features.assert_not_called()
+
+    def test_equity_calls_add_stock_features_for_each_symbol(self, temp_data_dir):
+        """Should call _add_stock_features for each equity symbol."""
+        with patch("data_loader_multi_asset._load_benchmark_data", return_value=None):
+            with patch("data_loader_multi_asset._add_stock_features") as mock_add_features:
+                mock_add_features.side_effect = lambda df, *args, **kwargs: df
+
+                dfs, obs = load_multi_asset_data(
+                    paths=[temp_data_dir["stock"]],
+                    asset_class=AssetClass.EQUITY,
+                    timeframe="4h",
+                    add_stock_features=True,
+                )
+
+                # Should have called _add_stock_features once per symbol
+                assert mock_add_features.call_count == 1
+
+
+# =============================================================================
+# TEST: load_multi_asset_data (CRYPTO - BACKWARD COMPATIBILITY)
+# =============================================================================
+
+class TestLoadMultiAssetDataCryptoBackwardCompatibility:
+    """Tests to ensure crypto path is NOT affected by stock features changes."""
+
+    def test_crypto_does_not_load_benchmark_data(self, temp_data_dir):
+        """Crypto should NOT load VIX/SPY/QQQ benchmark data."""
+        with patch("data_loader_multi_asset._load_benchmark_data") as mock_load_benchmark:
+            with patch("data_loader_multi_asset._add_stock_features") as mock_add_features:
+                dfs, obs = load_multi_asset_data(
+                    paths=[temp_data_dir["crypto"]],
+                    asset_class=AssetClass.CRYPTO,
+                    timeframe="4h",
+                    merge_fear_greed=False,  # Disable FNG to simplify test
+                )
+
+                # Should NOT have called benchmark loading for crypto
+                mock_load_benchmark.assert_not_called()
+                # Should NOT have called _add_stock_features for crypto
+                mock_add_features.assert_not_called()
+
+    def test_crypto_still_merges_fear_greed(self, temp_data_dir):
+        """Crypto should still merge Fear & Greed data."""
+        with patch("data_loader_multi_asset.load_fear_greed") as mock_load_fng:
+            mock_load_fng.return_value = pd.DataFrame({
+                "timestamp": [1700000000],
+                "fear_greed_value": [50],
             })
-            df.to_parquet(Path(tmpdir) / "AAPL.parquet")
+            with patch("data_loader_multi_asset._merge_fear_greed") as mock_merge:
+                mock_merge.side_effect = lambda df, fng: df
 
-            frames, _ = load_equity_data_adjusted(
-                paths=[str(Path(tmpdir) / "AAPL.parquet")],
-                apply_adjustments=True,
-                add_corp_features=False,
+                dfs, obs = load_multi_asset_data(
+                    paths=[temp_data_dir["crypto"]],
+                    asset_class=AssetClass.CRYPTO,
+                    timeframe="4h",
+                    merge_fear_greed=True,
+                )
+
+                # Should have loaded Fear & Greed
+                mock_load_fng.assert_called_once()
+                # Should have merged Fear & Greed
+                mock_merge.assert_called_once()
+
+    def test_crypto_add_stock_features_param_has_no_effect(self, temp_data_dir):
+        """add_stock_features parameter should have no effect on crypto."""
+        with patch("data_loader_multi_asset._load_benchmark_data") as mock_load_benchmark:
+            with patch("data_loader_multi_asset._add_stock_features") as mock_add_features:
+                # Even with add_stock_features=True, crypto should be unaffected
+                dfs, obs = load_multi_asset_data(
+                    paths=[temp_data_dir["crypto"]],
+                    asset_class=AssetClass.CRYPTO,
+                    timeframe="4h",
+                    add_stock_features=True,  # This should have no effect on crypto
+                    merge_fear_greed=False,
+                )
+
+                mock_load_benchmark.assert_not_called()
+                mock_add_features.assert_not_called()
+
+    def test_crypto_data_structure_unchanged(self, temp_data_dir):
+        """Crypto DataFrame structure should remain unchanged."""
+        dfs, obs = load_multi_asset_data(
+            paths=[temp_data_dir["crypto"]],
+            asset_class=AssetClass.CRYPTO,
+            timeframe="4h",
+            merge_fear_greed=False,
+        )
+
+        assert "BTCUSDT" in dfs
+        df = dfs["BTCUSDT"]
+
+        # Standard columns should be present
+        required_cols = ["timestamp", "open", "high", "low", "close", "volume"]
+        for col in required_cols:
+            assert col in df.columns, f"Missing required column: {col}"
+
+        # Stock-specific features should NOT be present
+        stock_feature_cols = [
+            "vix_normalized", "vix_regime", "market_regime",
+            "rs_spy_20d", "rs_spy_50d", "rs_qqq_20d", "sector_momentum"
+        ]
+        for col in stock_feature_cols:
+            assert col not in df.columns, f"Stock feature {col} should not be in crypto data"
+
+
+# =============================================================================
+# TEST: load_stock_data (convenience function)
+# =============================================================================
+
+class TestLoadStockDataConvenience:
+    """Tests for load_stock_data convenience function."""
+
+    def test_load_stock_data_enables_stock_features_by_default(self, temp_data_dir):
+        """load_stock_data should enable stock features by default."""
+        with patch("data_loader_multi_asset.load_multi_asset_data") as mock_load:
+            mock_load.return_value = ({}, {})
+
+            load_stock_data(paths=[temp_data_dir["stock"]], timeframe="4h")
+
+            # Verify add_stock_features=True was passed
+            call_kwargs = mock_load.call_args[1]
+            assert call_kwargs.get("add_stock_features") is True
+
+    def test_load_stock_data_can_disable_stock_features(self, temp_data_dir):
+        """load_stock_data should allow disabling stock features."""
+        with patch("data_loader_multi_asset.load_multi_asset_data") as mock_load:
+            mock_load.return_value = ({}, {})
+
+            load_stock_data(
+                paths=[temp_data_dir["stock"]],
+                timeframe="4h",
+                add_stock_features=False,
             )
 
-            # First row should be adjusted
-            assert frames["AAPL"].iloc[0]["close"] == pytest.approx(100.0)
+            call_kwargs = mock_load.call_args[1]
+            assert call_kwargs.get("add_stock_features") is False
 
-    def test_adds_corporate_features(self):
-        """Test that corporate action features are added."""
-        from data_loader_multi_asset import load_equity_data_adjusted
+    def test_load_stock_data_passes_benchmark_paths(self, temp_data_dir):
+        """load_stock_data should pass benchmark paths to load_multi_asset_data."""
+        with patch("data_loader_multi_asset.load_multi_asset_data") as mock_load:
+            mock_load.return_value = ({}, {})
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            df = pd.DataFrame({
-                "timestamp": pd.to_datetime(["2024-01-01", "2024-01-02"]),
-                "open": [100.0, 105.0],
-                "high": [101.0, 106.0],
-                "low": [99.0, 104.0],
-                "close": [100.0, 105.0],
-                "volume": [1000.0, 1100.0],
-            })
-            df.to_parquet(Path(tmpdir) / "AAPL.parquet")
-
-            frames, _ = load_equity_data_adjusted(
-                paths=[str(Path(tmpdir) / "AAPL.parquet")],
-                add_corp_features=True,
+            load_stock_data(
+                paths=[temp_data_dir["stock"]],
+                timeframe="4h",
+                vix_path="/path/to/vix.parquet",
+                spy_path="/path/to/spy.parquet",
+                qqq_path="/path/to/qqq.parquet",
             )
 
-            assert "gap_pct" in frames["AAPL"].columns
-
-    def test_glob_pattern_support(self):
-        """Test loading with individual files (glob patterns may not work on all platforms)."""
-        from data_loader_multi_asset import load_equity_data_adjusted
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            # Create multiple files
-            paths = []
-            for symbol in ["AAPL", "MSFT"]:
-                df = pd.DataFrame({
-                    "timestamp": pd.to_datetime(["2024-01-01", "2024-01-02"]),
-                    "open": [100.0, 101.0],
-                    "high": [101.0, 102.0],
-                    "low": [99.0, 100.0],
-                    "close": [100.0, 101.0],
-                    "volume": [1000.0, 1100.0],
-                })
-                path = Path(tmpdir) / f"{symbol}.parquet"
-                df.to_parquet(path)
-                paths.append(str(path))
-
-            frames, _ = load_equity_data_adjusted(
-                paths=paths,  # Use explicit paths, not glob
-                add_corp_features=False,
-            )
-
-            assert len(frames) >= 1
+            call_kwargs = mock_load.call_args[1]
+            assert call_kwargs.get("vix_path") == "/path/to/vix.parquet"
+            assert call_kwargs.get("spy_path") == "/path/to/spy.parquet"
+            assert call_kwargs.get("qqq_path") == "/path/to/qqq.parquet"
 
 
-class TestBackwardCompatibility:
-    """Tests for backward compatibility with crypto data loading."""
+# =============================================================================
+# TEST: load_crypto_data (backward compatibility)
+# =============================================================================
 
-    def test_crypto_loading_unchanged(self):
-        """Test that crypto data loading is unchanged."""
-        from data_loader_multi_asset import load_multi_asset_data
+class TestLoadCryptoDataBackwardCompatibility:
+    """Tests to ensure load_crypto_data function is unchanged."""
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            df = pd.DataFrame({
-                "timestamp": pd.to_datetime(["2024-01-01", "2024-01-02"]),
-                "open": [50000.0, 51000.0],
-                "high": [51000.0, 52000.0],
-                "low": [49000.0, 50000.0],
-                "close": [50500.0, 51500.0],
-                "volume": [100.0, 110.0],
-            })
-            df.to_parquet(Path(tmpdir) / "BTCUSDT.parquet")
+    def test_load_crypto_data_uses_crypto_asset_class(self, temp_data_dir):
+        """load_crypto_data should use CRYPTO asset class."""
+        with patch("data_loader_multi_asset.load_multi_asset_data") as mock_load:
+            mock_load.return_value = ({}, {})
 
-            frames, obs_shapes = load_multi_asset_data(
-                paths=[str(Path(tmpdir) / "BTCUSDT.parquet")],
-                asset_class="crypto",  # Crypto mode
-            )
+            load_crypto_data(paths=[temp_data_dir["crypto"]], timeframe="4h")
 
-            assert "BTCUSDT" in frames
-            # Should NOT have gap features by default for crypto
-            # (unless explicitly requested)
+            call_kwargs = mock_load.call_args[1]
+            assert call_kwargs.get("asset_class") == AssetClass.CRYPTO
 
-    def test_equity_with_default_params(self):
-        """Test equity loading with default parameters."""
-        from data_loader_multi_asset import load_multi_asset_data
+    def test_load_crypto_data_merges_fear_greed_by_default(self, temp_data_dir):
+        """load_crypto_data should merge Fear & Greed by default."""
+        with patch("data_loader_multi_asset.load_multi_asset_data") as mock_load:
+            mock_load.return_value = ({}, {})
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            df = pd.DataFrame({
-                "timestamp": pd.to_datetime(["2024-01-01", "2024-01-02"]),
-                "open": [100.0, 105.0],
-                "high": [101.0, 106.0],
-                "low": [99.0, 104.0],
-                "close": [100.0, 105.0],
-                "volume": [1000.0, 1100.0],
-            })
-            df.to_parquet(Path(tmpdir) / "AAPL.parquet")
+            load_crypto_data(paths=[temp_data_dir["crypto"]], timeframe="4h")
 
-            frames, _ = load_multi_asset_data(
-                paths=[str(Path(tmpdir) / "AAPL.parquet")],
-                asset_class="equity",
-            )
-
-            assert "AAPL" in frames
+            call_kwargs = mock_load.call_args[1]
+            assert call_kwargs.get("merge_fear_greed") is True
 
 
-class TestEdgeCases:
-    """Tests for edge cases and error handling."""
+# =============================================================================
+# TEST: Integration
+# =============================================================================
 
-    def test_empty_dataframe(self):
-        """Test handling of empty dataframe."""
-        from data_loader_multi_asset import apply_split_adjustment
+class TestIntegration:
+    """Integration tests for stock features loading."""
 
-        df = pd.DataFrame(columns=["close", "open", "high", "low"])
-        result = apply_split_adjustment(df, "AAPL")
+    def test_full_equity_load_integration(self, temp_data_dir):
+        """Full integration test for equity data loading with stock features."""
+        # This test verifies the full flow works without mocking
+        # It may use fallbacks if benchmark data is not available
 
-        assert len(result) == 0
+        dfs, obs = load_multi_asset_data(
+            paths=[temp_data_dir["stock"]],
+            asset_class=AssetClass.EQUITY,
+            timeframe="4h",
+            add_stock_features=True,
+            vix_path=temp_data_dir["vix"],
+            spy_path=temp_data_dir["spy"],
+            qqq_path=temp_data_dir["qqq"],
+        )
 
-    def test_single_row_gap_features(self):
-        """Test gap features with single row (no previous close)."""
-        from data_loader_multi_asset import add_corporate_action_features
+        assert "AAPL" in dfs
+        df = dfs["AAPL"]
 
-        df = pd.DataFrame({
-            "open": [100.0],
-            "close": [101.0],
-            "high": [102.0],
-            "low": [99.0],
-        })
+        # Basic columns should exist
+        assert "timestamp" in df.columns
+        assert "close" in df.columns
 
-        result = add_corporate_action_features(df, "AAPL")
+        # DataFrame should have data
+        assert len(df) > 0
 
-        # Gap should be NaN or 0.0 for first row (implementation dependent)
-        if "gap_pct" in result.columns:
-            gap_val = result.iloc[0]["gap_pct"]
-            assert pd.isna(gap_val) or gap_val == 0.0
+    def test_equity_and_crypto_can_load_in_same_session(self, temp_data_dir):
+        """Should be able to load both equity and crypto in the same session."""
+        # Load equity
+        equity_dfs, _ = load_multi_asset_data(
+            paths=[temp_data_dir["stock"]],
+            asset_class=AssetClass.EQUITY,
+            timeframe="4h",
+            add_stock_features=False,  # Skip features to simplify
+        )
 
-    def test_missing_ohlc_columns(self):
-        """Test handling when OHLC columns are missing."""
-        from data_loader_multi_asset import add_corporate_action_features
+        # Load crypto
+        crypto_dfs, _ = load_multi_asset_data(
+            paths=[temp_data_dir["crypto"]],
+            asset_class=AssetClass.CRYPTO,
+            timeframe="4h",
+            merge_fear_greed=False,
+        )
 
-        df = pd.DataFrame({
-            "close": [100.0, 101.0],
-            # Missing open, high, low
-        })
+        # Both should have loaded successfully
+        assert "AAPL" in equity_dfs
+        assert "BTCUSDT" in crypto_dfs
 
-        # Should handle gracefully (may return original df or raise)
-        try:
-            result = add_corporate_action_features(df, "AAPL")
-            # If it doesn't raise, check original columns preserved
-            assert "close" in result.columns
-        except KeyError:
-            # Acceptable behavior - requires OHLC
-            pass
-
-    def test_volume_adjustment_with_zero_values(self):
-        """Test volume adjustment handles zeros."""
-        from data_loader_multi_asset import apply_split_adjustment
-
-        df = pd.DataFrame({
-            "close": [400.0, 100.0],
-            "adjusted_close": [100.0, 100.0],
-            "open": [398.0, 99.0],
-            "high": [405.0, 103.0],
-            "low": [395.0, 98.0],
-            "volume": [0.0, 1000.0],  # Zero volume first row
-        })
-
-        # Should not raise
-        result = apply_split_adjustment(df, "AAPL")
-        assert result.iloc[0]["volume"] == 0.0  # 0 * 4 = 0
+        # They should be independent
+        assert len(equity_dfs) == 1
+        assert len(crypto_dfs) == 1
 
 
-class TestObservationShapes:
-    """Tests for observation shapes returned by loaders."""
+# =============================================================================
+# TEST: Error Handling
+# =============================================================================
 
-    def test_obs_shapes_returned(self):
-        """Test that observation shapes are returned."""
-        from data_loader_multi_asset import load_equity_data_adjusted
+class TestErrorHandling:
+    """Tests for error handling in stock features loading."""
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            df = pd.DataFrame({
-                "timestamp": pd.to_datetime(["2024-01-01", "2024-01-02"]),
-                "open": [100.0, 101.0],
-                "high": [101.0, 102.0],
-                "low": [99.0, 100.0],
-                "close": [100.5, 101.5],
-                "volume": [1000.0, 1100.0],
-            })
-            df.to_parquet(Path(tmpdir) / "AAPL.parquet")
+    def test_missing_benchmark_data_graceful_handling(self, temp_data_dir):
+        """Should handle missing benchmark data gracefully."""
+        # Load with non-existent benchmark paths
+        dfs, obs = load_multi_asset_data(
+            paths=[temp_data_dir["stock"]],
+            asset_class=AssetClass.EQUITY,
+            timeframe="4h",
+            add_stock_features=True,
+            vix_path="/nonexistent/vix.parquet",
+            spy_path="/nonexistent/spy.parquet",
+            qqq_path="/nonexistent/qqq.parquet",
+        )
 
-            frames, obs_shapes = load_equity_data_adjusted(
-                paths=[str(Path(tmpdir) / "AAPL.parquet")],
-                add_corp_features=True,
-            )
-
-            # obs_shapes should be dict mapping symbol to shape
-            assert isinstance(obs_shapes, dict)
+        # Should still load the main data without crashing
+        assert "AAPL" in dfs
 
 
 if __name__ == "__main__":

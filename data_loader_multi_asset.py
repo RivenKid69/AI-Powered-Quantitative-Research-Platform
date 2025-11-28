@@ -334,6 +334,7 @@ def load_from_adapter(
     config: Optional[Dict[str, Any]] = None,
     adjust_corporate_actions: bool = True,
     add_corp_features: bool = False,
+    add_stock_features: bool = True,
 ) -> Tuple[Dict[str, pd.DataFrame], Dict[str, np.ndarray]]:
     """
     Load data from market data adapter.
@@ -347,6 +348,7 @@ def load_from_adapter(
         config: Adapter configuration
         adjust_corporate_actions: Apply split/dividend adjustments (equity only)
         add_corp_features: Add corporate action features (equity only)
+        add_stock_features: Add VIX, sector momentum, relative strength features (equity only)
 
     Returns:
         (all_dfs_dict, all_obs_dict) tuple
@@ -374,6 +376,16 @@ def load_from_adapter(
     # Create adapter and fetch data
     all_dfs: Dict[str, pd.DataFrame] = {}
     all_obs: Dict[str, np.ndarray] = {}
+
+    # Load benchmark data for equities (VIX, SPY, QQQ) - done once before the loop
+    vix_df: Optional[pd.DataFrame] = None
+    spy_df: Optional[pd.DataFrame] = None
+    qqq_df: Optional[pd.DataFrame] = None
+
+    if asset_class == AssetClass.EQUITY and add_stock_features:
+        vix_df = _load_benchmark_data("VIX", None, timeframe)
+        spy_df = _load_benchmark_data("SPY", None, timeframe)
+        qqq_df = _load_benchmark_data("QQQ", None, timeframe)
 
     try:
         from adapters.registry import create_market_data_adapter
@@ -422,6 +434,11 @@ def load_from_adapter(
                     df = apply_split_adjustment(df, symbol.upper())
                 if add_corp_features:
                     df = add_corporate_action_features(df, symbol.upper())
+                # Add VIX, sector momentum, relative strength features
+                if add_stock_features:
+                    df = _add_stock_features(
+                        df, symbol.upper(), vix_df=vix_df, spy_df=spy_df, qqq_df=qqq_df
+                    )
 
             all_dfs[symbol.upper()] = df
 
@@ -430,6 +447,167 @@ def load_from_adapter(
         raise
 
     return all_dfs, all_obs
+
+
+# =============================================================================
+# BENCHMARK DATA LOADING (EQUITY)
+# =============================================================================
+
+# Default paths for benchmark data files
+DEFAULT_BENCHMARK_PATHS = {
+    "VIX": [
+        "data/raw_stocks/VIX.parquet",
+        "data/stocks/VIX.parquet",
+        "data/raw_stocks/^VIX.parquet",
+        "data/stocks/^VIX.parquet",
+    ],
+    "SPY": [
+        "data/raw_stocks/SPY.parquet",
+        "data/stocks/SPY.parquet",
+    ],
+    "QQQ": [
+        "data/raw_stocks/QQQ.parquet",
+        "data/stocks/QQQ.parquet",
+    ],
+}
+
+
+def _load_benchmark_data(
+    symbol: str,
+    explicit_path: Optional[str] = None,
+    timeframe: str = "4h",
+) -> Optional[pd.DataFrame]:
+    """
+    Load benchmark data (VIX, SPY, QQQ) for equity feature enrichment.
+
+    This function tries to load benchmark data from:
+    1. Explicit path if provided
+    2. Default paths for the symbol
+
+    Args:
+        symbol: Benchmark symbol (VIX, SPY, QQQ)
+        explicit_path: Explicit path to data file (optional)
+        timeframe: Timeframe for alignment
+
+    Returns:
+        DataFrame with benchmark data or None if not found
+    """
+    paths_to_try = []
+
+    if explicit_path:
+        paths_to_try.append(explicit_path)
+
+    # Add default paths
+    default_paths = DEFAULT_BENCHMARK_PATHS.get(symbol.upper(), [])
+    paths_to_try.extend(default_paths)
+
+    for path in paths_to_try:
+        if os.path.exists(path):
+            try:
+                df = load_from_file(path, AssetClass.EQUITY, timeframe)
+                if df is not None and not df.empty:
+                    logger.debug(f"Loaded benchmark {symbol} from {path}: {len(df)} rows")
+                    return df
+            except Exception as e:
+                logger.debug(f"Failed to load {symbol} from {path}: {e}")
+                continue
+
+    # Try to load via Yahoo adapter as fallback
+    try:
+        from adapters.yahoo.market_data import YahooMarketDataAdapter
+
+        # Map symbol to Yahoo format
+        yahoo_symbol = symbol.upper()
+        if symbol.upper() == "VIX":
+            yahoo_symbol = "^VIX"
+
+        adapter = YahooMarketDataAdapter()
+        bars = adapter.get_bars(yahoo_symbol, timeframe="1d", limit=365)
+
+        if bars:
+            rows = []
+            for bar in bars:
+                rows.append({
+                    "timestamp": bar.ts // 1000 if bar.ts > 10_000_000_000 else bar.ts,
+                    "symbol": symbol.upper(),
+                    "open": float(bar.open),
+                    "high": float(bar.high),
+                    "low": float(bar.low),
+                    "close": float(bar.close),
+                    "volume": float(bar.volume_base),
+                })
+            df = pd.DataFrame(rows)
+            if not df.empty:
+                logger.debug(f"Loaded benchmark {symbol} via Yahoo adapter: {len(df)} rows")
+                return df
+
+    except ImportError:
+        logger.debug("Yahoo adapter not available for benchmark loading")
+    except Exception as e:
+        logger.debug(f"Failed to load {symbol} via Yahoo: {e}")
+
+    logger.warning(f"Could not load benchmark data for {symbol}")
+    return None
+
+
+def _add_stock_features(
+    df: pd.DataFrame,
+    symbol: str,
+    vix_df: Optional[pd.DataFrame] = None,
+    spy_df: Optional[pd.DataFrame] = None,
+    qqq_df: Optional[pd.DataFrame] = None,
+) -> pd.DataFrame:
+    """
+    Add stock-specific features (VIX, sector momentum, relative strength) to DataFrame.
+
+    This function enriches equity DataFrames with:
+    - VIX features (vix_normalized, vix_regime)
+    - Market regime indicator
+    - Relative strength vs SPY and QQQ
+    - Sector momentum
+
+    Args:
+        df: DataFrame with stock data
+        symbol: Stock symbol
+        vix_df: VIX benchmark data (optional)
+        spy_df: SPY benchmark data (optional)
+        qqq_df: QQQ benchmark data (optional)
+
+    Returns:
+        DataFrame with stock features added
+    """
+    try:
+        from services.sector_momentum import enrich_dataframe_with_all_stock_features
+
+        df = enrich_dataframe_with_all_stock_features(
+            df=df,
+            symbol=symbol,
+            spy_df=spy_df,
+            qqq_df=qqq_df,
+            vix_df=vix_df,
+        )
+        logger.debug(f"Added stock features to {symbol}")
+
+    except ImportError as e:
+        logger.warning(f"Could not import sector_momentum service: {e}")
+        # Fallback: add features directly from stock_features module
+        try:
+            from stock_features import add_stock_features_to_dataframe
+
+            df = add_stock_features_to_dataframe(
+                df=df,
+                symbol=symbol,
+                spy_df=spy_df,
+                qqq_df=qqq_df,
+                vix_df=vix_df,
+            )
+            logger.debug(f"Added stock features to {symbol} (via fallback)")
+        except ImportError:
+            logger.warning("stock_features module not available, skipping stock features")
+    except Exception as e:
+        logger.warning(f"Error adding stock features to {symbol}: {e}")
+
+    return df
 
 
 def load_multi_asset_data(
@@ -441,6 +619,10 @@ def load_multi_asset_data(
     seed: int = 42,
     adjust_corporate_actions: bool = True,
     add_corp_features: bool = False,
+    add_stock_features: bool = True,
+    vix_path: Optional[str] = None,
+    spy_path: Optional[str] = None,
+    qqq_path: Optional[str] = None,
 ) -> Tuple[Dict[str, pd.DataFrame], Dict[str, np.ndarray]]:
     """
     Load data from multiple files with multi-asset support.
@@ -457,6 +639,10 @@ def load_multi_asset_data(
         seed: Random seed (unused)
         adjust_corporate_actions: Apply split/dividend adjustments (equity only)
         add_corp_features: Add corporate action features like gap_pct, days_to_earnings (equity only)
+        add_stock_features: Add VIX, sector momentum, relative strength features (equity only)
+        vix_path: Path to VIX data file (optional, will try default locations)
+        spy_path: Path to SPY data file (optional, will try default locations)
+        qqq_path: Path to QQQ data file (optional, will try default locations)
 
     Returns:
         (all_dfs_dict, all_obs_dict) tuple
@@ -470,6 +656,23 @@ def load_multi_asset_data(
     fng = pd.DataFrame()
     if asset_class == AssetClass.CRYPTO and merge_fear_greed:
         fng = load_fear_greed(timeframe_seconds)
+
+    # Load benchmark data for equities (VIX, SPY, QQQ)
+    vix_df: Optional[pd.DataFrame] = None
+    spy_df: Optional[pd.DataFrame] = None
+    qqq_df: Optional[pd.DataFrame] = None
+
+    if asset_class == AssetClass.EQUITY and add_stock_features:
+        vix_df = _load_benchmark_data("VIX", vix_path, timeframe)
+        spy_df = _load_benchmark_data("SPY", spy_path, timeframe)
+        qqq_df = _load_benchmark_data("QQQ", qqq_path, timeframe)
+
+        if vix_df is not None:
+            logger.info(f"Loaded VIX benchmark data: {len(vix_df)} rows")
+        if spy_df is not None:
+            logger.info(f"Loaded SPY benchmark data: {len(spy_df)} rows")
+        if qqq_df is not None:
+            logger.info(f"Loaded QQQ benchmark data: {len(qqq_df)} rows")
 
     for path in paths:
         try:
@@ -486,6 +689,11 @@ def load_multi_asset_data(
                     df = apply_split_adjustment(df, symbol)
                 if add_corp_features:
                     df = add_corporate_action_features(df, symbol)
+                # Add VIX, sector momentum, relative strength features
+                if add_stock_features:
+                    df = _add_stock_features(
+                        df, symbol, vix_df=vix_df, spy_df=spy_df, qqq_df=qqq_df
+                    )
 
             all_dfs[symbol] = df
             logger.debug(f"Loaded {symbol}: {len(df)} rows")
@@ -887,6 +1095,10 @@ def load_stock_data(
     timeframe: str = "4h",
     adjust_corporate_actions: bool = True,
     add_corp_features: bool = False,
+    add_stock_features: bool = True,
+    vix_path: Optional[str] = None,
+    spy_path: Optional[str] = None,
+    qqq_path: Optional[str] = None,
 ) -> Tuple[Dict[str, pd.DataFrame], Dict[str, np.ndarray]]:
     """
     Load stock data from files.
@@ -896,6 +1108,10 @@ def load_stock_data(
         timeframe: Bar timeframe
         adjust_corporate_actions: Apply split/dividend adjustments
         add_corp_features: Add gap, earnings, dividend features
+        add_stock_features: Add VIX, sector momentum, relative strength features
+        vix_path: Path to VIX data file (optional)
+        spy_path: Path to SPY data file (optional)
+        qqq_path: Path to QQQ data file (optional)
 
     Returns:
         (all_dfs_dict, all_obs_dict) tuple
@@ -907,6 +1123,10 @@ def load_stock_data(
         merge_fear_greed=False,
         adjust_corporate_actions=adjust_corporate_actions,
         add_corp_features=add_corp_features,
+        add_stock_features=add_stock_features,
+        vix_path=vix_path,
+        spy_path=spy_path,
+        qqq_path=qqq_path,
     )
 
 
@@ -919,6 +1139,7 @@ def load_alpaca_data(
     api_secret: Optional[str] = None,
     adjust_corporate_actions: bool = True,
     add_corp_features: bool = False,
+    add_stock_features: bool = True,
 ) -> Tuple[Dict[str, pd.DataFrame], Dict[str, np.ndarray]]:
     """
     Load stock data from Alpaca API.
@@ -932,6 +1153,7 @@ def load_alpaca_data(
         api_secret: Alpaca API secret
         adjust_corporate_actions: Apply split/dividend adjustments
         add_corp_features: Add gap, earnings, dividend features
+        add_stock_features: Add VIX, sector momentum, relative strength features
 
     Returns:
         (all_dfs_dict, all_obs_dict) tuple
@@ -951,6 +1173,7 @@ def load_alpaca_data(
         config=config,
         adjust_corporate_actions=adjust_corporate_actions,
         add_corp_features=add_corp_features,
+        add_stock_features=add_stock_features,
     )
 
 
@@ -962,6 +1185,7 @@ def load_polygon_data(
     api_key: Optional[str] = None,
     adjust_corporate_actions: bool = True,
     add_corp_features: bool = False,
+    add_stock_features: bool = True,
 ) -> Tuple[Dict[str, pd.DataFrame], Dict[str, np.ndarray]]:
     """
     Load stock data from Polygon.io API.
@@ -974,6 +1198,7 @@ def load_polygon_data(
         api_key: Polygon API key (or env POLYGON_API_KEY)
         adjust_corporate_actions: Apply split/dividend adjustments
         add_corp_features: Add gap, earnings, dividend features
+        add_stock_features: Add VIX, sector momentum, relative strength features
 
     Returns:
         (all_dfs_dict, all_obs_dict) tuple
@@ -991,4 +1216,5 @@ def load_polygon_data(
         config=config,
         adjust_corporate_actions=adjust_corporate_actions,
         add_corp_features=add_corp_features,
+        add_stock_features=add_stock_features,
     )
