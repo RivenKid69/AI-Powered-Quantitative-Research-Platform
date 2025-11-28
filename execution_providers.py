@@ -718,6 +718,778 @@ class StatisticalSlippageProvider:
         return cls(**filtered_profile)
 
 
+# =============================================================================
+# Crypto Parametric TCA Model
+# =============================================================================
+
+class VolatilityRegime(enum.Enum):
+    """Volatility regime classification."""
+    LOW = "low"
+    NORMAL = "normal"
+    HIGH = "high"
+
+
+@dataclass
+class CryptoParametricConfig:
+    """
+    Configuration for CryptoParametricSlippageProvider.
+
+    All parameters are configurable with research-backed defaults.
+
+    Attributes:
+        impact_coef_base: Base market impact coefficient (k in √participation)
+        impact_coef_range: (min, max) range for adaptive impact
+        spread_bps: Default half-spread in basis points
+
+        vol_regime_multipliers: Multipliers for each volatility regime
+        vol_lookback_periods: Number of periods for volatility regime detection
+        vol_regime_thresholds: (low, high) percentile thresholds for regime classification
+
+        imbalance_penalty_max: Maximum penalty for order book imbalance
+        funding_stress_sensitivity: Multiplier for funding rate stress
+
+        tod_curve: Time-of-day liquidity curve (24 hours, UTC)
+        btc_correlation_decay_factor: Decay factor for BTC correlation
+
+        whale_threshold: Participation ratio threshold for whale detection
+        whale_twap_adjustment: TWAP-style adjustment factor for whale orders
+
+        asymmetric_sell_premium: Extra cost for sells in downtrend
+        downtrend_threshold: Return threshold to detect downtrend
+
+        min_slippage_bps: Minimum slippage floor
+        max_slippage_bps: Maximum slippage cap
+    """
+    # Base impact parameters (Almgren-Chriss)
+    impact_coef_base: float = 0.10
+    impact_coef_range: Tuple[float, float] = (0.05, 0.15)
+    spread_bps: float = 5.0
+
+    # Volatility regime (Cont 2001)
+    vol_regime_multipliers: Dict[str, float] = field(default_factory=lambda: {
+        "low": 0.8,
+        "normal": 1.0,
+        "high": 1.5,
+    })
+    vol_lookback_periods: int = 20
+    vol_regime_thresholds: Tuple[float, float] = (25.0, 75.0)  # Percentiles
+
+    # Order book imbalance (Cont et al. 2014)
+    imbalance_penalty_max: float = 0.3
+
+    # Funding rate stress (perp-specific)
+    funding_stress_sensitivity: float = 10.0
+
+    # Time-of-day curve (Binance research: Asia/EU/US sessions)
+    # Values represent liquidity multipliers (lower = less liquidity = more slippage)
+    tod_curve: Dict[int, float] = field(default_factory=lambda: {
+        # Asia session (00:00-08:00 UTC)
+        0: 0.85, 1: 0.80, 2: 0.75, 3: 0.70, 4: 0.75, 5: 0.80, 6: 0.85, 7: 0.90,
+        # EU session (08:00-16:00 UTC)
+        8: 0.95, 9: 1.00, 10: 1.05, 11: 1.05, 12: 1.00, 13: 1.05, 14: 1.10, 15: 1.10,
+        # US session (16:00-24:00 UTC) - overlap with EU is peak
+        16: 1.15, 17: 1.15, 18: 1.10, 19: 1.05, 20: 1.00, 21: 0.95, 22: 0.90, 23: 0.85,
+    })
+
+    # BTC correlation decay (altcoin liquidity fragmentation)
+    btc_correlation_decay_factor: float = 0.5
+
+    # Whale detection
+    whale_threshold: float = 0.01  # 1% of ADV
+    whale_twap_adjustment: float = 0.7  # Reduce impact as if TWAP'd
+
+    # Asymmetric slippage
+    asymmetric_sell_premium: float = 0.2  # 20% extra cost for panic sells
+    downtrend_threshold: float = -0.02  # -2% recent return = downtrend
+
+    # Bounds
+    min_slippage_bps: float = 1.0
+    max_slippage_bps: float = 500.0
+
+    def __post_init__(self) -> None:
+        """Validate configuration parameters."""
+        if self.impact_coef_base <= 0:
+            raise ValueError("impact_coef_base must be positive")
+        if self.impact_coef_range[0] >= self.impact_coef_range[1]:
+            raise ValueError("impact_coef_range must have min < max")
+        if self.whale_threshold <= 0:
+            raise ValueError("whale_threshold must be positive")
+        if self.vol_lookback_periods < 2:
+            raise ValueError("vol_lookback_periods must be >= 2")
+
+
+class CryptoParametricSlippageProvider:
+    """
+    L2+: Smart parametric TCA model for cryptocurrency markets.
+
+    Extends the basic √participation model (Almgren-Chriss) with multiple
+    crypto-specific factors that capture real market microstructure effects.
+
+    Total Slippage Formula:
+        slippage = half_spread
+            × (1 + k × √participation)
+            × vol_regime_mult
+            × (1 + imbalance_penalty × sign(side))
+            × funding_stress
+            × (1 / tod_factor)  # Inverted: low liquidity = high slippage
+            × correlation_decay
+            × asymmetric_adjustment
+
+    Smart Features:
+        - **Regime Detection**: Auto-detects low/normal/high volatility from returns
+        - **Adaptive Impact**: Coefficient k adjusts based on trailing fill quality
+        - **Asymmetric Slippage**: Sells in downtrend cost more (panic liquidity)
+        - **Whale Detection**: Large orders (Q/ADV > 1%) get TWAP-adjusted model
+
+    References:
+        - Almgren & Chriss (2001): "Optimal Execution of Portfolio Transactions"
+        - Cont (2001): "Empirical Properties of Asset Returns: Stylized Facts"
+        - Cont, Kukanov, Stoikov (2014): "The Price Impact of Order Book Events"
+        - Kyle (1985): "Continuous Auctions and Insider Trading"
+        - Cartea, Jaimungal, Penalva (2015): "Algorithmic and HF Trading", Ch. 10
+
+    Attributes:
+        config: CryptoParametricConfig with all tunable parameters
+        _adaptive_k: Current adaptive impact coefficient
+        _fill_quality_history: Recent fill quality for adaptive adjustment
+    """
+
+    def __init__(
+        self,
+        config: Optional[CryptoParametricConfig] = None,
+        *,
+        # Convenience overrides for common parameters
+        impact_coef: Optional[float] = None,
+        spread_bps: Optional[float] = None,
+        min_slippage_bps: Optional[float] = None,
+        max_slippage_bps: Optional[float] = None,
+    ) -> None:
+        """
+        Initialize crypto parametric slippage provider.
+
+        Args:
+            config: Full configuration object (uses defaults if None)
+            impact_coef: Override base impact coefficient
+            spread_bps: Override default spread
+            min_slippage_bps: Override minimum slippage
+            max_slippage_bps: Override maximum slippage
+        """
+        self.config = config or CryptoParametricConfig()
+
+        # Apply convenience overrides
+        if impact_coef is not None:
+            self.config = CryptoParametricConfig(
+                **{**self.config.__dict__, "impact_coef_base": float(impact_coef)}
+            )
+        if spread_bps is not None:
+            self.config = CryptoParametricConfig(
+                **{**self.config.__dict__, "spread_bps": float(spread_bps)}
+            )
+        if min_slippage_bps is not None:
+            self.config = CryptoParametricConfig(
+                **{**self.config.__dict__, "min_slippage_bps": float(min_slippage_bps)}
+            )
+        if max_slippage_bps is not None:
+            self.config = CryptoParametricConfig(
+                **{**self.config.__dict__, "max_slippage_bps": float(max_slippage_bps)}
+            )
+
+        # Adaptive impact coefficient (starts at base)
+        self._adaptive_k: float = self.config.impact_coef_base
+
+        # Fill quality history for adaptive adjustment
+        # Stores (predicted_slippage, actual_slippage) tuples
+        self._fill_quality_history: List[Tuple[float, float]] = []
+        self._max_history_size: int = 100
+
+        # Volatility history for regime detection
+        self._volatility_history: List[float] = []
+
+    def compute_slippage_bps(
+        self,
+        order: Order,
+        market: MarketState,
+        participation_ratio: float,
+        *,
+        # Extended parameters for full model
+        funding_rate: Optional[float] = None,
+        btc_correlation: Optional[float] = None,
+        hour_utc: Optional[int] = None,
+        recent_returns: Optional[Sequence[float]] = None,
+        bid_depth_total: Optional[float] = None,
+        ask_depth_total: Optional[float] = None,
+    ) -> float:
+        """
+        Compute expected slippage using the full parametric model.
+
+        The model combines multiple factors to produce a realistic
+        slippage estimate that accounts for crypto-specific dynamics.
+
+        Formula:
+            slippage = half_spread × (1 + k × √participation) × Π(factors)
+
+        where Π(factors) includes volatility regime, imbalance, funding,
+        time-of-day, BTC correlation, and asymmetric adjustments.
+
+        Args:
+            order: Order to execute
+            market: Current market state
+            participation_ratio: Order size / ADV (or bar volume)
+            funding_rate: Perpetual funding rate (optional, -0.01 to +0.01 typical)
+            btc_correlation: Correlation with BTC (0.0 to 1.0, optional)
+            hour_utc: Current hour in UTC (0-23, optional)
+            recent_returns: Recent price returns for regime detection
+            bid_depth_total: Total bid depth for imbalance calculation
+            ask_depth_total: Total ask depth for imbalance calculation
+
+        Returns:
+            Expected slippage in basis points (always non-negative)
+
+        Example:
+            >>> provider = CryptoParametricSlippageProvider()
+            >>> slippage = provider.compute_slippage_bps(
+            ...     order=Order("ETHUSDT", "BUY", 10.0, "MARKET"),
+            ...     market=MarketState(timestamp=0, bid=2000.0, ask=2001.0, adv=50_000_000),
+            ...     participation_ratio=0.005,
+            ...     funding_rate=0.0003,  # Slightly positive
+            ...     btc_correlation=0.85,
+            ...     hour_utc=14,  # EU session
+            ...     recent_returns=[-0.01, 0.005, -0.008, 0.003],  # Recent returns
+            ... )
+        """
+        # =====================================================================
+        # 1. Base spread component
+        # =====================================================================
+        spread = market.get_spread_bps()
+        if spread is None or not math.isfinite(spread) or spread < 0:
+            half_spread = self.config.spread_bps / 2.0
+        else:
+            half_spread = spread / 2.0
+
+        # =====================================================================
+        # 2. √Participation impact (Almgren-Chriss 2001)
+        # =====================================================================
+        participation = max(_MIN_PARTICIPATION, abs(participation_ratio))
+
+        # Check for whale orders
+        is_whale = participation >= self.config.whale_threshold
+        k_effective = self._adaptive_k
+
+        if is_whale:
+            # Whale orders get TWAP-adjusted impact (as if slicing the order)
+            # Reference: Cartea et al. (2015), optimal execution theory
+            k_effective *= self.config.whale_twap_adjustment
+            # Also reduce effective participation as if TWAP'd over time
+            participation = participation * self.config.whale_twap_adjustment
+
+        impact_bps = k_effective * math.sqrt(participation) * 10000.0
+
+        # =====================================================================
+        # 3. Volatility regime multiplier (Cont 2001)
+        # =====================================================================
+        vol_regime = self.detect_volatility_regime(recent_returns)
+        vol_mult = self.config.vol_regime_multipliers.get(vol_regime.value, 1.0)
+
+        # Also incorporate real-time volatility from market state if available
+        if market.volatility is not None and math.isfinite(market.volatility):
+            # Scale based on deviation from typical crypto volatility (~60% annualized ≈ 0.04 daily)
+            vol_baseline = 0.04
+            vol_scale = market.volatility / vol_baseline if vol_baseline > 0 else 1.0
+            vol_mult *= min(2.0, max(0.5, vol_scale))  # Clamp to [0.5, 2.0]
+
+        # =====================================================================
+        # 4. Order book imbalance penalty (Cont et al. 2014)
+        # =====================================================================
+        imbalance_factor = 1.0
+        imbalance = self._compute_order_book_imbalance(
+            market, bid_depth_total, ask_depth_total
+        )
+
+        if imbalance is not None:
+            # Imbalance is in [-1, 1]: positive = more bids, negative = more asks
+            # For BUY: negative imbalance (more asks) is favorable
+            # For SELL: positive imbalance (more bids) is favorable
+            is_buy = str(order.side).upper() == "BUY"
+
+            # Penalty when trading against imbalance
+            if is_buy:
+                # Buying when asks are thin (positive imbalance) costs more
+                penalty = max(0.0, imbalance) * self.config.imbalance_penalty_max
+            else:
+                # Selling when bids are thin (negative imbalance) costs more
+                penalty = max(0.0, -imbalance) * self.config.imbalance_penalty_max
+
+            imbalance_factor = 1.0 + penalty
+
+        # =====================================================================
+        # 5. Funding rate stress (perp-specific, empirical)
+        # =====================================================================
+        funding_factor = 1.0
+        if funding_rate is not None and math.isfinite(funding_rate):
+            # High absolute funding = crowded trade = stress
+            # Reference: Empirical observation on Binance/FTX perps
+            funding_factor = 1.0 + abs(funding_rate) * self.config.funding_stress_sensitivity
+
+        # =====================================================================
+        # 6. Time-of-day liquidity curve (Binance research)
+        # =====================================================================
+        tod_factor = self.get_time_of_day_factor(hour_utc)
+        # Invert: high liquidity (factor > 1) reduces slippage
+        tod_adjustment = 1.0 / max(0.5, tod_factor)  # Clamp to prevent extreme values
+
+        # =====================================================================
+        # 7. BTC correlation decay (altcoin fragmentation)
+        # =====================================================================
+        correlation_decay = 1.0
+        if btc_correlation is not None and math.isfinite(btc_correlation):
+            # Lower correlation with BTC = less liquidity spillover = more slippage
+            # Reference: Empirical observation of altcoin order book depth
+            corr_clamped = max(0.0, min(1.0, btc_correlation))
+            correlation_decay = 1.0 + (1.0 - corr_clamped) * self.config.btc_correlation_decay_factor
+
+        # =====================================================================
+        # 8. Asymmetric slippage for panic sells
+        # =====================================================================
+        asymmetric_factor = 1.0
+        is_sell = str(order.side).upper() == "SELL"
+
+        if is_sell and recent_returns is not None and len(recent_returns) > 0:
+            # Check if we're in a downtrend
+            returns_array = list(recent_returns)[-self.config.vol_lookback_periods:]
+            if len(returns_array) > 0:
+                cumulative_return = sum(returns_array)
+                if cumulative_return < self.config.downtrend_threshold:
+                    # Panic selling premium: liquidity dries up when everyone exits
+                    # Reference: Brunnermeier & Pedersen (2009), liquidity spirals
+                    asymmetric_factor = 1.0 + self.config.asymmetric_sell_premium
+
+        # =====================================================================
+        # 9. Combine all factors
+        # =====================================================================
+        total_slippage = (
+            half_spread
+            * (1.0 + impact_bps / half_spread if half_spread > 0 else 1.0 + impact_bps)
+            * vol_mult
+            * imbalance_factor
+            * funding_factor
+            * tod_adjustment
+            * correlation_decay
+            * asymmetric_factor
+        )
+
+        # Apply bounds
+        total_slippage = max(self.config.min_slippage_bps, total_slippage)
+        total_slippage = min(self.config.max_slippage_bps, total_slippage)
+
+        return float(total_slippage)
+
+    def detect_volatility_regime(
+        self,
+        returns: Optional[Sequence[float]],
+    ) -> VolatilityRegime:
+        """
+        Detect current volatility regime from recent returns.
+
+        Uses rolling volatility percentile to classify into
+        LOW, NORMAL, or HIGH regime.
+
+        Method:
+            1. Compute realized volatility from returns
+            2. Update volatility history
+            3. Compare to historical percentiles
+
+        Args:
+            returns: Sequence of recent price returns
+
+        Returns:
+            VolatilityRegime classification
+
+        Reference:
+            - Cont (2001): Volatility clustering in asset returns
+        """
+        if returns is None or len(returns) < 2:
+            return VolatilityRegime.NORMAL
+
+        # Compute realized volatility (standard deviation of returns)
+        returns_list = list(returns)[-self.config.vol_lookback_periods:]
+        if len(returns_list) < 2:
+            return VolatilityRegime.NORMAL
+
+        mean_ret = sum(returns_list) / len(returns_list)
+        variance = sum((r - mean_ret) ** 2 for r in returns_list) / (len(returns_list) - 1)
+        current_vol = math.sqrt(variance) if variance > 0 else 0.0
+
+        if current_vol == 0:
+            return VolatilityRegime.NORMAL
+
+        # Update history
+        self._volatility_history.append(current_vol)
+        if len(self._volatility_history) > 500:  # Keep bounded
+            self._volatility_history = self._volatility_history[-250:]
+
+        # Need sufficient history for percentile comparison
+        if len(self._volatility_history) < 20:
+            return VolatilityRegime.NORMAL
+
+        # Compute percentile rank
+        sorted_vols = sorted(self._volatility_history)
+        rank = sum(1 for v in sorted_vols if v < current_vol)
+        percentile = (rank / len(sorted_vols)) * 100.0
+
+        low_threshold, high_threshold = self.config.vol_regime_thresholds
+
+        if percentile < low_threshold:
+            return VolatilityRegime.LOW
+        elif percentile > high_threshold:
+            return VolatilityRegime.HIGH
+        else:
+            return VolatilityRegime.NORMAL
+
+    def get_time_of_day_factor(self, hour_utc: Optional[int]) -> float:
+        """
+        Get liquidity factor based on time of day.
+
+        The factor represents relative liquidity at each hour,
+        calibrated from Binance trading activity patterns:
+        - Asia session (00:00-08:00 UTC): Lower liquidity
+        - EU session (08:00-16:00 UTC): Increasing liquidity
+        - US session (16:00-24:00 UTC): Peak during EU/US overlap
+
+        Args:
+            hour_utc: Current hour in UTC (0-23)
+
+        Returns:
+            Liquidity factor (higher = more liquidity = less slippage)
+
+        Reference:
+            - Binance trading volume analysis by hour
+            - Pagano & Schwartz (2003): Time-of-day effects in equity markets
+        """
+        if hour_utc is None:
+            return 1.0  # Default to neutral
+
+        hour_clamped = int(hour_utc) % 24
+        return self.config.tod_curve.get(hour_clamped, 1.0)
+
+    def _compute_order_book_imbalance(
+        self,
+        market: MarketState,
+        bid_depth_total: Optional[float] = None,
+        ask_depth_total: Optional[float] = None,
+    ) -> Optional[float]:
+        """
+        Compute order book imbalance.
+
+        Imbalance = (bid_depth - ask_depth) / (bid_depth + ask_depth)
+
+        Returns value in [-1, 1]:
+        - Positive: More bids than asks (bullish pressure)
+        - Negative: More asks than bids (bearish pressure)
+
+        Args:
+            market: Market state (may have bid_size, ask_size)
+            bid_depth_total: Optional pre-computed total bid depth
+            ask_depth_total: Optional pre-computed total ask depth
+
+        Returns:
+            Imbalance in [-1, 1], or None if unavailable
+
+        Reference:
+            - Cont, Kukanov, Stoikov (2014): "The Price Impact of Order Book Events"
+        """
+        # Try explicit depth first
+        bid_depth = bid_depth_total
+        ask_depth = ask_depth_total
+
+        # Fall back to top-of-book from market state
+        if bid_depth is None and market.bid_size is not None:
+            bid_depth = market.bid_size
+        if ask_depth is None and market.ask_size is not None:
+            ask_depth = market.ask_size
+
+        # Fall back to L3 depth if available
+        if bid_depth is None and market.bid_depth is not None:
+            bid_depth = sum(size for _, size in market.bid_depth)
+        if ask_depth is None and market.ask_depth is not None:
+            ask_depth = sum(size for _, size in market.ask_depth)
+
+        # Compute imbalance if both available
+        if bid_depth is not None and ask_depth is not None:
+            total = bid_depth + ask_depth
+            if total > 0:
+                return (bid_depth - ask_depth) / total
+
+        return None
+
+    def update_fill_quality(
+        self,
+        predicted_slippage_bps: float,
+        actual_slippage_bps: float,
+    ) -> None:
+        """
+        Update adaptive impact coefficient based on fill quality.
+
+        Tracks the ratio of actual to predicted slippage and adjusts
+        the impact coefficient k to minimize prediction error.
+
+        This implements a simple adaptive learning rule:
+            k_new = k_old × (1 + α × (actual/predicted - 1))
+
+        where α is a learning rate that decays with history size.
+
+        Args:
+            predicted_slippage_bps: Predicted slippage at order time
+            actual_slippage_bps: Realized slippage after fill
+
+        Reference:
+            - Online learning for execution algorithms
+            - Almgren (2003): "Optimal Execution with Nonlinear Impact Functions"
+        """
+        if predicted_slippage_bps <= 0 or actual_slippage_bps < 0:
+            return
+
+        # Add to history
+        self._fill_quality_history.append((predicted_slippage_bps, actual_slippage_bps))
+
+        # Trim history
+        if len(self._fill_quality_history) > self._max_history_size:
+            self._fill_quality_history = self._fill_quality_history[-self._max_history_size:]
+
+        # Compute adjustment based on recent prediction errors
+        if len(self._fill_quality_history) >= 10:
+            recent = self._fill_quality_history[-20:]  # Look at last 20
+            ratios = [actual / pred if pred > 0 else 1.0 for pred, actual in recent]
+            avg_ratio = sum(ratios) / len(ratios)
+
+            # Learning rate decays with history size
+            learning_rate = 0.1 / math.sqrt(len(self._fill_quality_history))
+
+            # Update adaptive k
+            adjustment = 1.0 + learning_rate * (avg_ratio - 1.0)
+            new_k = self._adaptive_k * adjustment
+
+            # Clamp to configured range
+            min_k, max_k = self.config.impact_coef_range
+            self._adaptive_k = max(min_k, min(max_k, new_k))
+
+    def reset_adaptive_state(self) -> None:
+        """Reset adaptive state to initial values."""
+        self._adaptive_k = self.config.impact_coef_base
+        self._fill_quality_history.clear()
+        self._volatility_history.clear()
+
+    def estimate_impact_cost(
+        self,
+        notional: float,
+        adv: float,
+        side: str = "BUY",
+        volatility: Optional[float] = None,
+        funding_rate: Optional[float] = None,
+        btc_correlation: Optional[float] = None,
+        hour_utc: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Pre-trade cost estimation with full model.
+
+        Useful for optimal execution planning and trade scheduling.
+
+        Args:
+            notional: Planned trade notional value
+            adv: Average daily volume
+            side: Trade side ("BUY" or "SELL")
+            volatility: Expected volatility
+            funding_rate: Current funding rate
+            btc_correlation: BTC correlation for altcoins
+            hour_utc: Planned execution hour (UTC)
+
+        Returns:
+            Dict with detailed cost breakdown and recommendations
+        """
+        if adv <= 0:
+            return {
+                "participation": 0.0,
+                "impact_bps": 0.0,
+                "impact_cost": 0.0,
+                "is_whale": False,
+                "recommendation": "Unable to estimate: ADV is zero",
+            }
+
+        participation = notional / adv
+        is_whale = participation >= self.config.whale_threshold
+
+        # Create dummy order and market for estimation
+        dummy_order = Order("ESTIMATE", side, 1.0, "MARKET")
+        dummy_market = MarketState(
+            timestamp=0,
+            volatility=volatility,
+            adv=adv,
+        )
+
+        # Compute slippage
+        impact_bps = self.compute_slippage_bps(
+            dummy_order,
+            dummy_market,
+            participation,
+            funding_rate=funding_rate,
+            btc_correlation=btc_correlation,
+            hour_utc=hour_utc,
+        )
+
+        impact_cost = notional * impact_bps / 10000.0
+
+        # Generate recommendation
+        recommendation = self._generate_execution_recommendation(
+            participation, is_whale, hour_utc, funding_rate
+        )
+
+        return {
+            "participation": participation,
+            "participation_pct": participation * 100,
+            "impact_bps": impact_bps,
+            "impact_cost": impact_cost,
+            "is_whale": is_whale,
+            "vol_regime": self.detect_volatility_regime(None).value,
+            "tod_factor": self.get_time_of_day_factor(hour_utc),
+            "recommendation": recommendation,
+        }
+
+    def _generate_execution_recommendation(
+        self,
+        participation: float,
+        is_whale: bool,
+        hour_utc: Optional[int],
+        funding_rate: Optional[float],
+    ) -> str:
+        """Generate execution recommendation based on analysis."""
+        recommendations = []
+
+        if is_whale:
+            recommendations.append(
+                f"Large order ({participation*100:.2f}% ADV). "
+                "Consider TWAP/VWAP over 2-4 hours."
+            )
+        elif participation > 0.005:
+            recommendations.append(
+                "Moderate size order. Consider splitting into 2-3 tranches."
+            )
+
+        if hour_utc is not None:
+            tod_factor = self.get_time_of_day_factor(hour_utc)
+            if tod_factor < 0.85:
+                recommendations.append(
+                    f"Low liquidity hour (UTC {hour_utc}). "
+                    "Consider delaying to EU/US overlap (14:00-18:00 UTC)."
+                )
+            elif tod_factor > 1.1:
+                recommendations.append(
+                    f"High liquidity hour (UTC {hour_utc}). Good execution window."
+                )
+
+        if funding_rate is not None and abs(funding_rate) > 0.001:
+            direction = "long" if funding_rate > 0 else "short"
+            recommendations.append(
+                f"High funding ({funding_rate*100:.3f}%). "
+                f"Crowded {direction} trade may see additional slippage."
+            )
+
+        if not recommendations:
+            return "Standard execution conditions."
+
+        return " ".join(recommendations)
+
+    @classmethod
+    def from_config(
+        cls,
+        config: Union[Mapping[str, Any], Any, None],
+        **kwargs: Any,
+    ) -> "CryptoParametricSlippageProvider":
+        """
+        Create provider from configuration dict or object.
+
+        Args:
+            config: Configuration dict, Pydantic model, or None
+            **kwargs: Override parameters
+
+        Returns:
+            CryptoParametricSlippageProvider instance
+        """
+        if config is None:
+            return cls(**kwargs)
+
+        # Extract parameters
+        params: Dict[str, Any] = {}
+
+        def _extract(cfg: Any, *keys: str, default: Any = None) -> Any:
+            for key in keys:
+                if isinstance(cfg, Mapping) and key in cfg:
+                    return cfg[key]
+                if hasattr(cfg, key):
+                    return getattr(cfg, key)
+            return default
+
+        # Map config keys to CryptoParametricConfig fields
+        if _extract(config, "impact_coef", "impact_coef_base", "k") is not None:
+            params["impact_coef"] = float(_extract(config, "impact_coef", "impact_coef_base", "k"))
+        if _extract(config, "spread_bps", "default_spread_bps") is not None:
+            params["spread_bps"] = float(_extract(config, "spread_bps", "default_spread_bps"))
+        if _extract(config, "min_slippage_bps", "min_bps") is not None:
+            params["min_slippage_bps"] = float(_extract(config, "min_slippage_bps", "min_bps"))
+        if _extract(config, "max_slippage_bps", "max_bps") is not None:
+            params["max_slippage_bps"] = float(_extract(config, "max_slippage_bps", "max_bps"))
+
+        # Allow kwargs to override
+        params.update(kwargs)
+
+        return cls(**params)
+
+    @classmethod
+    def from_profile(
+        cls,
+        profile_name: str,
+    ) -> "CryptoParametricSlippageProvider":
+        """
+        Create provider from named profile.
+
+        Available profiles:
+        - "conservative": Higher impact estimates (safer)
+        - "aggressive": Lower impact estimates (tighter)
+        - "default": Standard parameters
+
+        Args:
+            profile_name: Profile name
+
+        Returns:
+            CryptoParametricSlippageProvider instance
+        """
+        profiles: Dict[str, Dict[str, Any]] = {
+            "conservative": {
+                "impact_coef": 0.12,
+                "spread_bps": 6.0,
+                "min_slippage_bps": 2.0,
+            },
+            "aggressive": {
+                "impact_coef": 0.08,
+                "spread_bps": 4.0,
+                "min_slippage_bps": 0.5,
+            },
+            "default": {},  # Use defaults
+            "altcoin": {
+                "impact_coef": 0.15,
+                "spread_bps": 10.0,
+                "min_slippage_bps": 3.0,
+            },
+            "stablecoin": {
+                "impact_coef": 0.05,
+                "spread_bps": 1.0,
+                "min_slippage_bps": 0.1,
+                "max_slippage_bps": 50.0,
+            },
+        }
+
+        profile = profiles.get(profile_name.lower(), profiles["default"])
+        return cls(**profile)
+
+
 class OHLCVFillProvider:
     """
     L2: Fill provider based on OHLCV bar data.
