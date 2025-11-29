@@ -1,14 +1,39 @@
-# 📊 FOREX INTEGRATION PLAN - L3 Level Implementation
+# 📊 FOREX INTEGRATION PLAN - L2+ Parametric TCA with OTC Dealer Simulation
 
 ## Executive Summary
 
-Комплексный план интеграции Forex в TradingBot2 на уровне L3 (95%+ реализма симуляции), полностью параллельно crypto и equity веткам без нарушения существующего функционала.
+Комплексный план интеграции Forex в TradingBot2 с параметрической TCA моделью (L2+) и OTC dealer simulation для 95%+ реализма. Полностью параллельно crypto и equity веткам без нарушения существующего функционала.
 
-**Статус**: 📋 Plan Draft v1.0
+**Ключевое архитектурное решение**: Forex — это OTC (Over-The-Counter) рынок с дилерскими котировками, а НЕ биржевой рынок с центральным order book. Поэтому:
+- Используется **L2+ Parametric TCA** (как для crypto/equity), НЕ L3 LOB simulation
+- **OTC Dealer Simulation** — отдельный модуль в `services/`, НЕ в `lob/`
+- Концепция "L3" неприменима напрямую к OTC рынкам
+
+**Статус**: 📋 Plan v2.0 (Reviewed & Corrected)
 **Дата**: 2025-11-29
-**Estimated LOC**: 8,500-10,000
-**Estimated Tests**: 400+
-**Timeline**: 10-12 недель (1 инженер)
+**Estimated LOC**: 9,500-11,500
+**Estimated Tests**: 500+
+**Timeline**: 14-16 недель (1 инженер)
+
+---
+
+## 📏 Units Convention (ВАЖНО!)
+
+Для избежания путаницы, все единицы измерения стандартизированы:
+
+| Величина | Единица | Пример | Конверсия |
+|----------|---------|--------|-----------|
+| **Spread** | Pips | EUR/USD: 1.0 pip | 1 pip = 0.0001 (JPY: 0.01) |
+| **Slippage** | Pips | 0.5 pips | 1 pip ≈ 1 bps для EUR/USD |
+| **ADV** | USD equivalent | $500B | Через quote currency |
+| **Impact coefficient** | Dimensionless | 0.03 | k × √participation |
+| **Participation** | Fraction | 0.001 = 0.1% | Order / Session ADV |
+| **Interest rates** | Annual % | 5.25% | Fed Funds Rate |
+| **Swap points** | Pips/day | -0.5 pips/day | Long/Short asymmetric |
+
+**Pip Sizes по валютам**:
+- Standard (4 decimals): EUR, GBP, AUD, NZD, CHF, CAD → 0.0001
+- JPY pairs (2 decimals): USD/JPY, EUR/JPY, GBP/JPY → 0.01
 
 ---
 
@@ -16,16 +41,18 @@
 
 ### Функциональные
 1. **Полный pipeline** от загрузки данных до live trading
-2. **L3 уровень симуляции** (95%+ реализм)
+2. **L2+ parametric TCA** с OTC dealer simulation (95%+ реализм)
 3. **Параллельность** с crypto/equity (никаких регрессий)
 4. **Гибкая конфигурация** через YAML
-5. **100% покрытие тестами** нового функционала
+5. **100% покрытие тестами** нового функционала + регрессионные тесты
 
 ### Архитектурные
 1. Использование существующего adapter registry pattern
-2. Совместимость с feature pipeline
-3. Интеграция с risk management system
-4. Поддержка PBT/SA-PPO training
+2. `ForexParametricSlippageProvider` в `execution_providers.py` (НЕ отдельный файл)
+3. OTC dealer simulation в `services/forex_dealer.py` (НЕ в `lob/`)
+4. Интеграция с `features_pipeline.py`
+5. Интеграция с risk management system
+6. Поддержка PBT/SA-PPO training
 
 ---
 
@@ -36,32 +63,53 @@
 | Аспект | Crypto | Equity | **Forex** |
 |--------|--------|--------|-----------|
 | **Market structure** | Central LOB | Central LOB | **OTC Dealer Network** |
-| **Trading hours** | 24/7 | NYSE 9:30-16:00 ET | **Sun 5pm - Fri 4pm ET** |
+| **Simulation approach** | L3 LOB possible | L3 LOB possible | **L2+ Parametric + OTC Sim** |
+| **Trading hours** | 24/7 | NYSE 9:30-16:00 ET | **Sun 5pm - Fri 5pm ET** |
 | **Fees** | Maker/Taker % | $0 + regulatory | **Spread-based (0 commission)** |
-| **Order book** | Real LOB | Real LOB | **Dealer quotes (synthetic)** |
+| **Order book** | Real LOB | Real LOB | **Dealer quotes (no FIFO)** |
 | **Liquidity** | Varies by coin | Market cap based | **Session-dependent** |
 | **Leverage** | 1x-125x | 1x-4x (margin) | **50:1 - 500:1** |
 | **Tick size** | Varies | $0.01 | **Pip (0.0001/0.01 for JPY)** |
 | **Settlement** | T+0 | T+2 | **T+2 (spot), T+0 (rolling)** |
+| **Execution model** | Exchange matching | Exchange matching | **Last-look dealer discretion** |
 
 ### Forex Sessions (Критично для моделирования)
 
-| Session | Время (UTC) | Время (ET) | Liquidity Factor | Major Pairs |
-|---------|-------------|------------|------------------|-------------|
-| **Sydney** | 21:00-06:00 | 4pm-1am | 0.6-0.7 | AUD, NZD |
-| **Tokyo** | 00:00-09:00 | 7pm-4am | 0.7-0.85 | JPY crosses |
-| **London** | 07:00-16:00 | 2am-11am | **1.0-1.2** | EUR, GBP |
-| **New York** | 12:00-21:00 | 7am-4pm | **1.0-1.15** | USD pairs |
-| **London/NY overlap** | 12:00-16:00 | 7am-11am | **1.3-1.5** | ALL MAJORS |
+| Session | Время (UTC) | Время (ET) | Liquidity Factor | Major Pairs | Spread Multiplier |
+|---------|-------------|------------|------------------|-------------|-------------------|
+| **Sydney** | 21:00-06:00 | 4pm-1am | 0.60-0.70 | AUD, NZD | 1.4-1.6x |
+| **Tokyo** | 00:00-09:00 | 7pm-4am | 0.70-0.85 | JPY crosses | 1.2-1.4x |
+| **London** | 07:00-16:00 | 2am-11am | **1.00-1.20** | EUR, GBP | 1.0x |
+| **New York** | 12:00-21:00 | 7am-4pm | **1.00-1.15** | USD pairs | 1.0x |
+| **London/NY overlap** | 12:00-16:00 | 7am-11am | **1.30-1.50** | ALL MAJORS | **0.8x** (tightest) |
+| **Tokyo/London overlap** | 07:00-09:00 | 2am-4am | 0.85-0.95 | EUR/JPY | 1.1x |
+| **Weekend gap** | Fri 21:00 - Sun 21:00 | Closed | 0.00 | N/A | N/A |
 
-### Currency Pair Classification
+### Currency Pair Classification & Spread Profiles
 
-| Category | Examples | Typical Spread | Daily Range | ADV (est.) |
-|----------|----------|----------------|-------------|------------|
-| **Majors** | EUR/USD, USD/JPY | 0.5-1.5 pips | 50-100 pips | $500B+ |
-| **Minors** | EUR/GBP, GBP/JPY | 1.5-3 pips | 60-120 pips | $50-100B |
-| **Crosses** | EUR/JPY, GBP/CHF | 2-5 pips | 70-150 pips | $20-50B |
-| **Exotics** | USD/TRY, USD/ZAR | 10-50 pips | 200-500 pips | $1-10B |
+| Category | Examples | Retail Spread | Institutional Spread | Daily Range | ADV (BIS 2022) |
+|----------|----------|---------------|---------------------|-------------|----------------|
+| **Majors** | EUR/USD, USD/JPY, GBP/USD | 1.0-1.5 pips | 0.1-0.3 pips | 50-100 pips | $500B+ |
+| **Minors** | EUR/GBP, EUR/CHF, GBP/CHF | 1.5-3.0 pips | 0.3-0.8 pips | 40-80 pips | $50-100B |
+| **Crosses** | EUR/JPY, GBP/JPY, AUD/JPY | 2.0-5.0 pips | 0.5-1.5 pips | 70-150 pips | $20-50B |
+| **Exotics** | USD/TRY, USD/ZAR, USD/MXN | 15-80 pips | 5-30 pips | 200-500 pips | $1-10B |
+
+**Spread Profiles** (для конфигурации):
+```yaml
+spread_profiles:
+  institutional:
+    EUR_USD: 0.3
+    GBP_USD: 0.5
+    USD_JPY: 0.3
+  retail:
+    EUR_USD: 1.2
+    GBP_USD: 1.5
+    USD_JPY: 1.2
+  conservative:
+    EUR_USD: 1.8
+    GBP_USD: 2.2
+    USD_JPY: 1.8
+```
 
 ---
 
@@ -70,54 +118,64 @@
 ### Layer Integration
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        FOREX INTEGRATION                         │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐           │
-│  │   CRYPTO    │   │   EQUITY    │   │   FOREX     │           │
-│  │   (Binance) │   │  (Alpaca)   │   │   (OANDA)   │  ← NEW    │
-│  └──────┬──────┘   └──────┬──────┘   └──────┬──────┘           │
-│         │                 │                 │                   │
-│  ┌──────┴─────────────────┴─────────────────┴──────┐           │
-│  │              Adapter Registry (adapters/)        │           │
-│  └──────┬─────────────────┬─────────────────┬──────┘           │
-│         │                 │                 │                   │
-│  ┌──────┴─────────────────┴─────────────────┴──────┐           │
-│  │        Execution Providers (L2/L2+/L3)          │           │
-│  │  ┌─────────────┐  ┌─────────────┐  ┌──────────┐ │           │
-│  │  │ CryptoParam │  │ EquityParam │  │ForexParam│ │  ← NEW    │
-│  │  │ Slippage L2+│  │ Slippage L2+│  │Slippage  │ │           │
-│  │  └─────────────┘  └─────────────┘  └──────────┘ │           │
-│  └──────────────────────────────────────────────────┘           │
-│                             │                                   │
-│  ┌──────────────────────────┴──────────────────────┐           │
-│  │                 LOB Simulation (lob/)            │           │
-│  │  ┌─────────────────────────────────────────────┐│           │
-│  │  │     ForexDealerSimulator (Synthetic LOB)    ││  ← NEW    │
-│  │  │  - Multi-dealer quote aggregation           ││           │
-│  │  │  - Last-look rejection simulation           ││           │
-│  │  │  - Latency arbitrage protection             ││           │
-│  │  └─────────────────────────────────────────────┘│           │
-│  └──────────────────────────────────────────────────┘           │
-│                             │                                   │
-│  ┌──────────────────────────┴──────────────────────┐           │
-│  │            Feature Pipeline / Training           │           │
-│  │  ┌──────────┐  ┌──────────┐  ┌──────────┐      │           │
-│  │  │ FG Index │  │VIX/RS SPY│  │Carry/IR  │      │  ← NEW    │
-│  │  │ (crypto) │  │ (equity) │  │ (forex)  │      │           │
-│  │  └──────────┘  └──────────┘  └──────────┘      │           │
-│  └──────────────────────────────────────────────────┘           │
-│                             │                                   │
-│  ┌──────────────────────────┴──────────────────────┐           │
-│  │              Risk Management System              │           │
-│  │  - Position limits                               │           │
-│  │  - Drawdown guards                               │           │
-│  │  - Leverage monitoring (NEW: Forex margin)       │  ← UPDATE │
-│  │  - Kill switch                                   │           │
-│  └──────────────────────────────────────────────────┘           │
-│                                                                  │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         FOREX INTEGRATION                                │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                          │
+│  ┌─────────────┐   ┌─────────────┐   ┌─────────────┐                   │
+│  │   CRYPTO    │   │   EQUITY    │   │   FOREX     │                   │
+│  │  (Binance)  │   │  (Alpaca)   │   │  (OANDA)    │   ← NEW           │
+│  └──────┬──────┘   └──────┬──────┘   └──────┬──────┘                   │
+│         │                 │                 │                           │
+│  ┌──────┴─────────────────┴─────────────────┴──────┐                   │
+│  │              Adapter Registry (adapters/)        │                   │
+│  │  + ExchangeVendor.OANDA, .IG, .DUKASCOPY        │   ← UPDATE        │
+│  └──────┬─────────────────┬─────────────────┬──────┘                   │
+│         │                 │                 │                           │
+│  ┌──────┴─────────────────┴─────────────────┴──────┐                   │
+│  │     Unified execution_providers.py (L2+)        │                   │
+│  │  ┌───────────────┐ ┌───────────────┐ ┌────────────────┐            │
+│  │  │CryptoParametric│ │EquityParametric│ │ForexParametric │ ← NEW     │
+│  │  │SlippageProvider│ │SlippageProvider│ │SlippageProvider│           │
+│  │  └───────────────┘ └───────────────┘ └────────────────┘            │
+│  └──────────────────────────────────────────────────┘                   │
+│                             │                                           │
+│  ┌──────────────────────────┴──────────────────────┐                   │
+│  │         OTC Dealer Simulation (services/)        │   ← NEW          │
+│  │  ┌─────────────────────────────────────────────┐│                   │
+│  │  │  ForexDealerSimulator (NOT in lob/)         ││                   │
+│  │  │  - Multi-dealer quote aggregation           ││                   │
+│  │  │  - Last-look rejection simulation           ││                   │
+│  │  │  - NO queue position (OTC, not exchange)    ││                   │
+│  │  └─────────────────────────────────────────────┘│                   │
+│  └──────────────────────────────────────────────────┘                   │
+│                             │                                           │
+│  ┌──────────────────────────┴──────────────────────┐                   │
+│  │      Feature Pipeline (features_pipeline.py)     │                   │
+│  │  ┌──────────┐  ┌──────────┐  ┌───────────────┐ │                   │
+│  │  │ FG Index │  │VIX/RS SPY│  │ Carry/IR/DXY  │ │   ← NEW           │
+│  │  │ (crypto) │  │ (equity) │  │   (forex)     │ │                   │
+│  │  └──────────┘  └──────────┘  └───────────────┘ │                   │
+│  └──────────────────────────────────────────────────┘                   │
+│                             │                                           │
+│  ┌──────────────────────────┴──────────────────────┐                   │
+│  │              Services Layer                       │                   │
+│  │  ┌───────────────────┐  ┌────────────────────┐  │                   │
+│  │  │forex_position_sync│  │forex_session_router│  │   ← NEW           │
+│  │  └───────────────────┘  └────────────────────┘  │                   │
+│  └──────────────────────────────────────────────────┘                   │
+│                             │                                           │
+│  ┌──────────────────────────┴──────────────────────┐                   │
+│  │              Risk Management System              │                   │
+│  │  - Position limits                               │                   │
+│  │  - Drawdown guards                               │                   │
+│  │  - Leverage monitoring (NEW: Forex 50:1-500:1)  │   ← UPDATE        │
+│  │  - Margin call simulation                        │   ← NEW           │
+│  │  - Swap/rollover costs                           │   ← NEW           │
+│  │  - Kill switch                                   │                   │
+│  └──────────────────────────────────────────────────┘                   │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### New Files Structure
@@ -125,40 +183,57 @@
 ```
 TradingBot2/
 ├── adapters/
-│   └── oanda/                          # NEW: OANDA adapter
+│   ├── models.py                          # UPDATE: +OANDA, +IG, +DUKASCOPY
+│   ├── registry.py                        # UPDATE: +lazy loading for oanda
+│   └── oanda/                             # NEW: OANDA adapter package
 │       ├── __init__.py
-│       ├── market_data.py              # Historical + streaming data
-│       ├── fees.py                     # Spread-based fee model
-│       ├── trading_hours.py            # Forex sessions calendar
-│       ├── exchange_info.py            # Currency pairs info
-│       └── order_execution.py          # Order placement API
+│       ├── market_data.py                 # Historical + streaming data
+│       ├── fees.py                        # Spread-based fee model
+│       ├── trading_hours.py               # Forex sessions calendar (DST-aware)
+│       ├── exchange_info.py               # Currency pairs info
+│       └── order_execution.py             # Order placement API
 │
-├── lob/
-│   └── forex_dealer.py                 # NEW: Dealer quote simulation
+├── execution_providers.py                 # UPDATE: +ForexParametricSlippageProvider
+│                                          # (НЕ отдельный файл!)
 │
-├── execution_providers_forex.py        # NEW: ForexParametricSlippageProvider
-│
-├── forex_features.py                   # NEW: Forex-specific features
+├── forex_features.py                      # NEW: Forex-specific features
 │
 ├── services/
-│   └── forex_risk_guards.py            # NEW: Margin/leverage guards
+│   ├── forex_dealer.py                    # NEW: OTC dealer simulation (NOT in lob/)
+│   ├── forex_risk_guards.py               # NEW: Margin/leverage guards
+│   ├── forex_position_sync.py             # NEW: Position sync with OANDA
+│   └── forex_session_router.py            # NEW: Session-aware order routing
 │
 ├── scripts/
-│   └── download_forex_data.py          # NEW: Data downloader
+│   ├── download_forex_data.py             # NEW: Data downloader
+│   ├── download_swap_rates.py             # NEW: Swap rates from OANDA/FRED
+│   └── download_economic_calendar.py      # NEW: Economic calendar events
+│
+├── data/
+│   └── forex/
+│       ├── rates/                         # Central bank rates (FRED)
+│       ├── calendar/                      # Economic calendar events
+│       └── swaps/                         # Historical swap rates
 │
 ├── configs/
-│   ├── config_train_forex.yaml         # NEW
-│   ├── config_backtest_forex.yaml      # NEW
-│   ├── config_live_oanda.yaml          # NEW
-│   └── forex_defaults.yaml             # NEW: Forex-specific defaults
+│   ├── config_train_forex.yaml            # NEW
+│   ├── config_backtest_forex.yaml         # NEW
+│   ├── config_live_oanda.yaml             # NEW
+│   └── forex_defaults.yaml                # NEW: Forex-specific defaults
+│
+├── features_pipeline.py                   # UPDATE: +forex feature integration
 │
 └── tests/
-    ├── test_oanda_adapters.py          # NEW
-    ├── test_forex_execution_providers.py
-    ├── test_forex_features.py
-    ├── test_forex_risk_guards.py
-    ├── test_forex_dealer_simulation.py
-    └── test_forex_integration.py
+    ├── test_oanda_adapters.py             # NEW: 130 tests
+    ├── test_forex_execution_providers.py  # NEW: 100 tests
+    ├── test_forex_features.py             # NEW: 70 tests
+    ├── test_forex_dealer_simulation.py    # NEW: 80 tests
+    ├── test_forex_risk_guards.py          # NEW: 60 tests
+    ├── test_forex_position_sync.py        # NEW: 40 tests
+    ├── test_forex_session_router.py       # NEW: 30 tests
+    ├── test_forex_integration.py          # NEW: 50 tests
+    ├── test_forex_properties.py           # NEW: Property-based tests (40)
+    └── test_forex_stress.py               # NEW: Stress tests (20)
 ```
 
 ---
@@ -171,26 +246,35 @@ TradingBot2/
 
 #### 0.1 Market Research
 - [ ] Изучить OANDA v20 API documentation
-- [ ] Изучить альтернативы (IG, Dukascopy, FXCM)
-- [ ] Собрать reference spreads по currency pairs
+- [ ] Изучить альтернативы (IG Markets, Dukascopy, FXCM)
+- [ ] Собрать reference spreads по currency pairs (BIS Triennial Survey 2022)
 - [ ] Проанализировать session liquidity patterns
+- [ ] Изучить last-look mechanics (Oomen 2017)
+- [ ] Изучить OANDA API rate limits (120 requests/sec)
 
 #### 0.2 Architecture Design
 - [ ] Финализировать file structure
-- [ ] Определить interfaces для forex adapters
+- [ ] Определить interfaces для forex adapters (следуя Alpaca pattern)
 - [ ] Спланировать backward compatibility checks
+- [ ] Определить data sources:
+  - **Price data**: OANDA v20 API (primary), Dukascopy (tick data backup)
+  - **Interest rates**: FRED API (Federal Funds, ECB, BOJ, BOE rates)
+  - **Economic calendar**: OANDA Labs Calendar API + ForexFactory (backup)
+  - **Swap rates**: OANDA API `/v3/accounts/{id}/instruments` (financing field)
 
 #### 0.3 Test Infrastructure
 - [ ] Создать test fixtures для forex data
-- [ ] Настроить mock OANDA API для тестов
+- [ ] Настроить mock OANDA API для тестов (VCR pattern)
 - [ ] Добавить forex в CI/CD pipeline
+- [ ] Setup property-based testing с Hypothesis
 
 **Deliverables**:
 - Research document
 - Finalized architecture diagram
 - Test infrastructure
+- Data source mapping
 
-**Tests**: ~20 (infrastructure)
+**Tests**: ~25 (infrastructure + mock setup)
 
 ---
 
@@ -201,92 +285,195 @@ TradingBot2/
 #### 1.1 Update adapters/models.py
 
 ```python
-# Добавить в ExchangeVendor
+# =========================
+# ExchangeVendor UPDATES
+# =========================
 class ExchangeVendor(str, Enum):
+    """Supported exchange vendors."""
+    # Existing
     BINANCE = "binance"
     BINANCE_US = "binance_us"
     ALPACA = "alpaca"
     POLYGON = "polygon"
     YAHOO = "yahoo"
-    OANDA = "oanda"          # NEW
-    IG = "ig"                # NEW (alternative)
-    DUKASCOPY = "dukascopy"  # NEW (historical data)
+    # NEW: Forex vendors
+    OANDA = "oanda"              # Primary forex broker
+    IG = "ig"                    # Alternative (IG Markets)
+    DUKASCOPY = "dukascopy"      # Historical tick data
     UNKNOWN = "unknown"
 
-# Добавить forex sessions
-FOREX_SESSIONS = [
-    TradingSession(
-        session_type=SessionType.REGULAR,  # Sydney
-        start_minutes=21 * 60,  # 21:00 UTC
-        end_minutes=6 * 60,     # 06:00 UTC (next day)
-        timezone="UTC",
-        days_of_week=(0, 1, 2, 3, 4),  # Mon-Fri
-    ),
-    TradingSession(
-        session_type=SessionType.REGULAR,  # Tokyo
-        start_minutes=0,
-        end_minutes=9 * 60,
-        timezone="UTC",
-        days_of_week=(0, 1, 2, 3, 4),
-    ),
-    # ... London, New York
+    @property
+    def market_type(self) -> MarketType:
+        """Default market type for vendor."""
+        if self in (ExchangeVendor.BINANCE, ExchangeVendor.BINANCE_US):
+            return MarketType.CRYPTO_SPOT
+        elif self == ExchangeVendor.ALPACA:
+            return MarketType.EQUITY
+        elif self in (ExchangeVendor.OANDA, ExchangeVendor.IG, ExchangeVendor.DUKASCOPY):
+            return MarketType.FOREX  # NEW
+        return MarketType.CRYPTO_SPOT
+
+
+# =========================
+# MarketType.FOREX уже существует! ✓
+# =========================
+# class MarketType(str, Enum):
+#     ...
+#     FOREX = "FOREX"  # Already exists at line 37
+
+
+# =========================
+# NEW: Forex Sessions Enum
+# =========================
+class ForexSessionType(str, Enum):
+    """Forex trading session type."""
+    SYDNEY = "sydney"
+    TOKYO = "tokyo"
+    LONDON = "london"
+    NEW_YORK = "new_york"
+    LONDON_NY_OVERLAP = "london_ny_overlap"
+    TOKYO_LONDON_OVERLAP = "tokyo_london_overlap"
+    WEEKEND = "weekend"
+    OFF_HOURS = "off_hours"
+
+
+# =========================
+# NEW: Forex Session Dataclass
+# =========================
+@dataclass(frozen=True)
+class ForexSessionWindow:
+    """Forex session trading window."""
+    session_type: ForexSessionType
+    start_hour_utc: int
+    end_hour_utc: int
+    liquidity_factor: float
+    spread_multiplier: float
+    days_of_week: Tuple[int, ...] = (0, 1, 2, 3, 4)  # Mon-Fri
+
+
+FOREX_SESSION_WINDOWS: List[ForexSessionWindow] = [
+    ForexSessionWindow(ForexSessionType.SYDNEY, 21, 6, 0.65, 1.5, (0, 1, 2, 3, 4, 6)),
+    ForexSessionWindow(ForexSessionType.TOKYO, 0, 9, 0.75, 1.3, (0, 1, 2, 3, 4)),
+    ForexSessionWindow(ForexSessionType.LONDON, 7, 16, 1.10, 1.0, (0, 1, 2, 3, 4)),
+    ForexSessionWindow(ForexSessionType.NEW_YORK, 12, 21, 1.05, 1.0, (0, 1, 2, 3, 4)),
+    ForexSessionWindow(ForexSessionType.LONDON_NY_OVERLAP, 12, 16, 1.35, 0.8, (0, 1, 2, 3, 4)),
 ]
 ```
 
-#### 1.2 Update execution_providers.py
+#### 1.2 Update execution_providers.py (CRITICAL!)
+
+**ВАЖНО**: `ForexParametricSlippageProvider` добавляется в СУЩЕСТВУЮЩИЙ `execution_providers.py`, НЕ в отдельный файл!
 
 ```python
+# =========================
+# AssetClass UPDATE (line ~58)
+# =========================
 class AssetClass(enum.Enum):
+    """Asset class enumeration for execution providers."""
     CRYPTO = "crypto"
     EQUITY = "equity"
     FUTURES = "futures"
     OPTIONS = "options"
     FOREX = "forex"  # NEW
+
+
+# =========================
+# Factory function UPDATE
+# =========================
+def create_slippage_provider(
+    level: str,
+    asset_class: AssetClass,
+    config: Optional[Dict[str, Any]] = None,
+) -> SlippageProvider:
+    """Create slippage provider for asset class."""
+    if level == "L2+":
+        if asset_class == AssetClass.CRYPTO:
+            return CryptoParametricSlippageProvider(
+                config=CryptoParametricConfig(**(config or {}))
+            )
+        elif asset_class == AssetClass.EQUITY:
+            return EquityParametricSlippageProvider(
+                config=EquityParametricConfig(**(config or {}))
+            )
+        elif asset_class == AssetClass.FOREX:  # NEW
+            return ForexParametricSlippageProvider(
+                config=ForexParametricConfig(**(config or {}))
+            )
+    # ... rest of factory
 ```
 
-#### 1.3 Update data_loader_multi_asset.py
+#### 1.3 Update adapters/registry.py
 
 ```python
-class AssetClass(str, Enum):
-    CRYPTO = "crypto"
-    EQUITY = "equity"
-    FOREX = "forex"  # Already exists! ✓
-```
-
-#### 1.4 Update adapters/registry.py
-
-```python
+# Lazy loading modules (line ~165)
 self._lazy_modules: Dict[ExchangeVendor, str] = {
     ExchangeVendor.BINANCE: "adapters.binance",
+    ExchangeVendor.BINANCE_US: "adapters.binance",
     ExchangeVendor.ALPACA: "adapters.alpaca",
     ExchangeVendor.YAHOO: "adapters.yahoo",
-    ExchangeVendor.OANDA: "adapters.oanda",  # NEW
+    ExchangeVendor.OANDA: "adapters.oanda",        # NEW
+    ExchangeVendor.IG: "adapters.ig",              # NEW (future)
+    ExchangeVendor.DUKASCOPY: "adapters.dukascopy", # NEW (future)
 }
 ```
 
+#### 1.4 Verify data_loader_multi_asset.py
+
+```python
+# Already has FOREX! ✓ (line 62)
+class AssetClass(str, Enum):
+    CRYPTO = "crypto"
+    EQUITY = "equity"
+    FOREX = "forex"  # ✓ Already exists
+
+# Add OANDA to DataVendor
+class DataVendor(str, Enum):
+    BINANCE = "binance"
+    ALPACA = "alpaca"
+    POLYGON = "polygon"
+    OANDA = "oanda"      # NEW
+    CSV = "csv"
+    FEATHER = "feather"
+    PARQUET = "parquet"
+```
+
 **Deliverables**:
-- Updated enums in 4 files
-- No breaking changes to existing code
+- Updated enums in `adapters/models.py`
+- Updated `AssetClass` in `execution_providers.py`
+- Updated registry lazy loading
+- Verified `data_loader_multi_asset.py` compatibility
 - Unit tests for new enums
 
-**Tests**: ~30
+**Tests**: ~35
 
 ---
 
 ### Phase 2: OANDA Adapter Implementation (Weeks 3-4)
 
-**Цель**: Полная реализация OANDA adapter по паттерну Binance/Alpaca
+**Цель**: Полная реализация OANDA adapter по паттерну Alpaca
 
 #### 2.1 adapters/oanda/__init__.py
 
 ```python
 """
 OANDA Forex Adapter Package
+
 Supports:
 - OANDA v20 REST API
-- Streaming prices
-- Historical candles
-- Order execution
+- Streaming prices via WebSocket
+- Historical candles (M1 to M)
+- Order execution with last-look handling
+- Swap rate queries
+
+API Rate Limits:
+- 120 requests per second (streaming is separate)
+- Max 5000 candles per request
+- Burst: 200 requests allowed
+
+Environment Variables:
+- OANDA_API_KEY: API access token
+- OANDA_ACCOUNT_ID: Trading account ID
+- OANDA_PRACTICE: "true" for demo, "false" for live
 """
 from .market_data import OandaMarketDataAdapter
 from .fees import OandaFeeAdapter
@@ -303,23 +490,82 @@ __all__ = [
 ]
 ```
 
-#### 2.2 adapters/oanda/market_data.py (~400 LOC)
+#### 2.2 adapters/oanda/market_data.py (~450 LOC)
 
 ```python
+"""
+OANDA Market Data Adapter
+
+Features:
+- Historical candles with bid/ask prices
+- Real-time streaming via WebSocket
+- Auto-reconnect with exponential backoff
+- Rate limiting (120 req/s)
+
+Timeframes:
+- S5, S10, S15, S30: Seconds
+- M1, M2, M4, M5, M10, M15, M30: Minutes
+- H1, H2, H3, H4, H6, H8, H12: Hours
+- D, W, M: Day, Week, Month
+"""
+import asyncio
+import logging
+import os
+import time
+from collections import deque
+from datetime import datetime, timezone
+from decimal import Decimal
+from typing import Any, AsyncIterator, Dict, Iterator, List, Mapping, Optional
+
+from adapters.base import MarketDataAdapter
+from adapters.models import ExchangeVendor
+from core_models import Bar, Tick
+
+logger = logging.getLogger(__name__)
+
+
+class RateLimiter:
+    """Token bucket rate limiter for OANDA API."""
+
+    def __init__(self, rate: float = 120.0, burst: int = 200):
+        self.rate = rate
+        self.burst = burst
+        self._tokens = float(burst)
+        self._last_update = time.monotonic()
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        """Acquire a token, waiting if necessary."""
+        async with self._lock:
+            now = time.monotonic()
+            elapsed = now - self._last_update
+            self._tokens = min(self.burst, self._tokens + elapsed * self.rate)
+            self._last_update = now
+
+            if self._tokens < 1.0:
+                wait_time = (1.0 - self._tokens) / self.rate
+                await asyncio.sleep(wait_time)
+                self._tokens = 0.0
+            else:
+                self._tokens -= 1.0
+
+
 class OandaMarketDataAdapter(MarketDataAdapter):
-    """
-    OANDA v20 API market data adapter.
+    """OANDA v20 API market data adapter."""
 
-    Features:
-    - Historical candles (M1 to M)
-    - Real-time streaming prices
-    - Bid/ask spreads
-    - Multiple granularities
+    # OANDA API endpoints
+    PRACTICE_URL = "https://api-fxpractice.oanda.com"
+    LIVE_URL = "https://api-fxtrade.oanda.com"
+    STREAM_PRACTICE_URL = "https://stream-fxpractice.oanda.com"
+    STREAM_LIVE_URL = "https://stream-fxtrade.oanda.com"
 
-    API Endpoints:
-    - GET /v3/instruments/{instrument}/candles
-    - GET /v3/accounts/{account}/pricing/stream
-    """
+    # Timeframe mapping
+    TIMEFRAME_MAP = {
+        "1m": "M1", "5m": "M5", "15m": "M15", "30m": "M30",
+        "1h": "H1", "4h": "H4", "1d": "D", "1w": "W",
+        "M1": "M1", "M5": "M5", "M15": "M15", "M30": "M30",
+        "H1": "H1", "H4": "H4", "D": "D", "W": "W",
+    }
 
     def __init__(
         self,
@@ -327,10 +573,20 @@ class OandaMarketDataAdapter(MarketDataAdapter):
         config: Optional[Mapping[str, Any]] = None,
     ) -> None:
         super().__init__(vendor, config)
-        self._api_key = config.get("api_key") or os.getenv("OANDA_API_KEY")
-        self._account_id = config.get("account_id") or os.getenv("OANDA_ACCOUNT_ID")
-        self._practice = config.get("practice", True)  # Demo vs Live
-        self._base_url = self._get_base_url()
+        self._config = config or {}
+        self._api_key = self._config.get("api_key") or os.getenv("OANDA_API_KEY")
+        self._account_id = self._config.get("account_id") or os.getenv("OANDA_ACCOUNT_ID")
+        self._practice = self._config.get("practice", True)
+
+        if self._practice:
+            self._base_url = self.PRACTICE_URL
+            self._stream_url = self.STREAM_PRACTICE_URL
+        else:
+            self._base_url = self.LIVE_URL
+            self._stream_url = self.STREAM_LIVE_URL
+
+        self._rate_limiter = RateLimiter()
+        self._session = None
 
     def get_bars(
         self,
@@ -344,209 +600,187 @@ class OandaMarketDataAdapter(MarketDataAdapter):
         """
         Fetch historical candles from OANDA.
 
-        Symbol format: "EUR_USD", "GBP_JPY"
-        Timeframe: "M1", "M5", "M15", "H1", "H4", "D"
-        """
-        granularity = self._map_timeframe(timeframe)
-        instrument = self._normalize_symbol(symbol)
+        Args:
+            symbol: Currency pair (e.g., "EUR_USD", "GBP/JPY" -> normalized to "GBP_JPY")
+            timeframe: Bar timeframe (e.g., "1h", "4h", "1d", "H4")
+            limit: Maximum bars (max 5000 per request)
+            start_ts: Start timestamp in milliseconds
+            end_ts: End timestamp in milliseconds
 
+        Returns:
+            List of Bar objects with bid/ask/mid prices
+        """
+        instrument = self._normalize_symbol(symbol)
+        granularity = self.TIMEFRAME_MAP.get(timeframe.lower(), timeframe.upper())
+
+        # Build request
         params = {
             "granularity": granularity,
-            "count": min(limit, 5000),  # OANDA limit
+            "count": min(limit, 5000),
             "price": "MBA",  # Mid, Bid, Ask
         }
-        # ... implementation
-```
 
-#### 2.3 adapters/oanda/fees.py (~150 LOC)
+        if start_ts:
+            params["from"] = datetime.fromtimestamp(start_ts / 1000, tz=timezone.utc).isoformat()
+        if end_ts:
+            params["to"] = datetime.fromtimestamp(end_ts / 1000, tz=timezone.utc).isoformat()
 
-```python
-class OandaFeeAdapter(FeeAdapter):
-    """
-    OANDA spread-based fee model.
+        # ... API call implementation
+        return []  # Placeholder
 
-    Forex характеристики:
-    - No commission (spread only)
-    - Variable spreads by session
-    - Spread depends on pair type (major/minor/exotic)
+    def _normalize_symbol(self, symbol: str) -> str:
+        """Normalize symbol to OANDA format (EUR_USD)."""
+        return symbol.replace("/", "_").upper()
 
-    Note: Fee = 0, cost is in slippage via spread
-    """
-
-    # Typical spreads in pips (1 pip = 0.0001 for most pairs)
-    TYPICAL_SPREADS: Dict[str, float] = {
-        # Majors
-        "EUR_USD": 1.0,
-        "GBP_USD": 1.2,
-        "USD_JPY": 1.0,
-        "USD_CHF": 1.5,
-        "AUD_USD": 1.3,
-        "USD_CAD": 1.5,
-        "NZD_USD": 1.8,
-        # Minors
-        "EUR_GBP": 1.5,
-        "EUR_JPY": 1.8,
-        # Crosses
-        "GBP_JPY": 3.0,
-        # Exotics
-        "USD_TRY": 30.0,
-        "USD_ZAR": 50.0,
-    }
-
-    def compute_fee(
+    async def stream_prices_async(
         self,
-        notional: float,
-        side: Side,
-        liquidity: Union[str, Liquidity],
-        *,
-        symbol: Optional[str] = None,
-        qty: Optional[float] = None,
-        price: Optional[float] = None,
-    ) -> float:
+        symbols: List[str],
+    ) -> AsyncIterator[Tick]:
         """
-        Forex fee = 0 (spread-based).
-        Actual cost captured in slippage model.
+        Stream real-time prices via WebSocket.
+
+        Yields:
+            Tick objects with bid/ask prices
         """
-        return 0.0  # Commission-free
+        # ... WebSocket implementation
+        pass
 ```
 
-#### 2.4 adapters/oanda/trading_hours.py (~250 LOC)
+#### 2.3 adapters/oanda/trading_hours.py (~300 LOC)
 
 ```python
+"""
+Forex Trading Hours Adapter with DST Awareness
+
+Forex Market Hours:
+- Opens: Sunday 5:00 PM ET (21:00 UTC winter, 20:00 UTC summer)
+- Closes: Friday 5:00 PM ET
+- Daily rollover: 5:00 PM ET
+
+DST Handling:
+- US DST: Second Sunday March to First Sunday November
+- Rollover time shifts between 21:00 and 22:00 UTC
+"""
+import logging
+from datetime import datetime, timezone, timedelta
+from typing import Optional, Tuple
+from zoneinfo import ZoneInfo
+
+from adapters.base import TradingHoursAdapter
+from adapters.models import ExchangeVendor, ForexSessionType, ForexSessionWindow
+
+logger = logging.getLogger(__name__)
+
+
 class OandaTradingHoursAdapter(TradingHoursAdapter):
-    """
-    Forex trading hours adapter.
+    """Forex trading hours adapter with DST awareness."""
 
-    Forex Market Hours (ET):
-    - Opens: Sunday 5:00 PM ET
-    - Closes: Friday 4:00 PM ET
-    - Daily rollover: 5:00 PM ET
+    # US Eastern timezone
+    ET = ZoneInfo("America/New_York")
 
-    Sessions with varying liquidity:
-    - Sydney: 5pm-2am ET
-    - Tokyo: 7pm-4am ET
-    - London: 3am-12pm ET
-    - New York: 8am-5pm ET
-    """
+    # Rollover time in ET (constant regardless of DST)
+    ROLLOVER_HOUR_ET = 17  # 5:00 PM ET
 
     def is_market_open(
         self,
         ts: int,
         *,
-        session_type: Optional[SessionType] = None,
+        session_type: Optional[str] = None,
     ) -> bool:
-        """Check if forex market is open."""
-        dt = datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
-        weekday = dt.weekday()
+        """
+        Check if forex market is open.
+
+        Args:
+            ts: Unix timestamp in milliseconds
+            session_type: Optional session filter
+
+        Returns:
+            True if market is open
+        """
+        dt_utc = datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
+        dt_et = dt_utc.astimezone(self.ET)
+        weekday = dt_et.weekday()
+        hour_et = dt_et.hour
 
         # Closed Saturday all day
-        if weekday == 5:
+        if weekday == 5:  # Saturday
             return False
 
-        # Sunday: opens at 21:00 UTC (5pm ET)
-        if weekday == 6:
-            return dt.hour >= 21
+        # Sunday: opens at 5pm ET
+        if weekday == 6:  # Sunday
+            return hour_et >= self.ROLLOVER_HOUR_ET
 
-        # Friday: closes at 21:00 UTC (5pm ET)
-        if weekday == 4:
-            return dt.hour < 21
+        # Friday: closes at 5pm ET
+        if weekday == 4:  # Friday
+            return hour_et < self.ROLLOVER_HOUR_ET
 
         # Mon-Thu: 24 hours
         return True
 
-    def get_current_session(self, ts: int) -> ForexSession:
+    def get_current_session(self, ts: int) -> Tuple[ForexSessionType, float, float]:
         """
-        Determine current forex session for liquidity modeling.
+        Determine current forex session.
 
         Returns:
-            ForexSession enum: SYDNEY, TOKYO, LONDON, NEW_YORK, OVERLAP
+            (session_type, liquidity_factor, spread_multiplier)
         """
-        # ... implementation
-```
+        dt_utc = datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
+        hour_utc = dt_utc.hour
+        weekday = dt_utc.weekday()
 
-#### 2.5 adapters/oanda/exchange_info.py (~200 LOC)
+        # Weekend
+        if weekday == 5 or (weekday == 6 and hour_utc < 21):
+            return (ForexSessionType.WEEKEND, 0.0, float('inf'))
 
-```python
-class OandaExchangeInfoAdapter(ExchangeInfoAdapter):
-    """
-    OANDA instruments information.
+        # Check overlaps first (they take priority)
+        if 12 <= hour_utc < 16:
+            return (ForexSessionType.LONDON_NY_OVERLAP, 1.35, 0.8)
+        if 7 <= hour_utc < 9:
+            return (ForexSessionType.TOKYO_LONDON_OVERLAP, 0.90, 1.1)
 
-    Provides:
-    - Available currency pairs
-    - Pip values and sizes
-    - Min/max trade sizes
-    - Margin requirements
-    """
+        # Individual sessions
+        if 21 <= hour_utc or hour_utc < 6:
+            return (ForexSessionType.SYDNEY, 0.65, 1.5)
+        if 0 <= hour_utc < 9:
+            return (ForexSessionType.TOKYO, 0.75, 1.3)
+        if 7 <= hour_utc < 16:
+            return (ForexSessionType.LONDON, 1.10, 1.0)
+        if 12 <= hour_utc < 21:
+            return (ForexSessionType.NEW_YORK, 1.05, 1.0)
 
-    def get_symbol_info(self, symbol: str) -> Optional[SymbolInfo]:
-        """Get forex pair information."""
-        instrument = self._normalize_symbol(symbol)
+        return (ForexSessionType.OFF_HOURS, 0.50, 2.0)
 
-        # API call to /v3/accounts/{account}/instruments
-        # ...
+    def get_rollover_time_utc(self, date: datetime) -> datetime:
+        """
+        Get rollover time in UTC for a given date (DST-aware).
 
-        return SymbolInfo(
-            symbol=symbol,
-            vendor=ExchangeVendor.OANDA,
-            market_type=MarketType.FOREX,
-            exchange_rule=ExchangeRule(
-                symbol=symbol,
-                tick_size=self._get_pip_size(symbol),  # 0.0001 or 0.01
-                step_size=Decimal("1"),  # 1 unit
-                min_notional=Decimal("1"),  # $1 minimum
-                min_qty=Decimal("1"),
-                max_qty=Decimal("100000000"),  # 100M units
-                market_type=MarketType.FOREX,
-                base_asset=symbol[:3],
-                quote_asset=symbol[4:],
-            ),
+        Returns:
+            Rollover datetime in UTC
+        """
+        # Create 5pm ET for the date
+        dt_et = date.replace(
+            hour=self.ROLLOVER_HOUR_ET,
+            minute=0,
+            second=0,
+            microsecond=0,
+            tzinfo=self.ET
         )
+        return dt_et.astimezone(timezone.utc)
 ```
 
-#### 2.6 adapters/oanda/order_execution.py (~350 LOC)
+#### 2.4 - 2.6: Other Adapters (fees.py, exchange_info.py, order_execution.py)
 
-```python
-class OandaOrderExecutionAdapter(OrderExecutionAdapter):
-    """
-    OANDA order execution adapter.
-
-    Order Types:
-    - Market: Execute at current price
-    - Limit: Execute at specified price or better
-    - Stop: Trigger market order at price
-    - Stop-Limit: Trigger limit order at price
-
-    Special Features:
-    - Take Profit / Stop Loss
-    - Trailing Stop
-    - Guaranteed Stop Loss (premium)
-    """
-
-    def submit_order(self, order: Order) -> OrderResult:
-        """Submit order to OANDA."""
-        endpoint = f"/v3/accounts/{self._account_id}/orders"
-
-        body = {
-            "order": {
-                "instrument": self._normalize_symbol(order.symbol),
-                "units": str(int(order.qty * (1 if order.is_buy else -1))),
-                "type": self._map_order_type(order.order_type),
-                "timeInForce": order.time_in_force,
-            }
-        }
-
-        if order.order_type == "LIMIT":
-            body["order"]["price"] = str(order.limit_price)
-
-        # ... API call
-```
+*Similar patterns to Alpaca adapters - see Phase 2 in original plan*
 
 **Deliverables**:
 - Complete OANDA adapter package (5 files)
+- Rate limiting implementation
+- DST-aware trading hours
 - Registration in adapter registry
 - Environment variable support
+- Async streaming support
 
-**Tests**: ~120
+**Tests**: ~130 (including rate limit tests, DST edge cases)
 
 ---
 
@@ -554,26 +788,31 @@ class OandaOrderExecutionAdapter(OrderExecutionAdapter):
 
 **Цель**: Research-backed parametric TCA model для Forex
 
-#### 3.1 execution_providers_forex.py (~600 LOC)
+**ВАЖНО**: Добавляется в СУЩЕСТВУЮЩИЙ `execution_providers.py`, следуя паттерну `CryptoParametricSlippageProvider` и `EquityParametricSlippageProvider`.
+
+#### 3.1 Добавить в execution_providers.py (~550 LOC addition)
 
 ```python
 """
 Forex Parametric TCA Model (L2+)
 
-Extends Almgren-Chriss √participation with forex-specific factors:
+Extends Almgren-Chriss √participation with 8 forex-specific factors:
 1. √Participation impact (base)
-2. Session liquidity curve (Tokyo/London/NY)
+2. Session liquidity (Sydney/Tokyo/London/NY/overlaps)
 3. Spread regime (tight/normal/wide)
 4. Interest rate differential (carry)
-5. Volatility regime
+5. Volatility regime (ATR-based)
 6. News event proximity
-7. Correlation with DXY
-8. Pair type multiplier (major/minor/exotic)
+7. DXY correlation (for non-USD pairs)
+8. Pair type multiplier (major/minor/cross/exotic)
 
 References:
 - Lyons (2001): "The Microstructure Approach to Exchange Rates"
 - Evans & Lyons (2002): "Order Flow and Exchange Rate Dynamics"
 - Berger et al. (2008): "The Development of the Global FX Market"
+- King, Osler, Rime (2012): "Foreign Exchange Market Structure"
+- BIS (2022): Triennial Central Bank Survey of FX Markets
+- Chaboud et al. (2014): "Rise of the Machines" (Algorithmic FX Trading)
 """
 
 class ForexSession(enum.Enum):
@@ -585,14 +824,15 @@ class ForexSession(enum.Enum):
     LONDON_NY_OVERLAP = "london_ny_overlap"
     TOKYO_LONDON_OVERLAP = "tokyo_london_overlap"
     OFF_HOURS = "off_hours"
+    WEEKEND = "weekend"
 
 
 class PairType(enum.Enum):
     """Currency pair classification."""
-    MAJOR = "major"      # EUR/USD, USD/JPY, GBP/USD, etc.
-    MINOR = "minor"      # EUR/GBP, EUR/CHF, etc.
-    CROSS = "cross"      # GBP/JPY, EUR/JPY, etc.
-    EXOTIC = "exotic"    # USD/TRY, USD/ZAR, etc.
+    MAJOR = "major"      # G7 pairs: EUR/USD, USD/JPY, GBP/USD, USD/CHF, AUD/USD, USD/CAD, NZD/USD
+    MINOR = "minor"      # Cross without USD: EUR/GBP, EUR/CHF, GBP/CHF
+    CROSS = "cross"      # JPY crosses: EUR/JPY, GBP/JPY, AUD/JPY
+    EXOTIC = "exotic"    # EM currencies: USD/TRY, USD/ZAR, USD/MXN, USD/PLN
 
 
 @dataclass
@@ -600,67 +840,87 @@ class ForexParametricConfig:
     """
     Configuration for ForexParametricSlippageProvider.
 
-    All spreads in pips (1 pip = 0.0001 for most pairs).
+    All spreads and slippage values are in PIPS (not bps).
+    1 pip = 0.0001 for most pairs, 0.01 for JPY pairs.
     """
-    # Base impact (Almgren-Chriss)
-    impact_coef_base: float = 0.03  # Lower than crypto (more liquid)
+    # Base impact coefficient (Almgren-Chriss style)
+    # Lower than crypto (0.10) and equity (0.05) due to higher FX liquidity
+    impact_coef_base: float = 0.03
     impact_coef_range: Tuple[float, float] = (0.02, 0.05)
 
-    # Default spreads by pair type (pips)
-    default_spreads: Dict[str, float] = field(default_factory=lambda: {
-        "major": 1.0,
+    # Default spreads by pair type (pips) - RETAIL profile
+    # Override with spread_profile for institutional
+    default_spreads_pips: Dict[str, float] = field(default_factory=lambda: {
+        "major": 1.2,
         "minor": 2.0,
         "cross": 3.0,
-        "exotic": 20.0,
+        "exotic": 25.0,
     })
 
-    # Session liquidity multipliers
+    # Spread profiles for different client types
+    spread_profiles: Dict[str, Dict[str, float]] = field(default_factory=lambda: {
+        "institutional": {"major": 0.3, "minor": 0.8, "cross": 1.5, "exotic": 8.0},
+        "retail": {"major": 1.2, "minor": 2.0, "cross": 3.0, "exotic": 25.0},
+        "conservative": {"major": 1.8, "minor": 3.0, "cross": 4.5, "exotic": 40.0},
+    })
+
+    # Session liquidity factors (1.0 = normal liquidity)
     session_liquidity: Dict[str, float] = field(default_factory=lambda: {
         "sydney": 0.65,
         "tokyo": 0.75,
         "london": 1.10,
         "new_york": 1.05,
-        "london_ny_overlap": 1.30,
+        "london_ny_overlap": 1.35,
         "tokyo_london_overlap": 0.90,
         "off_hours": 0.50,
+        "weekend": 0.0,  # Market closed
     })
 
     # Interest rate differential sensitivity
-    carry_sensitivity: float = 0.05  # 5% adjustment per 1% rate diff
+    # Positive carry = tighter spreads (more market makers)
+    carry_sensitivity: float = 0.03  # 3% slippage adjustment per 1% rate differential
 
-    # DXY correlation decay (for non-USD pairs)
-    dxy_correlation_decay: float = 0.3
+    # DXY correlation decay for non-USD pairs
+    # Low correlation with DXY = less USD liquidity spillover
+    dxy_correlation_decay: float = 0.25
 
-    # News event impact
+    # News event impact multipliers
     news_event_multipliers: Dict[str, float] = field(default_factory=lambda: {
-        "nfp": 2.5,           # Non-Farm Payrolls
-        "fomc": 2.0,          # Fed decisions
-        "ecb": 1.8,           # ECB decisions
-        "boe": 1.5,           # Bank of England
-        "cpi": 1.5,           # Inflation data
-        "gdp": 1.3,           # GDP releases
-        "other": 1.2,
+        "nfp": 3.0,           # Non-Farm Payrolls (huge impact)
+        "fomc": 2.5,          # Fed decisions
+        "ecb": 2.0,           # ECB decisions
+        "boe": 1.8,           # Bank of England
+        "boj": 1.8,           # Bank of Japan
+        "rba": 1.5,           # Reserve Bank of Australia
+        "cpi": 1.8,           # Inflation data
+        "gdp": 1.5,           # GDP releases
+        "pmi": 1.3,           # PMI data
+        "retail_sales": 1.2,
+        "other": 1.1,
     })
 
-    # Pair type multipliers (base slippage adjustment)
+    # Pair type slippage multipliers
     pair_type_multipliers: Dict[str, float] = field(default_factory=lambda: {
         "major": 1.0,
-        "minor": 1.3,
-        "cross": 1.6,
-        "exotic": 3.0,
+        "minor": 1.4,
+        "cross": 1.8,
+        "exotic": 3.5,
     })
 
-    # Volatility regime
+    # Volatility regime multipliers
     vol_regime_multipliers: Dict[str, float] = field(default_factory=lambda: {
-        "low": 0.85,
-        "normal": 1.0,
-        "high": 1.4,
-        "extreme": 2.0,  # Flash crash scenarios
+        "low": 0.80,      # VIX-equivalent < 10
+        "normal": 1.00,   # VIX-equivalent 10-20
+        "high": 1.50,     # VIX-equivalent 20-30
+        "extreme": 2.50,  # VIX-equivalent > 30 (flash crash, crisis)
     })
 
-    # Bounds
-    min_slippage_pips: float = 0.1
-    max_slippage_pips: float = 100.0
+    # Bounds (in pips)
+    min_slippage_pips: float = 0.05
+    max_slippage_pips: float = 150.0  # For exotic pairs during news
+
+    # Adaptive coefficient learning rate
+    adaptive_learning_rate: float = 0.1
 
 
 class ForexParametricSlippageProvider:
@@ -668,29 +928,74 @@ class ForexParametricSlippageProvider:
     L2+: Smart parametric TCA model for forex markets.
 
     Formula:
-        slippage_pips = half_spread
-            × (1 + k × √participation)
-            × session_liquidity_factor
-            × volatility_regime
-            × (1 + carry_adjustment)
-            × dxy_correlation_factor
-            × news_event_factor
-            × pair_type_multiplier
+        slippage_pips = half_spread_pips
+            × (1 + k × √participation)          # Almgren-Chriss impact
+            × (1 / session_liquidity_factor)    # Session adjustment
+            × volatility_regime_mult            # Vol regime
+            × (1 + carry_adjustment)            # Interest rate differential
+            × dxy_correlation_factor            # USD liquidity spillover
+            × news_event_factor                 # Economic calendar
+            × pair_type_multiplier              # Major/Minor/Exotic
 
     Key differences from Crypto/Equity:
-    - Spreads in pips, not basis points
-    - Session-based liquidity (not hour-of-day)
+    - All values in PIPS, not basis points
+    - Session-based liquidity (overlaps are best)
     - Carry trade considerations
-    - No central LOB (dealer quotes)
-    - Different market structure (OTC vs exchange)
+    - No central LOB (OTC dealer market)
+    - Last-look rejection handled separately
     """
+
+    # Currency pair classifications
+    MAJORS = frozenset({
+        "EUR_USD", "USD_JPY", "GBP_USD", "USD_CHF",
+        "AUD_USD", "USD_CAD", "NZD_USD"
+    })
+    MINORS = frozenset({
+        "EUR_GBP", "EUR_CHF", "GBP_CHF", "EUR_AUD",
+        "EUR_CAD", "EUR_NZD", "GBP_AUD", "GBP_CAD"
+    })
+    EXOTICS = frozenset({
+        "USD_TRY", "USD_ZAR", "USD_MXN", "USD_PLN",
+        "USD_HUF", "USD_CZK", "USD_SGD", "USD_HKD",
+        "USD_NOK", "USD_SEK", "USD_DKK"
+    })
 
     def __init__(
         self,
         config: Optional[ForexParametricConfig] = None,
+        spread_profile: str = "retail",
     ) -> None:
         self.config = config or ForexParametricConfig()
+        self.spread_profile = spread_profile
         self._adaptive_k: float = self.config.impact_coef_base
+        self._fill_quality_history: List[Tuple[float, float]] = []
+
+    @classmethod
+    def from_profile(cls, profile: str) -> "ForexParametricSlippageProvider":
+        """
+        Create provider from named profile.
+
+        Profiles:
+        - "retail": Standard retail spreads (default)
+        - "institutional": Tight institutional spreads
+        - "conservative": Wider spreads for safety margin
+        - "major_only": Optimized for major pairs
+        - "exotic": Wider spreads for exotic pairs
+        """
+        profiles = {
+            "retail": ForexParametricConfig(),
+            "institutional": ForexParametricConfig(
+                impact_coef_base=0.02,
+                min_slippage_pips=0.02,
+            ),
+            "conservative": ForexParametricConfig(
+                impact_coef_base=0.04,
+                min_slippage_pips=0.1,
+                max_slippage_pips=200.0,
+            ),
+        }
+        config = profiles.get(profile, ForexParametricConfig())
+        return cls(config=config, spread_profile=profile)
 
     def compute_slippage_pips(
         self,
@@ -700,7 +1005,7 @@ class ForexParametricSlippageProvider:
         *,
         session: Optional[ForexSession] = None,
         pair_type: Optional[PairType] = None,
-        interest_rate_diff: Optional[float] = None,  # Base - Quote rate
+        interest_rate_diff: Optional[float] = None,
         dxy_correlation: Optional[float] = None,
         upcoming_news: Optional[str] = None,
         recent_returns: Optional[Sequence[float]] = None,
@@ -714,50 +1019,53 @@ class ForexParametricSlippageProvider:
             participation_ratio: Order size / estimated session volume
             session: Current forex session
             pair_type: Currency pair classification
-            interest_rate_diff: Interest rate differential (base - quote)
-            dxy_correlation: Correlation with Dollar Index
-            upcoming_news: Type of upcoming economic news
-            recent_returns: Recent returns for volatility regime
+            interest_rate_diff: Base rate - Quote rate (annual %)
+            dxy_correlation: Correlation with Dollar Index (-1 to 1)
+            upcoming_news: Type of upcoming economic event
+            recent_returns: Recent returns for volatility regime detection
 
         Returns:
-            Expected slippage in pips
+            Expected slippage in pips (always positive)
         """
-        # 1. Base spread from pair type
+        # 1. Determine pair type and get base spread
         pair_type = pair_type or self._classify_pair(order.symbol)
-        half_spread = self.config.default_spreads[pair_type.value] / 2.0
+        spreads = self.config.spread_profiles.get(
+            self.spread_profile,
+            self.config.default_spreads_pips
+        )
+        half_spread = spreads.get(pair_type.value, 1.5) / 2.0
 
-        # Override with market spread if available
-        if market.spread_bps is not None:
-            # Convert bps to pips (approximate)
+        # Override with market spread if available (convert bps to pips)
+        if market.spread_bps is not None and math.isfinite(market.spread_bps):
+            # 1 pip ≈ 1 bps for most pairs (rough approximation)
             half_spread = market.spread_bps / 10.0 / 2.0
 
-        # 2. √Participation impact
+        # 2. √Participation impact (Almgren-Chriss)
         participation = max(1e-12, abs(participation_ratio))
         impact = self._adaptive_k * math.sqrt(participation)
 
-        # 3. Session liquidity
+        # 3. Session liquidity adjustment
         session = session or self._detect_session(market.timestamp)
-        session_factor = self.config.session_liquidity.get(
-            session.value, 1.0
-        )
-        # Invert: low liquidity = more slippage
-        session_adjustment = 1.0 / max(0.3, session_factor)
+        session_factor = self.config.session_liquidity.get(session.value, 1.0)
+
+        # Invert: low liquidity = higher slippage
+        session_adjustment = 1.0 / max(0.3, session_factor) if session_factor > 0 else 10.0
 
         # 4. Volatility regime
         vol_regime = self._detect_volatility_regime(recent_returns)
         vol_mult = self.config.vol_regime_multipliers.get(vol_regime, 1.0)
 
-        # 5. Carry adjustment (high carry = tighter markets)
+        # 5. Carry adjustment
         carry_factor = 1.0
         if interest_rate_diff is not None:
-            # Positive carry (long base, short quote) = more liquidity
+            # Positive carry (long high-yield) = more liquidity = lower slippage
             carry_factor = 1.0 - interest_rate_diff * self.config.carry_sensitivity
-            carry_factor = max(0.8, min(1.3, carry_factor))
+            carry_factor = max(0.7, min(1.4, carry_factor))
 
-        # 6. DXY correlation (for non-USD pairs)
+        # 6. DXY correlation (for non-USD pairs only)
         dxy_factor = 1.0
-        if dxy_correlation is not None and "USD" not in order.symbol:
-            # Lower correlation = less liquidity spillover
+        if dxy_correlation is not None and not self._has_usd(order.symbol):
+            # Lower correlation with USD = less liquidity spillover
             dxy_factor = 1.0 + (1.0 - abs(dxy_correlation)) * self.config.dxy_correlation_decay
 
         # 7. News event impact
@@ -773,7 +1081,7 @@ class ForexParametricSlippageProvider:
         # Combine all factors
         total_slippage = (
             half_spread
-            * (1.0 + impact * 10000)  # Scale impact
+            * (1.0 + impact)  # Impact term is already dimensionless
             * session_adjustment
             * vol_mult
             * carry_factor
@@ -790,26 +1098,31 @@ class ForexParametricSlippageProvider:
 
     def _classify_pair(self, symbol: str) -> PairType:
         """Classify currency pair."""
-        MAJORS = {"EUR_USD", "USD_JPY", "GBP_USD", "USD_CHF",
-                  "AUD_USD", "USD_CAD", "NZD_USD"}
-        MINORS = {"EUR_GBP", "EUR_CHF", "GBP_CHF", "EUR_AUD"}
-        EXOTICS = {"USD_TRY", "USD_ZAR", "USD_MXN", "USD_PLN"}
-
         norm = symbol.replace("/", "_").upper()
-        if norm in MAJORS:
+        if norm in self.MAJORS:
             return PairType.MAJOR
-        if norm in MINORS:
+        if norm in self.MINORS:
             return PairType.MINOR
-        if norm in EXOTICS:
+        if norm in self.EXOTICS:
             return PairType.EXOTIC
         return PairType.CROSS
+
+    def _has_usd(self, symbol: str) -> bool:
+        """Check if pair contains USD."""
+        norm = symbol.replace("/", "_").upper()
+        return "USD" in norm
 
     def _detect_session(self, timestamp: int) -> ForexSession:
         """Detect current forex session from timestamp."""
         dt = datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
         hour = dt.hour
+        weekday = dt.weekday()
 
-        # Check overlaps first
+        # Weekend check
+        if weekday == 5 or (weekday == 6 and hour < 21):
+            return ForexSession.WEEKEND
+
+        # Check overlaps first (priority)
         if 12 <= hour < 16:
             return ForexSession.LONDON_NY_OVERLAP
         if 7 <= hour < 9:
@@ -826,185 +1139,443 @@ class ForexParametricSlippageProvider:
             return ForexSession.NEW_YORK
 
         return ForexSession.OFF_HOURS
+
+    def _detect_volatility_regime(
+        self,
+        recent_returns: Optional[Sequence[float]],
+    ) -> str:
+        """Detect volatility regime from recent returns."""
+        if recent_returns is None or len(recent_returns) < 5:
+            return "normal"
+
+        std = float(np.std(recent_returns))
+        annualized_vol = std * math.sqrt(252 * 6)  # Assuming 4h bars
+
+        if annualized_vol < 0.05:
+            return "low"
+        elif annualized_vol < 0.10:
+            return "normal"
+        elif annualized_vol < 0.20:
+            return "high"
+        else:
+            return "extreme"
+
+    def update_fill_quality(self, predicted: float, actual: float) -> None:
+        """
+        Update adaptive impact coefficient based on fill quality.
+
+        Called after each fill to calibrate the model.
+        """
+        self._fill_quality_history.append((predicted, actual))
+
+        # Keep last 100 fills
+        if len(self._fill_quality_history) > 100:
+            self._fill_quality_history = self._fill_quality_history[-100:]
+
+        # Adjust k based on prediction error
+        if len(self._fill_quality_history) >= 10:
+            errors = [(a - p) / max(0.1, p) for p, a in self._fill_quality_history[-10:]]
+            mean_error = sum(errors) / len(errors)
+
+            # If we're consistently under/over predicting, adjust k
+            k_min, k_max = self.config.impact_coef_range
+            adjustment = 1.0 + mean_error * self.config.adaptive_learning_rate
+            self._adaptive_k = max(k_min, min(k_max, self._adaptive_k * adjustment))
 ```
 
 **Deliverables**:
-- ForexParametricSlippageProvider
-- ForexFeeProvider (spread-based)
-- Factory function integration
-- Profiles: major, exotic, news-sensitive
+- `ForexParametricSlippageProvider` added to `execution_providers.py`
+- `ForexParametricConfig` with all 8 factors
+- `ForexFeeProvider` (returns 0, cost is in spread)
+- Factory function updates
+- Spread profiles: institutional, retail, conservative
+- Adaptive coefficient learning
 
-**Tests**: ~90
+**Tests**: ~100
 
 ---
 
-### Phase 4: Forex Features Pipeline (Week 7)
+### Phase 4: Forex Features Pipeline (Weeks 7-8)
 
-**Цель**: Forex-специфичные features для training
+**Цель**: Forex-специфичные features + integration с существующим pipeline
 
-#### 4.1 forex_features.py (~400 LOC)
+#### 4.1 forex_features.py (~450 LOC)
 
 ```python
 """
 Forex-specific features for ML training.
 
-Features:
-1. Interest Rate Differential (Carry)
-2. Relative Strength vs DXY
-3. Session indicator (one-hot)
+Features parallel to crypto Fear&Greed and equity VIX:
+1. Interest Rate Differential (Carry) - analogous to funding rate
+2. Relative Strength vs DXY - analogous to RS vs SPY
+3. Session indicators (one-hot)
 4. Spread regime
 5. COT positioning (Commitments of Traders)
-6. News calendar proximity
+6. Economic calendar proximity
 7. Cross-currency momentum
-8. Volatility term structure
+8. Implied volatility (FX VIX equivalent)
+
+Data Sources:
+- Interest rates: FRED API (Federal Reserve Economic Data)
+- DXY: Yahoo Finance (DX-Y.NYB)
+- COT: CFTC weekly reports
+- Economic calendar: OANDA Labs API / ForexFactory
+- Implied vol: OANDA streaming quotes
+
+References:
+- Brunnermeier et al. (2008): "Carry Trades and Currency Crashes"
+- Lustig & Verdelhan (2007): "The Cross Section of Foreign Currency Risk Premia"
 """
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
+
+
+class ForexFeatureConfig:
+    """Configuration for forex feature calculation."""
+
+    # FRED series IDs for central bank rates
+    RATE_SERIES: Dict[str, str] = {
+        "USD": "FEDFUNDS",      # Federal Funds Rate
+        "EUR": "ECBDFR",        # ECB Deposit Facility Rate
+        "GBP": "IUDSOIA",       # BOE Official Bank Rate
+        "JPY": "IRSTCI01JPM156N", # BOJ Policy Rate
+        "CHF": "IRSTCI01CHM156N", # SNB Policy Rate
+        "AUD": "RBATCTR",       # RBA Cash Rate
+        "CAD": "IRSTCB01CAM156N", # BOC Policy Rate
+        "NZD": "RBATCTR",       # RBNZ Official Cash Rate (approx)
+    }
+
+    # Economic calendar data source
+    CALENDAR_SOURCE: str = "oanda_labs"  # or "forexfactory", "investing_com"
+
+    # COT data URL
+    COT_URL: str = "https://www.cftc.gov/dea/newcot/"
+
 
 @dataclass
 class ForexFeatures:
     """Container for forex-specific features."""
-    # Interest rates
-    base_rate: float
-    quote_rate: float
-    rate_differential: float
 
-    # DXY correlation
-    dxy_value: float
-    dxy_return_1d: float
-    rs_vs_dxy_20d: float
+    # Interest rate differential (carry)
+    base_rate: float = 0.0
+    quote_rate: float = 0.0
+    rate_differential: float = 0.0  # Annual %
+    rate_differential_norm: float = 0.0  # Normalized [-1, 1]
+    carry_valid: bool = False
 
-    # Session indicators
-    session: ForexSession
-    is_london_open: bool
-    is_ny_open: bool
-    is_overlap: bool
+    # DXY relative strength
+    dxy_value: float = 100.0
+    dxy_return_1d: float = 0.0
+    dxy_return_5d: float = 0.0
+    rs_vs_dxy_20d: float = 0.0
+    dxy_valid: bool = False
+
+    # Session indicators (one-hot)
+    is_sydney: bool = False
+    is_tokyo: bool = False
+    is_london: bool = False
+    is_new_york: bool = False
+    is_overlap: bool = False
+    session_liquidity: float = 1.0
 
     # Spread dynamics
-    spread_pips: float
-    spread_regime: str  # "tight", "normal", "wide"
-    spread_zscore: float
+    spread_pips: float = 1.0
+    spread_zscore: float = 0.0
+    spread_regime: str = "normal"  # "tight", "normal", "wide"
+    spread_valid: bool = False
 
-    # COT data (weekly)
-    cot_net_position: float
-    cot_change_1w: float
+    # COT positioning (weekly)
+    cot_net_long_pct: float = 0.5  # Normalized [0, 1]
+    cot_change_1w: float = 0.0
+    cot_valid: bool = False
+
+    # Economic calendar
+    hours_to_next_event: float = 999.0
+    next_event_impact: float = 0.0  # 0-3 scale
+    is_news_window: bool = False
 
     # Volatility
-    realized_vol_5d: float
-    implied_vol: Optional[float]
-    vol_term_structure: Optional[float]  # Short/Long vol ratio
+    realized_vol_5d: float = 0.0
+    realized_vol_20d: float = 0.0
+    vol_ratio: float = 1.0  # 5d / 20d
+    vol_valid: bool = False
 
 
-def calculate_interest_rate_features(
+def calculate_carry_features(
     base_currency: str,
     quote_currency: str,
-    rates_data: pd.DataFrame,
-) -> Tuple[float, float, float]:
+    rates_df: pd.DataFrame,
+    timestamp: int,
+) -> Tuple[float, float, float, bool]:
     """
     Calculate interest rate differential features.
 
-    Data sources:
-    - FRED: Federal Reserve rates
-    - ECB: Euro rates
-    - BOJ: Yen rates
+    Args:
+        base_currency: Base currency code (e.g., "EUR")
+        quote_currency: Quote currency code (e.g., "USD")
+        rates_df: DataFrame with rate columns
+        timestamp: Current timestamp (ms)
+
+    Returns:
+        (base_rate, quote_rate, differential, valid)
     """
-    base_rate = rates_data.get(f"{base_currency}_RATE", 0.0)
-    quote_rate = rates_data.get(f"{quote_currency}_RATE", 0.0)
-    diff = base_rate - quote_rate
-    return base_rate, quote_rate, diff
+    base_col = f"{base_currency}_RATE"
+    quote_col = f"{quote_currency}_RATE"
 
+    if base_col not in rates_df.columns or quote_col not in rates_df.columns:
+        return (0.0, 0.0, 0.0, False)
 
-def calculate_relative_strength_vs_dxy(
-    pair_prices: pd.Series,
-    dxy_prices: pd.Series,
-    window: int = 20,
-) -> float:
-    """
-    Calculate relative strength vs Dollar Index.
+    # Get most recent rate before timestamp
+    ts_dt = pd.Timestamp(timestamp, unit='ms', tz='UTC')
+    mask = rates_df.index <= ts_dt
 
-    Similar to RS vs SPY for stocks.
-    """
-    if len(pair_prices) < window or len(dxy_prices) < window:
-        return 0.0
+    if not mask.any():
+        return (0.0, 0.0, 0.0, False)
 
-    pair_return = (pair_prices.iloc[-1] / pair_prices.iloc[-window]) - 1
-    dxy_return = (dxy_prices.iloc[-1] / dxy_prices.iloc[-window]) - 1
+    latest = rates_df.loc[mask].iloc[-1]
+    base_rate = float(latest.get(base_col, 0.0))
+    quote_rate = float(latest.get(quote_col, 0.0))
 
-    return pair_return - dxy_return
+    return (base_rate, quote_rate, base_rate - quote_rate, True)
 ```
 
-#### 4.2 Economic Calendar Integration
+#### 4.2 Update features_pipeline.py Integration
+
+```python
+# Add to features_pipeline.py
+
+def _add_forex_features(
+    df: pd.DataFrame,
+    symbol: str,
+    forex_data: Optional[Dict[str, pd.DataFrame]] = None,
+) -> pd.DataFrame:
+    """
+    Add forex-specific features to DataFrame.
+
+    Args:
+        df: Price DataFrame with OHLCV
+        symbol: Currency pair (e.g., "EUR_USD")
+        forex_data: Optional dict with:
+            - "rates": Interest rates DataFrame
+            - "dxy": DXY prices DataFrame
+            - "calendar": Economic calendar DataFrame
+            - "cot": COT positioning DataFrame
+
+    Returns:
+        DataFrame with added forex features
+    """
+    from forex_features import calculate_carry_features
+
+    # Parse currencies
+    base, quote = symbol.split("_")
+
+    # Add carry features
+    if forex_data and "rates" in forex_data:
+        rates_df = forex_data["rates"]
+        df["carry_diff"] = df["timestamp"].apply(
+            lambda ts: calculate_carry_features(base, quote, rates_df, ts)[2]
+        )
+    else:
+        df["carry_diff"] = 0.0
+
+    # Add session indicators
+    df["session"] = df["timestamp"].apply(_detect_forex_session)
+    df["is_overlap"] = df["session"].isin(["london_ny_overlap", "tokyo_london_overlap"])
+
+    # ... more features
+
+    return df
+```
+
+#### 4.3 Economic Calendar Integration
 
 ```python
 class EconomicCalendar:
     """
-    Economic events calendar for forex.
+    Economic events calendar for forex trading.
 
-    High-impact events:
-    - Central bank decisions (FOMC, ECB, BOE, BOJ)
-    - Employment reports (NFP, UK Employment)
-    - Inflation data (CPI, PPI)
-    - GDP releases
-    - Trade balance
+    Data Sources:
+    - Primary: OANDA Labs Calendar API
+    - Backup: ForexFactory scraping
+    - Alternative: Investing.com API (unofficial)
+
+    High-Impact Events (by currency):
+    - USD: NFP, FOMC, CPI, GDP, ISM PMI
+    - EUR: ECB, German CPI, Eurozone GDP
+    - GBP: BOE, UK CPI, UK GDP
+    - JPY: BOJ, Tankan, Japan CPI
     """
 
-    HIGH_IMPACT_EVENTS: Dict[str, List[str]] = {
-        "USD": ["nfp", "fomc", "cpi", "gdp"],
-        "EUR": ["ecb", "german_cpi", "eurozone_gdp"],
-        "GBP": ["boe", "uk_cpi", "uk_gdp"],
-        "JPY": ["boj", "tankan", "japan_cpi"],
-    }
+    def __init__(self, source: str = "oanda_labs"):
+        self.source = source
+        self._cache: Dict[str, List[Dict]] = {}
+        self._last_refresh: Optional[datetime] = None
 
-    def get_next_event(
+    def get_upcoming_events(
         self,
-        currency: str,
-        current_ts: int,
-    ) -> Optional[Tuple[str, int, str]]:
-        """Get next high-impact event for currency."""
-        # Returns (event_name, timestamp, impact_level)
+        currencies: List[str],
+        hours_ahead: int = 24,
+    ) -> List[Dict[str, Any]]:
+        """Get upcoming high-impact events."""
+        # Implementation depends on source
         pass
 
-    def hours_to_next_event(
+    def hours_to_next_high_impact(
         self,
         currency: str,
         current_ts: int,
-    ) -> Optional[float]:
-        """Hours until next high-impact event."""
+    ) -> Tuple[float, str, int]:
+        """
+        Get hours until next high-impact event.
+
+        Returns:
+            (hours, event_name, impact_level)
+        """
+        pass
+```
+
+#### 4.4 Swap Rates Data Source
+
+```python
+class SwapRatesProvider:
+    """
+    Provides swap/financing rates for forex positions.
+
+    Data Sources:
+    - OANDA: /v3/accounts/{id}/instruments (financing field)
+    - Historical: Cache locally for backtesting
+
+    Swap Calculation:
+    - Long swap: (Base rate - Quote rate - Markup) / 365
+    - Short swap: (Quote rate - Base rate - Markup) / 365
+    - Wednesday: 3x swap (weekend rollover)
+    """
+
+    OANDA_INSTRUMENTS_ENDPOINT = "/v3/accounts/{account_id}/instruments"
+
+    def get_current_swaps(
+        self,
+        symbol: str,
+    ) -> Tuple[float, float]:
+        """
+        Get current swap rates from OANDA.
+
+        Returns:
+            (long_swap_pips, short_swap_pips)
+        """
+        pass
+
+    def get_historical_swaps(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> pd.DataFrame:
+        """Load historical swap rates from cache."""
         pass
 ```
 
 **Deliverables**:
-- forex_features.py
-- Economic calendar integration
-- Feature pipeline extension
-- DXY/rates data loader
+- `forex_features.py` with full feature set
+- `features_pipeline.py` integration
+- Economic calendar integration with multiple sources
+- Swap rates provider
+- COT data loader (weekly CFTC reports)
 
-**Tests**: ~60
+**Tests**: ~80 (including data source mocking)
 
 ---
 
-### Phase 5: L3 Forex Dealer Simulation (Week 8)
+### Phase 5: OTC Dealer Quote Simulation (Weeks 9-10)
 
-**Цель**: High-fidelity dealer quote simulation для 95% реализма
+**ПЕРЕИМЕНОВАНО**: Ранее называлось "L3 Forex Dealer Simulation"
 
-#### 5.1 lob/forex_dealer.py (~500 LOC)
+**ВАЖНО**: Это НЕ L3 LOB simulation! Forex — OTC рынок без центрального order book. Модуль помещается в `services/`, НЕ в `lob/`.
+
+**Цель**: High-fidelity OTC dealer quote simulation для 95% реализма
+
+#### 5.1 services/forex_dealer.py (~550 LOC)
 
 ```python
 """
-Forex Dealer Quote Simulation (L3)
+OTC Forex Dealer Quote Simulation
 
-Unlike exchange LOBs, forex is OTC with dealer quotes.
-This module simulates:
-1. Multi-dealer quote aggregation
-2. Last-look rejection
-3. Quote flickering
-4. Spread widening on size
+Unlike exchange LOBs (used for crypto/equity L3), forex is OTC with dealer quotes.
+This module simulates the dealer market structure:
+
+1. Multi-dealer quote aggregation (like ECN)
+2. Last-look rejection simulation
+3. Quote flickering (rapid updates)
+4. Size-dependent spread widening
 5. Latency arbitrage protection
-6. Time-of-day liquidity patterns
+6. Session-dependent liquidity
+
+Key Differences from LOB Simulation:
+- NO queue position (no FIFO matching)
+- NO price-time priority
+- Dealer discretion (last-look)
+- Indicative vs firm quotes
+- Request-for-quote (RFQ) model for large sizes
 
 References:
-- Oomen (2017): "Last Look" in FX
+- Oomen (2017): "Last Look" in FX - Journal of Financial Markets
 - Hasbrouck & Saar (2013): "Low-latency trading"
-- King et al. (2012): "Market structure of the FX market"
+- King, Osler, Rime (2012): "Foreign Exchange Market Structure"
+- BIS (2022): Triennial Survey - FX Market Structure
 """
+from __future__ import annotations
+
+import logging
+import math
+import random
+import time
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+
+logger = logging.getLogger(__name__)
+
+
+class QuoteType(Enum):
+    """Type of dealer quote."""
+    FIRM = "firm"          # Executable quote
+    INDICATIVE = "indicative"  # May be rejected
+    LAST_LOOK = "last_look"    # Subject to last-look window
+
+
+class RejectReason(Enum):
+    """Reason for trade rejection."""
+    NONE = "none"
+    LAST_LOOK_ADVERSE = "last_look_adverse"
+    SIZE_EXCEEDED = "size_exceeded"
+    QUOTE_EXPIRED = "quote_expired"
+    PRICE_MOVED = "price_moved"
+    LATENCY_ARBITRAGE = "latency_arbitrage"
+    DEALER_DISCRETION = "dealer_discretion"
+
+
+@dataclass
+class DealerProfile:
+    """Individual dealer characteristics."""
+    dealer_id: str
+    spread_factor: float = 1.0      # Multiplier on base spread
+    max_size_usd: float = 5_000_000  # Max single trade
+    last_look_window_ms: int = 200   # Last-look window
+    base_reject_prob: float = 0.05   # Base rejection probability
+    adverse_threshold_pips: float = 0.3  # Adverse move threshold
+    latency_ms: float = 50.0         # Quote latency
+    is_primary: bool = False         # Primary liquidity provider
+
 
 @dataclass
 class DealerQuote:
@@ -1012,464 +1583,666 @@ class DealerQuote:
     dealer_id: str
     bid: float
     ask: float
-    bid_size: float
-    ask_size: float
+    bid_size_usd: float
+    ask_size_usd: float
     timestamp_ns: int
-    is_firm: bool  # Firm vs indicative
-    max_size: float
-    valid_for_ms: int  # Quote validity window
-    last_look_ms: int  # Last-look window
+    quote_type: QuoteType
+    valid_for_ms: int
+    last_look_ms: int
+
+    @property
+    def mid(self) -> float:
+        return (self.bid + self.ask) / 2.0
+
+    @property
+    def spread_pips(self) -> float:
+        # Assuming 4-decimal pair (adjust for JPY)
+        return (self.ask - self.bid) * 10000
+
+
+@dataclass
+class AggregatedQuote:
+    """Best bid/ask across all dealers (ECN-style)."""
+    best_bid: float
+    best_ask: float
+    total_bid_size: float
+    total_ask_size: float
+    dealer_quotes: List[DealerQuote]
+    timestamp_ns: int
+
+    @property
+    def spread_pips(self) -> float:
+        return (self.best_ask - self.best_bid) * 10000
+
+
+@dataclass
+class ExecutionResult:
+    """Result of execution attempt."""
+    filled: bool
+    fill_price: Optional[float] = None
+    fill_qty: Optional[float] = None
+    dealer_id: Optional[str] = None
+    latency_ns: int = 0
+    reject_reason: RejectReason = RejectReason.NONE
+    slippage_pips: float = 0.0
+    last_look_passed: bool = True
+
+
+@dataclass
+class ForexDealerConfig:
+    """Configuration for dealer simulation."""
+    num_dealers: int = 5
+    base_spread_pips: float = 1.0
+    last_look_enabled: bool = True
+    size_impact_threshold_usd: float = 1_000_000
+    size_impact_factor: float = 0.5  # Spread widening per $1M
+    session_spread_adjustment: bool = True
+    latency_variance: float = 0.3  # Coefficient of variation
 
 
 class ForexDealerSimulator:
     """
-    Simulates multi-dealer forex market.
+    Simulates multi-dealer OTC forex market.
 
-    Key behaviors:
-    1. Multiple dealers with different spreads/sizes
-    2. Quote flickering (rapid updates)
-    3. Last-look rejection probability
-    4. Size-dependent spread widening
-    5. Session-dependent liquidity
-
-    Unlike LOB simulation:
-    - No queue position (no FIFO)
-    - Dealer discretion (last-look)
-    - Indicative vs firm quotes
+    This is fundamentally different from LOB simulation:
+    - Dealers provide quotes (no order book depth)
+    - Last-look gives dealers rejection rights
+    - No queue position (not FIFO)
+    - Price improvement possible
     """
 
     def __init__(
         self,
-        num_dealers: int = 5,
         config: Optional[ForexDealerConfig] = None,
         seed: Optional[int] = None,
     ) -> None:
         self.config = config or ForexDealerConfig()
-        self.num_dealers = num_dealers
         self._rng = np.random.default_rng(seed)
-
-        # Initialize dealers with different characteristics
         self._dealers = self._create_dealers()
 
-    def _create_dealers(self) -> List[Dealer]:
-        """Create heterogeneous dealers."""
+    def _create_dealers(self) -> List[DealerProfile]:
+        """Create heterogeneous dealer pool."""
         dealers = []
-        for i in range(self.num_dealers):
-            dealers.append(Dealer(
+        for i in range(self.config.num_dealers):
+            # First dealer is primary LP with tighter spreads
+            is_primary = (i == 0)
+            dealers.append(DealerProfile(
                 dealer_id=f"dealer_{i}",
-                spread_factor=1.0 + self._rng.uniform(-0.2, 0.3),
-                max_size=self._rng.uniform(1e6, 10e6),
-                last_look_prob=self._rng.uniform(0.02, 0.15),
-                latency_ms=self._rng.uniform(10, 100),
+                spread_factor=0.8 if is_primary else 1.0 + self._rng.uniform(-0.15, 0.25),
+                max_size_usd=10_000_000 if is_primary else self._rng.uniform(2e6, 8e6),
+                last_look_window_ms=int(150 if is_primary else self._rng.uniform(100, 300)),
+                base_reject_prob=0.02 if is_primary else self._rng.uniform(0.03, 0.12),
+                adverse_threshold_pips=0.2 if is_primary else self._rng.uniform(0.2, 0.5),
+                latency_ms=30 if is_primary else self._rng.uniform(40, 120),
+                is_primary=is_primary,
             ))
         return dealers
 
     def get_aggregated_quote(
         self,
         symbol: str,
-        session: ForexSession,
-        base_mid: float,
+        mid_price: float,
+        session_factor: float = 1.0,
+        order_size_usd: float = 100_000,
     ) -> AggregatedQuote:
         """
-        Get best bid/ask from all dealers.
+        Get aggregated quote from all dealers.
 
-        Returns aggregated (NBBO-like) quote.
+        Args:
+            symbol: Currency pair
+            mid_price: Current mid price
+            session_factor: Session liquidity factor (0.5 to 1.5)
+            order_size_usd: Indicative order size for spread adjustment
+
+        Returns:
+            AggregatedQuote with best bid/ask
         """
+        timestamp_ns = time.time_ns()
         quotes = []
-        for dealer in self._dealers:
-            quote = dealer.generate_quote(
-                symbol=symbol,
-                base_mid=base_mid,
-                session=session,
-                config=self.config,
-            )
-            quotes.append(quote)
 
-        # Aggregate: best bid, best ask
+        pip_size = 0.01 if "JPY" in symbol else 0.0001
+        base_spread = self.config.base_spread_pips * pip_size
+
+        for dealer in self._dealers:
+            # Session-adjusted spread
+            spread = base_spread * dealer.spread_factor / max(0.5, session_factor)
+
+            # Size impact
+            if order_size_usd > self.config.size_impact_threshold_usd:
+                excess = order_size_usd - self.config.size_impact_threshold_usd
+                size_widening = (excess / 1_000_000) * self.config.size_impact_factor * pip_size
+                spread += size_widening
+
+            # Add noise
+            spread *= (1 + self._rng.uniform(-0.1, 0.1))
+
+            half_spread = spread / 2
+            bid = mid_price - half_spread
+            ask = mid_price + half_spread
+
+            quotes.append(DealerQuote(
+                dealer_id=dealer.dealer_id,
+                bid=bid,
+                ask=ask,
+                bid_size_usd=dealer.max_size_usd * self._rng.uniform(0.5, 1.0),
+                ask_size_usd=dealer.max_size_usd * self._rng.uniform(0.5, 1.0),
+                timestamp_ns=timestamp_ns,
+                quote_type=QuoteType.LAST_LOOK if self.config.last_look_enabled else QuoteType.FIRM,
+                valid_for_ms=200,
+                last_look_ms=dealer.last_look_window_ms,
+            ))
+
+        # Aggregate
         best_bid = max(q.bid for q in quotes)
         best_ask = min(q.ask for q in quotes)
+        total_bid = sum(q.bid_size_usd for q in quotes if q.bid == best_bid)
+        total_ask = sum(q.ask_size_usd for q in quotes if q.ask == best_ask)
 
         return AggregatedQuote(
-            bid=best_bid,
-            ask=best_ask,
+            best_bid=best_bid,
+            best_ask=best_ask,
+            total_bid_size=total_bid,
+            total_ask_size=total_ask,
             dealer_quotes=quotes,
-            timestamp_ns=time.time_ns(),
+            timestamp_ns=timestamp_ns,
         )
 
     def attempt_execution(
         self,
-        order: Order,
+        is_buy: bool,
+        size_usd: float,
         quote: AggregatedQuote,
+        current_mid: float,
     ) -> ExecutionResult:
         """
-        Attempt to execute order against dealer quotes.
+        Attempt to execute against dealer quotes.
 
         Simulates:
         1. Dealer selection (best price)
-        2. Latency to dealer
-        3. Last-look decision
-        4. Fill or reject
-        """
-        # Select dealer with best price for this side
-        if order.is_buy:
-            quotes = sorted(quote.dealer_quotes, key=lambda q: q.ask)
-        else:
-            quotes = sorted(quote.dealer_quotes, key=lambda q: -q.bid)
+        2. Size check
+        3. Latency
+        4. Last-look decision
 
-        for dealer_quote in quotes:
-            # Check size
-            available = dealer_quote.ask_size if order.is_buy else dealer_quote.bid_size
-            if order.qty > available:
+        Args:
+            is_buy: True for buy, False for sell
+            size_usd: Order size in USD
+            quote: Current aggregated quote
+            current_mid: Current mid price (for last-look check)
+
+        Returns:
+            ExecutionResult
+        """
+        # Sort dealers by price (best first)
+        if is_buy:
+            sorted_quotes = sorted(quote.dealer_quotes, key=lambda q: q.ask)
+            reference_price = quote.best_ask
+        else:
+            sorted_quotes = sorted(quote.dealer_quotes, key=lambda q: -q.bid)
+            reference_price = quote.best_bid
+
+        for dealer_quote in sorted_quotes:
+            dealer = self._get_dealer(dealer_quote.dealer_id)
+
+            # Size check
+            available = dealer_quote.ask_size_usd if is_buy else dealer_quote.bid_size_usd
+            if size_usd > available:
                 continue
 
             # Simulate latency
-            latency_ns = int(dealer_quote.valid_for_ms * 1e6 * self._rng.uniform(0.5, 1.0))
+            latency_ms = dealer.latency_ms * (1 + self._rng.normal(0, self.config.latency_variance))
+            latency_ns = int(max(10, latency_ms) * 1_000_000)
 
-            # Last-look rejection
-            dealer = self._get_dealer(dealer_quote.dealer_id)
-            if self._rng.random() < dealer.last_look_prob:
-                continue  # Rejected
+            # Last-look check
+            if self.config.last_look_enabled:
+                quote_mid = dealer_quote.mid
+                price_move_pips = abs(current_mid - quote_mid) * 10000
 
-            # Success
+                # Adverse selection check
+                is_adverse = (
+                    (is_buy and current_mid > quote_mid) or
+                    (not is_buy and current_mid < quote_mid)
+                )
+
+                if is_adverse and price_move_pips > dealer.adverse_threshold_pips:
+                    if self._rng.random() < 0.7:  # 70% reject on adverse
+                        continue  # Rejected, try next dealer
+
+                # Random rejection
+                if self._rng.random() < dealer.base_reject_prob:
+                    continue
+
+            # Success!
+            fill_price = dealer_quote.ask if is_buy else dealer_quote.bid
+            slippage_pips = abs(fill_price - reference_price) * 10000
+
             return ExecutionResult(
                 filled=True,
-                price=dealer_quote.ask if order.is_buy else dealer_quote.bid,
-                qty=order.qty,
+                fill_price=fill_price,
+                fill_qty=size_usd,
                 dealer_id=dealer_quote.dealer_id,
                 latency_ns=latency_ns,
+                slippage_pips=slippage_pips,
                 last_look_passed=True,
             )
 
-        return ExecutionResult(filled=False, reject_reason="all_dealers_rejected")
-```
+        # All dealers rejected
+        return ExecutionResult(
+            filled=False,
+            reject_reason=RejectReason.DEALER_DISCRETION,
+        )
 
-#### 5.2 Last-Look Simulation
-
-```python
-class LastLookSimulator:
-    """
-    Simulates dealer last-look behavior.
-
-    Last-look allows dealers to reject trades after
-    receiving the order if market moved against them.
-
-    Factors affecting rejection:
-    1. Price movement since quote
-    2. Order size (larger = more scrutiny)
-    3. Client classification
-    4. Market volatility
-    """
-
-    def should_reject(
-        self,
-        order: Order,
-        quote: DealerQuote,
-        current_mid: float,
-        latency_ms: float,
-    ) -> Tuple[bool, str]:
-        """
-        Determine if dealer rejects via last-look.
-
-        Returns:
-            (rejected, reason)
-        """
-        quote_mid = (quote.bid + quote.ask) / 2.0
-        price_move = (current_mid - quote_mid) / quote_mid
-
-        # Adverse selection check
-        if order.is_buy and price_move > 0:
-            # Client buying, price went up = adverse
-            if price_move > self.adverse_threshold:
-                return True, "adverse_selection"
-        elif not order.is_buy and price_move < 0:
-            # Client selling, price went down = adverse
-            if abs(price_move) > self.adverse_threshold:
-                return True, "adverse_selection"
-
-        # Size-based rejection
-        if order.qty > quote.max_size * self.size_threshold:
-            if self._rng.random() < self.large_order_reject_prob:
-                return True, "size_exceeded"
-
-        return False, ""
+    def _get_dealer(self, dealer_id: str) -> DealerProfile:
+        """Get dealer by ID."""
+        for d in self._dealers:
+            if d.dealer_id == dealer_id:
+                return d
+        raise ValueError(f"Unknown dealer: {dealer_id}")
 ```
 
 **Deliverables**:
-- ForexDealerSimulator
-- LastLookSimulator
-- Multi-dealer quote aggregation
-- Latency modeling
-- Integration with L3ExecutionProvider
+- `services/forex_dealer.py` (NOT in `lob/`)
+- `ForexDealerSimulator` with multi-dealer quotes
+- Last-look simulation
+- Size-dependent spread widening
+- Integration with `ForexParametricSlippageProvider`
 
-**Tests**: ~70
+**Tests**: ~85
 
 ---
 
-### Phase 6: Forex Risk Management (Week 9)
+### Phase 6: Forex Risk Management & Services (Weeks 11-12)
 
-**Цель**: Forex-специфичный risk management (leverage, margin)
+**Цель**: Forex-специфичный risk management + position sync + session routing
 
-#### 6.1 services/forex_risk_guards.py (~350 LOC)
+#### 6.1 services/forex_risk_guards.py (~400 LOC)
+
+*Содержимое как в оригинальном плане, с добавлением:*
 
 ```python
-"""
-Forex-specific risk guards.
-
-Key differences from stocks:
-1. Leverage: 50:1 to 500:1 (vs 4:1 for stocks)
-2. Margin: Required margin = Position / Leverage
-3. No PDT rules
-4. 24/5 monitoring required
-5. Swap/rollover costs
-"""
-
-class ForexLeverageGuard:
+# Add swap cost tracking
+class SwapCostTracker:
     """
-    Monitors forex leverage and margin.
+    Track cumulative swap costs for positions.
 
-    Margin Call Levels (typical):
-    - Warning: 120% margin level
-    - Margin Call: 100% margin level
-    - Stop Out: 50% margin level
-
-    Calculation:
-    - Margin Level = (Equity / Used Margin) × 100%
-    - Free Margin = Equity - Used Margin
-    - Required Margin = Position Size / Leverage
+    Data Source: OANDA API or historical cache
     """
 
-    def __init__(
-        self,
-        max_leverage: float = 50.0,
-        margin_warning_level: float = 1.20,
-        margin_call_level: float = 1.00,
-        stop_out_level: float = 0.50,
-    ) -> None:
-        self.max_leverage = max_leverage
-        self.margin_warning_level = margin_warning_level
-        self.margin_call_level = margin_call_level
-        self.stop_out_level = stop_out_level
-
-    def check_margin_requirement(
-        self,
-        position_value: float,
-        account_equity: float,
-        leverage: float,
-    ) -> MarginCheckResult:
-        """
-        Check if position meets margin requirements.
-        """
-        required_margin = position_value / leverage
-        margin_level = account_equity / required_margin if required_margin > 0 else float('inf')
-
-        status = MarginStatus.OK
-        if margin_level < self.stop_out_level:
-            status = MarginStatus.STOP_OUT
-        elif margin_level < self.margin_call_level:
-            status = MarginStatus.MARGIN_CALL
-        elif margin_level < self.margin_warning_level:
-            status = MarginStatus.WARNING
-
-        return MarginCheckResult(
-            margin_level=margin_level,
-            required_margin=required_margin,
-            free_margin=account_equity - required_margin,
-            status=status,
-            max_additional_position=self._calc_max_additional(
-                account_equity, required_margin, leverage
-            ),
-        )
-
-
-class SwapCostCalculator:
-    """
-    Calculate overnight swap/rollover costs.
-
-    Forex positions rolled over at 5pm ET incur:
-    - Positive swap: Earning interest (long high-rate currency)
-    - Negative swap: Paying interest (long low-rate currency)
-
-    Wednesday swaps are typically 3x (weekend rollover).
-    """
-
-    def calculate_swap(
+    def calculate_daily_swap(
         self,
         symbol: str,
         position_units: float,
         is_long: bool,
         current_price: float,
-        days: int = 1,
+        day_of_week: int,  # 0=Mon, 6=Sun
     ) -> float:
         """
-        Calculate swap cost/credit for position.
+        Calculate daily swap cost/credit.
 
-        Returns:
-            Swap amount (positive = credit, negative = cost)
+        Note: Wednesday = 3x swap (weekend rollover)
         """
-        swap_points = self._get_swap_points(symbol, is_long)
-        pip_value = self._get_pip_value(symbol, current_price)
-
-        # Wednesday = 3 days rollover
-        effective_days = days
-
-        return position_units * swap_points * pip_value * effective_days / 10.0
+        multiplier = 3 if day_of_week == 2 else 1  # Wednesday
+        # ... implementation
 ```
 
-#### 6.2 Integration with Existing Risk System
+#### 6.2 services/forex_position_sync.py (~300 LOC) — NEW!
 
 ```python
-# Update risk_guard.py to support forex
-def create_risk_guard(
-    asset_class: AssetClass,
-    config: Dict[str, Any],
-) -> BaseRiskGuard:
-    """Factory for asset-class-specific risk guards."""
-    if asset_class == AssetClass.CRYPTO:
-        return CryptoRiskGuard(config)
-    elif asset_class == AssetClass.EQUITY:
-        return EquityRiskGuard(config)
-    elif asset_class == AssetClass.FOREX:
-        return ForexRiskGuard(config)  # NEW
-    else:
-        raise ValueError(f"Unknown asset class: {asset_class}")
+"""
+Forex Position Synchronization Service
+
+Syncs local position state with OANDA account.
+Similar to services/position_sync.py for Alpaca.
+
+Features:
+- Background polling (configurable interval)
+- Discrepancy detection and alerting
+- Automatic reconciliation (optional)
+- Swap cost tracking
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Callable, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ForexPosition:
+    """Forex position from OANDA."""
+    symbol: str
+    units: float  # Positive = long, Negative = short
+    average_price: float
+    unrealized_pnl: float
+    margin_used: float
+    financing: float  # Accumulated swap
+
+
+@dataclass
+class SyncConfig:
+    """Position sync configuration."""
+    sync_interval_sec: float = 30.0
+    position_tolerance_pct: float = 0.01  # 1%
+    auto_reconcile: bool = False
+    max_reconcile_units: float = 100_000
+    alert_on_discrepancy: bool = True
+
+
+class ForexPositionSynchronizer:
+    """
+    Synchronizes local state with OANDA positions.
+    """
+
+    def __init__(
+        self,
+        oanda_adapter,  # OandaOrderExecutionAdapter
+        local_state_getter: Callable[[], Dict[str, float]],
+        config: Optional[SyncConfig] = None,
+        on_discrepancy: Optional[Callable] = None,
+    ):
+        self.oanda = oanda_adapter
+        self.get_local_state = local_state_getter
+        self.config = config or SyncConfig()
+        self.on_discrepancy = on_discrepancy
+        self._running = False
+        self._task: Optional[asyncio.Task] = None
+
+    async def sync_once(self) -> List[str]:
+        """
+        Perform single sync check.
+
+        Returns:
+            List of symbols with discrepancies
+        """
+        discrepancies = []
+
+        # Get OANDA positions
+        oanda_positions = await self.oanda.get_positions_async()
+        oanda_map = {p.symbol: p.units for p in oanda_positions}
+
+        # Get local positions
+        local_map = self.get_local_state()
+
+        # Compare
+        all_symbols = set(oanda_map.keys()) | set(local_map.keys())
+
+        for symbol in all_symbols:
+            oanda_units = oanda_map.get(symbol, 0.0)
+            local_units = local_map.get(symbol, 0.0)
+
+            if abs(oanda_units) < 1 and abs(local_units) < 1:
+                continue  # Both effectively zero
+
+            diff_pct = abs(oanda_units - local_units) / max(abs(oanda_units), abs(local_units), 1)
+
+            if diff_pct > self.config.position_tolerance_pct:
+                discrepancies.append(symbol)
+                logger.warning(
+                    f"Position discrepancy: {symbol} "
+                    f"OANDA={oanda_units:.2f} Local={local_units:.2f}"
+                )
+
+                if self.on_discrepancy:
+                    self.on_discrepancy(symbol, oanda_units, local_units)
+
+        return discrepancies
+
+    def start_background_sync(self) -> None:
+        """Start background sync task."""
+        if self._running:
+            return
+        self._running = True
+        self._task = asyncio.create_task(self._sync_loop())
+
+    def stop_background_sync(self) -> None:
+        """Stop background sync."""
+        self._running = False
+        if self._task:
+            self._task.cancel()
+```
+
+#### 6.3 services/forex_session_router.py (~250 LOC) — NEW!
+
+```python
+"""
+Forex Session-Aware Order Routing
+
+Routes orders based on current session and liquidity.
+Similar to services/session_router.py for Alpaca extended hours.
+
+Features:
+- Session detection with DST awareness
+- Spread adjustment recommendations
+- Optimal execution window suggestions
+- Rollover time avoidance
+"""
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Optional, Tuple
+from zoneinfo import ZoneInfo
+
+from adapters.models import ForexSessionType
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class RoutingDecision:
+    """Order routing decision."""
+    should_submit: bool
+    session: ForexSessionType
+    liquidity_factor: float
+    spread_multiplier: float
+    recommended_delay_sec: Optional[float] = None
+    reason: str = ""
+
+
+class ForexSessionRouter:
+    """
+    Session-aware order routing for forex.
+    """
+
+    ET = ZoneInfo("America/New_York")
+    ROLLOVER_HOUR_ET = 17  # 5pm ET
+    ROLLOVER_KEEPOUT_MINUTES = 30
+
+    def __init__(
+        self,
+        avoid_rollover: bool = True,
+        min_liquidity_factor: float = 0.5,
+    ):
+        self.avoid_rollover = avoid_rollover
+        self.min_liquidity_factor = min_liquidity_factor
+
+    def get_routing_decision(
+        self,
+        symbol: str,
+        side: str,
+        size_usd: float,
+        timestamp_ms: Optional[int] = None,
+    ) -> RoutingDecision:
+        """
+        Get routing decision for order.
+
+        Args:
+            symbol: Currency pair
+            side: "BUY" or "SELL"
+            size_usd: Order size
+            timestamp_ms: Optional timestamp (default: now)
+
+        Returns:
+            RoutingDecision
+        """
+        now_et = datetime.now(self.ET)
+
+        # Check rollover window
+        if self.avoid_rollover:
+            minutes_to_rollover = self._minutes_to_rollover(now_et)
+            if abs(minutes_to_rollover) < self.ROLLOVER_KEEPOUT_MINUTES:
+                return RoutingDecision(
+                    should_submit=False,
+                    session=ForexSessionType.OFF_HOURS,
+                    liquidity_factor=0.3,
+                    spread_multiplier=3.0,
+                    recommended_delay_sec=float(self.ROLLOVER_KEEPOUT_MINUTES * 60),
+                    reason="Near rollover time (5pm ET)",
+                )
+
+        # Get current session
+        session, liq_factor, spread_mult = self._detect_session(now_et)
+
+        # Check minimum liquidity
+        if liq_factor < self.min_liquidity_factor:
+            return RoutingDecision(
+                should_submit=False,
+                session=session,
+                liquidity_factor=liq_factor,
+                spread_multiplier=spread_mult,
+                reason=f"Low liquidity session: {session.value}",
+            )
+
+        return RoutingDecision(
+            should_submit=True,
+            session=session,
+            liquidity_factor=liq_factor,
+            spread_multiplier=spread_mult,
+        )
+
+    def _minutes_to_rollover(self, dt_et: datetime) -> float:
+        """Minutes until next rollover (negative if just passed)."""
+        rollover_today = dt_et.replace(hour=self.ROLLOVER_HOUR_ET, minute=0, second=0)
+        diff = (rollover_today - dt_et).total_seconds() / 60
+        return diff
+
+    def _detect_session(self, dt_et: datetime) -> Tuple[ForexSessionType, float, float]:
+        """Detect session from ET datetime."""
+        # Convert to UTC for session logic
+        dt_utc = dt_et.astimezone(ZoneInfo("UTC"))
+        hour_utc = dt_utc.hour
+
+        # Session detection logic (same as trading_hours.py)
+        # ... implementation
+        return (ForexSessionType.LONDON, 1.1, 1.0)
 ```
 
 **Deliverables**:
-- ForexLeverageGuard
-- SwapCostCalculator
+- `services/forex_risk_guards.py` — margin, leverage, swap tracking
+- `services/forex_position_sync.py` — position synchronization
+- `services/forex_session_router.py` — session-aware routing
 - Integration with existing risk system
-- Margin monitoring
+
+**Tests**: ~100
+
+---
+
+### Phase 7: Data Pipeline & Downloaders (Weeks 13-14)
+
+**Цель**: Полный data pipeline для Forex
+
+#### 7.1 scripts/download_forex_data.py
+
+*Как в оригинальном плане*
+
+#### 7.2 scripts/download_swap_rates.py — NEW!
+
+```python
+"""
+Download historical swap rates for backtesting.
+
+Sources:
+- OANDA API: /v3/accounts/{id}/instruments (financing field)
+- Cache locally for historical backtest
+
+Usage:
+    python scripts/download_swap_rates.py \
+        --pairs EUR_USD GBP_USD USD_JPY \
+        --start 2020-01-01 \
+        --output data/forex/swaps/
+"""
+```
+
+#### 7.3 scripts/download_economic_calendar.py — NEW!
+
+```python
+"""
+Download economic calendar events.
+
+Sources:
+- Primary: OANDA Labs Calendar API
+- Backup: ForexFactory (scraping)
+
+Usage:
+    python scripts/download_economic_calendar.py \
+        --currencies USD EUR GBP JPY \
+        --start 2020-01-01 \
+        --output data/forex/calendar/
+"""
+```
+
+**Deliverables**:
+- `scripts/download_forex_data.py`
+- `scripts/download_swap_rates.py`
+- `scripts/download_economic_calendar.py`
+- `scripts/download_interest_rates.py` (FRED)
+- Data loader integration
 
 **Tests**: ~50
 
 ---
 
-### Phase 7: Data Pipeline & Downloader (Week 10)
+### Phase 8: Configuration System (Week 14)
 
-**Цель**: Скачивание и подготовка данных для Forex
+*Как в оригинальном плане с добавлениями:*
 
-#### 7.1 scripts/download_forex_data.py (~300 LOC)
-
-```python
-"""
-Download historical forex data from OANDA.
-
-Usage:
-    python scripts/download_forex_data.py \
-        --pairs EUR_USD GBP_USD USD_JPY \
-        --start 2020-01-01 \
-        --timeframe H4 \
-        --output data/forex/
-
-Data sources:
-- OANDA v20 API (primary)
-- Dukascopy (tick data, historical)
-- FRED (interest rates)
-"""
-
-def download_oanda_candles(
-    pair: str,
-    granularity: str,
-    start_date: str,
-    end_date: Optional[str] = None,
-    output_dir: str = "data/forex/",
-) -> str:
-    """Download candles from OANDA API."""
-    pass
-
-def download_interest_rates(
-    currencies: List[str],
-    start_date: str,
-    output_path: str = "data/forex/rates.csv",
-) -> str:
-    """Download central bank rates from FRED."""
-    pass
-
-def download_economic_calendar(
-    start_date: str,
-    end_date: str,
-    currencies: List[str],
-    output_path: str = "data/forex/calendar.csv",
-) -> str:
-    """Download economic calendar events."""
-    pass
-```
-
-#### 7.2 Update data_loader_multi_asset.py
-
-```python
-def load_forex_data(
-    paths: Sequence[str],
-    timeframe: str = "4h",
-    filter_trading_hours: bool = True,
-) -> Tuple[List[pd.DataFrame], Dict[str, int]]:
-    """
-    Load forex data with forex-specific preprocessing.
-
-    - Filter weekend data
-    - Add session indicators
-    - Merge interest rate data
-    - Add spread calculations
-    """
-    pass
-```
-
-**Deliverables**:
-- download_forex_data.py
-- Interest rates downloader
-- Economic calendar downloader
-- Data loader integration
-
-**Tests**: ~40
-
----
-
-### Phase 8: Configuration System (Week 10-11)
-
-**Цель**: Гибкая конфигурация для Forex
-
-#### 8.1 configs/forex_defaults.yaml
+#### 8.1 configs/forex_defaults.yaml — Updated
 
 ```yaml
 # =============================================================================
-# FOREX DEFAULTS CONFIGURATION
+# FOREX DEFAULTS CONFIGURATION v2.0
 # =============================================================================
 
 forex:
-  # Core settings
   asset_class: forex
   data_vendor: oanda
   market: spot
 
-  # Trading hours: Sun 5pm - Fri 4pm ET
+  # Trading hours (DST-aware)
   session:
     calendar: forex_24x5
     weekend_filter: true
-    rollover_time_utc: 21  # 5pm ET = 21:00 UTC (winter)
+    rollover_time_et: 17  # 5pm ET (constant regardless of DST)
+    rollover_keepout_minutes: 30
+    dst_aware: true
 
-  # Fees: Spread-based (no commission)
+  # Fees: Spread-based
   fees:
     structure: spread_only
     maker_bps: 0.0
     taker_bps: 0.0
-    spread_markup_bps: 0.0  # Broker markup
     swap_enabled: true
+    swap_data_source: oanda  # or "cache"
 
-  # Slippage: Forex-specific model
+  # Slippage: L2+ Parametric model
   slippage:
-    profile: forex_major  # or forex_exotic
-    k: 0.03
-    default_spread_pips: 1.0
-    min_slippage_pips: 0.1
-    max_slippage_pips: 100.0
+    level: "L2+"
+    provider: ForexParametricSlippageProvider  # In execution_providers.py
+    profile: retail  # or "institutional", "conservative"
+    impact_coef_base: 0.03
     session_adjustment: true
     news_adjustment: true
 
-  # Execution
-  execution:
-    fill_policy: dealer_quote  # Not LOB-based
-    last_look_simulation: true
-    quote_validity_ms: 200
+  # OTC Dealer Simulation (NOT L3 LOB!)
+  dealer_simulation:
+    enabled: true
+    provider: ForexDealerSimulator  # In services/forex_dealer.py
+    num_dealers: 5
+    last_look_enabled: true
 
   # Leverage
   leverage:
@@ -1479,309 +2252,308 @@ forex:
     margin_call: 1.00
     stop_out: 0.50
 
-  # Liquidity
-  liquidity:
-    min_adv_usd: 0  # Always liquid for majors
-    session_scaling: true
-
-  # Risk
-  no_trade:
+  # Position Sync
+  position_sync:
     enabled: true
-    enforce_trading_hours: true
-    rollover_keepout_minutes: 30  # Around 5pm ET
+    interval_sec: 30.0
+    auto_reconcile: false
 
-# Provider mapping
-provider_mapping:
-  forex:
-    fee_provider: ForexFeeProvider
-    slippage_provider: ForexParametricSlippageProvider
-    slippage_profile: forex_major
-    trading_hours_adapter: OandaTradingHoursAdapter
-    fill_provider: ForexDealerFillProvider
+  # Data sources
+  data_sources:
+    price_data: oanda
+    interest_rates: fred  # FRED API
+    economic_calendar: oanda_labs
+    swap_rates: oanda
+    dxy: yahoo  # DX-Y.NYB
 
-# Vendor mapping
-data_vendor_mapping:
+# API Rate Limits
+rate_limits:
   oanda:
-    market_data_adapter: OandaMarketDataAdapter
-    exchange_info_adapter: OandaExchangeInfoAdapter
-    order_execution_adapter: OandaOrderExecutionAdapter
-    default_asset_class: forex
-    api_key_env: OANDA_API_KEY
-    account_id_env: OANDA_ACCOUNT_ID
+    requests_per_second: 120
+    burst: 200
 ```
 
-#### 8.2 configs/config_train_forex.yaml
-
-```yaml
-# Training configuration for Forex
-mode: train
-asset_class: forex
-data_vendor: oanda
-
-data:
-  timeframe: "4h"
-  filter_trading_hours: true
-  filter_weekends: true
-  paths:
-    - "data/forex/*.parquet"
-
-model:
-  algo: "ppo"
-  optimizer_class: AdaptiveUPGD
-  params:
-    use_twin_critics: true
-    num_atoms: 21
-    gamma: 0.99
-
-env:
-  session:
-    calendar: forex_24x5
-  slippage:
-    profile: forex_major
-  fees:
-    structure: spread_only
-  leverage:
-    max_leverage: 50.0
-```
-
-#### 8.3 configs/config_live_oanda.yaml
-
-```yaml
-# Live trading configuration for OANDA
-mode: live
-asset_class: forex
-data_vendor: oanda
-
-exchange:
-  vendor: oanda
-  practice: false  # Live account
-
-execution:
-  order_type: market
-  slippage_tolerance_pips: 2.0
-
-risk:
-  max_position_pct: 0.10
-  max_leverage: 30.0
-  stop_loss_pips: 50
-  take_profit_pips: 100
-```
-
-**Deliverables**:
-- forex_defaults.yaml
-- config_train_forex.yaml
-- config_backtest_forex.yaml
-- config_live_oanda.yaml
-- Integration with asset_class_defaults.yaml
-
-**Tests**: ~30
+**Tests**: ~35
 
 ---
 
-### Phase 9: Training & Backtest Integration (Week 11)
+### Phase 9: Training & Backtest Integration (Week 15)
 
-**Цель**: Полная интеграция в training/backtest pipeline
+*Как в оригинальном плане*
 
-#### 9.1 Update script_live.py
-
-```python
-# Add forex to valid asset classes
-VALID_ASSET_CLASSES = (ASSET_CLASS_CRYPTO, ASSET_CLASS_EQUITY, ASSET_CLASS_FOREX)
-
-ASSET_CLASS_DEFAULTS: Dict[str, Dict[str, Any]] = {
-    ASSET_CLASS_CRYPTO: {...},
-    ASSET_CLASS_EQUITY: {...},
-    ASSET_CLASS_FOREX: {  # NEW
-        "slippage_pips": 1.0,
-        "limit_offset_pips": 2.0,
-        "tif": "GTC",
-        "extended_hours": False,  # N/A for forex
-        "default_vendor": "oanda",
-        "leverage": 30.0,
-    },
-}
-
-VENDOR_TO_ASSET_CLASS: Dict[str, str] = {
-    "binance": ASSET_CLASS_CRYPTO,
-    "alpaca": ASSET_CLASS_EQUITY,
-    "polygon": ASSET_CLASS_EQUITY,
-    "oanda": ASSET_CLASS_FOREX,  # NEW
-}
-```
-
-#### 9.2 Update Mediator
-
-```python
-# mediator.py - asset class detection
-def _create_execution_provider(self, asset_class: str):
-    if asset_class == "forex":
-        return create_execution_provider(
-            AssetClass.FOREX,
-            level="L2+",  # ForexParametricSlippageProvider
-        )
-```
-
-#### 9.3 Training Script Updates
-
-```python
-# train_model_multi_patch.py
-def create_env_for_asset_class(asset_class: str, config: Dict) -> TradingEnv:
-    if asset_class == "forex":
-        return ForexTradingEnv(config)  # Or use unified TradingEnv with forex settings
-```
-
-**Deliverables**:
-- script_live.py updates
-- Mediator integration
-- Training pipeline support
-- Backtest pipeline support
-
-**Tests**: ~40
+**Tests**: ~45
 
 ---
 
-### Phase 10: Testing & Validation (Week 12)
+### Phase 10: Testing & Validation (Week 16)
 
-**Цель**: Comprehensive testing и validation
+**Цель**: Comprehensive testing + property-based + stress tests
 
 #### 10.1 Unit Tests
 
 ```
 tests/
-├── test_oanda_adapters.py              # 120 tests
-│   ├── test_market_data_adapter
-│   ├── test_fee_adapter
-│   ├── test_trading_hours_adapter
-│   ├── test_exchange_info_adapter
-│   └── test_order_execution_adapter
-│
-├── test_forex_execution_providers.py   # 90 tests
-│   ├── test_forex_parametric_config
-│   ├── test_session_detection
-│   ├── test_pair_classification
-│   ├── test_slippage_computation
-│   └── test_profiles
-│
-├── test_forex_features.py              # 60 tests
-│   ├── test_interest_rate_features
-│   ├── test_dxy_correlation
-│   ├── test_session_indicators
-│   └── test_economic_calendar
-│
-├── test_forex_dealer_simulation.py     # 70 tests
-│   ├── test_dealer_quote_generation
-│   ├── test_multi_dealer_aggregation
-│   ├── test_last_look_simulation
-│   └── test_latency_modeling
-│
-├── test_forex_risk_guards.py           # 50 tests
-│   ├── test_leverage_guard
-│   ├── test_margin_calculation
-│   └── test_swap_calculator
-│
-└── test_forex_integration.py           # 40 tests
-    ├── test_full_pipeline
-    ├── test_backtest_execution
-    ├── test_config_loading
-    └── test_backward_compatibility
+├── test_oanda_adapters.py              # 130 tests
+├── test_forex_execution_providers.py   # 100 tests
+├── test_forex_features.py              # 70 tests
+├── test_forex_dealer_simulation.py     # 85 tests
+├── test_forex_risk_guards.py           # 60 tests
+├── test_forex_position_sync.py         # 40 tests
+├── test_forex_session_router.py        # 30 tests
+├── test_forex_integration.py           # 50 tests
+├── test_forex_properties.py            # 40 tests (NEW)
+└── test_forex_stress.py                # 20 tests (NEW)
 ```
 
-#### 10.2 Integration Tests
+#### 10.2 Property-Based Tests (Hypothesis) — NEW!
 
 ```python
-class TestForexBackwardCompatibility:
-    """
-    Ensure forex integration doesn't break crypto/equity.
-    """
+# tests/test_forex_properties.py
+"""
+Property-based tests using Hypothesis.
 
-    def test_crypto_pipeline_unchanged(self):
-        """Run full crypto backtest, compare metrics."""
-        pass
+Properties tested:
+1. Slippage monotonicity: More participation → more slippage
+2. Session ordering: Overlap liquidity > individual session
+3. Spread bounds: Always within configured min/max
+4. Pair classification: All pairs classified correctly
+5. DST handling: Rollover time consistent regardless of date
+"""
+from hypothesis import given, strategies as st, assume
+import pytest
 
-    def test_equity_pipeline_unchanged(self):
-        """Run full equity backtest, compare metrics."""
-        pass
+from execution_providers import ForexParametricSlippageProvider, ForexParametricConfig
 
-    def test_mixed_asset_config(self):
-        """Test config with multiple asset classes."""
-        pass
+
+@given(
+    participation=st.floats(0.0, 0.1, allow_nan=False),
+    participation2=st.floats(0.0, 0.1, allow_nan=False),
+)
+def test_slippage_monotonic_in_participation(participation, participation2):
+    """Higher participation should result in equal or higher slippage."""
+    assume(participation <= participation2)
+
+    provider = ForexParametricSlippageProvider()
+    # ... create orders with same parameters except participation
+
+    slip1 = provider.compute_slippage_pips(order, market, participation)
+    slip2 = provider.compute_slippage_pips(order, market, participation2)
+
+    assert slip1 <= slip2, f"Slippage not monotonic: {slip1} > {slip2}"
+
+
+@given(symbol=st.sampled_from(["EUR_USD", "GBP_JPY", "USD_TRY", "EUR_GBP"]))
+def test_pair_classification_deterministic(symbol):
+    """Pair classification should be deterministic."""
+    provider = ForexParametricSlippageProvider()
+
+    result1 = provider._classify_pair(symbol)
+    result2 = provider._classify_pair(symbol)
+
+    assert result1 == result2
+
+
+@given(
+    hour=st.integers(0, 23),
+    minute=st.integers(0, 59),
+)
+def test_session_detection_complete(hour, minute):
+    """Every timestamp should map to exactly one session."""
+    from services.forex_session_router import ForexSessionRouter
+    from adapters.models import ForexSessionType
+
+    router = ForexSessionRouter()
+    # Create timestamp for the hour/minute
+    # ... verify session is not None and is valid enum
 ```
 
-#### 10.3 Validation Metrics
+#### 10.3 Stress Tests — NEW!
+
+```python
+# tests/test_forex_stress.py
+"""
+Stress tests for forex simulation.
+
+Scenarios:
+1. CHF flash crash (Jan 2015): 30% move in minutes
+2. NFP release: Extreme volatility spike
+3. Weekend gap: Large gap on Sunday open
+4. API rate limit: 120 requests/sec exceeded
+5. All dealers reject: No fill scenario
+"""
+import pytest
+
+class TestForexStressScenarios:
+
+    def test_chf_flash_crash_scenario(self):
+        """
+        Simulate CHF flash crash conditions.
+
+        Jan 15, 2015: SNB removed EUR/CHF floor
+        - EUR/CHF dropped 30% in minutes
+        - Spreads widened to 50+ pips
+        - Many dealers stopped quoting
+        """
+        provider = ForexParametricSlippageProvider()
+
+        # Extreme volatility regime
+        returns = [-0.05, -0.08, -0.12, -0.06, -0.03]  # Large negative
+
+        slippage = provider.compute_slippage_pips(
+            order=Order("EUR_CHF", "SELL", 100000, "MARKET"),
+            market=MarketState(timestamp=0, bid=1.0, ask=1.02, spread_bps=200),
+            participation_ratio=0.01,
+            recent_returns=returns,
+        )
+
+        # Should hit max slippage bound
+        assert slippage == provider.config.max_slippage_pips
+
+    def test_nfp_release_spike(self):
+        """Simulate Non-Farm Payrolls release conditions."""
+        provider = ForexParametricSlippageProvider()
+
+        slippage = provider.compute_slippage_pips(
+            order=Order("EUR_USD", "BUY", 1000000, "MARKET"),
+            market=MarketState(timestamp=0, bid=1.1000, ask=1.1005),
+            participation_ratio=0.005,
+            upcoming_news="nfp",
+        )
+
+        # NFP multiplier should apply (3.0x)
+        assert slippage > provider.config.min_slippage_pips * 2
+
+    def test_all_dealers_reject(self):
+        """Test scenario where all dealers reject via last-look."""
+        from services.forex_dealer import ForexDealerSimulator, ForexDealerConfig
+
+        # Configure high rejection probability
+        config = ForexDealerConfig(
+            num_dealers=3,
+            last_look_enabled=True,
+        )
+
+        sim = ForexDealerSimulator(config=config, seed=42)
+
+        # ... simulate adverse price move and verify rejection handling
+```
+
+#### 10.4 Validation Metrics
 
 | Metric | Target | Validation Method |
 |--------|--------|-------------------|
-| Spread accuracy | ±10% | Compare vs live OANDA quotes |
-| Session liquidity | ±20% | Compare vs historical ADV |
-| Fill rate | >95% | Backtest validation |
-| Last-look rejects | 5-15% | Industry benchmarks |
-| Slippage estimate | ±2 pips | Paper trading validation |
+| Spread accuracy | ±15% vs OANDA live | Compare simulated vs actual |
+| Session liquidity | ±25% vs historical | Backtest ADV comparison |
+| Fill rate (majors) | >98% | Paper trading validation |
+| Fill rate (exotics) | >90% | Paper trading validation |
+| Last-look reject rate | 5-12% | Industry benchmarks |
+| Slippage estimate | ±2 pips (majors) | Paper trading |
+| Position sync accuracy | 100% | Unit tests |
+| Backward compatibility | 100% crypto/equity | Regression tests |
 
 **Deliverables**:
-- 400+ unit tests
-- Integration test suite
-- Backward compatibility tests
+- 620+ tests total
+- Property-based test suite
+- Stress test scenarios
+- Backward compatibility verification
 - Validation report
 
 ---
 
 ## 📊 Summary
 
-### Phase Overview
+### Phase Overview (Updated)
 
 | Phase | Description | Duration | LOC | Tests |
 |-------|-------------|----------|-----|-------|
-| 0 | Foundation & Research | 1 week | 100 | 20 |
-| 1 | Core Enums & Models | 1 week | 200 | 30 |
-| 2 | OANDA Adapter | 2 weeks | 1,350 | 120 |
-| 3 | ForexParametricSlippage (L2+) | 2 weeks | 600 | 90 |
-| 4 | Forex Features | 1 week | 400 | 60 |
-| 5 | L3 Dealer Simulation | 1 week | 500 | 70 |
-| 6 | Risk Management | 1 week | 350 | 50 |
-| 7 | Data Pipeline | 1 week | 400 | 40 |
-| 8 | Configuration | 0.5 weeks | 300 | 30 |
-| 9 | Training Integration | 1 week | 300 | 40 |
-| 10 | Testing & Validation | 1 week | - | 430 (total) |
-| **TOTAL** | | **12 weeks** | **4,500** | **430** |
+| 0 | Foundation & Research | 1 week | 100 | 25 |
+| 1 | Core Enums & Models | 1 week | 250 | 35 |
+| 2 | OANDA Adapter | 2 weeks | 1,500 | 130 |
+| 3 | ForexParametricSlippage (L2+) | 2 weeks | 600 | 100 |
+| 4 | Forex Features | 2 weeks | 500 | 80 |
+| 5 | OTC Dealer Simulation | 2 weeks | 600 | 85 |
+| 6 | Risk Management + Services | 2 weeks | 900 | 100 |
+| 7 | Data Pipeline | 1 week | 450 | 50 |
+| 8 | Configuration | 1 week | 350 | 35 |
+| 9 | Training Integration | 1 week | 350 | 45 |
+| 10 | Testing & Validation | 2 weeks | 200 | 620 (total) |
+| **TOTAL** | | **16 weeks** | **5,800** | **620** |
 
-### Risk Assessment
+### Risk Assessment (Updated)
 
 | Risk | Probability | Impact | Mitigation |
 |------|-------------|--------|------------|
 | OANDA API changes | Low | Medium | Abstract API layer, version pinning |
+| OANDA rate limits (120/s) | Medium | Low | Rate limiter implementation, caching |
 | Forex data quality | Medium | High | Multiple data sources, validation |
-| Session detection bugs | Medium | Medium | Extensive timezone tests |
+| DST handling bugs | Medium | Medium | Extensive timezone tests, ZoneInfo |
+| Session detection bugs | Medium | Medium | Property-based testing |
 | Backward compatibility | Low | High | Comprehensive regression tests |
-| L3 simulation accuracy | Medium | Medium | Validate against paper trading |
+| OTC simulation accuracy | Medium | Medium | Validate vs paper trading |
+| Last-look calibration | Medium | Medium | Adjustable parameters, A/B testing |
 
 ### Success Criteria
 
 1. **Functional**
-   - [ ] Full pipeline from data to live trading works
-   - [ ] All 7 major pairs supported
-   - [ ] Session-aware execution
+   - [ ] Full pipeline from data download to live trading
+   - [ ] All 7 major pairs fully supported
+   - [ ] Session-aware execution with DST handling
+   - [ ] Position synchronization operational
 
 2. **Performance**
    - [ ] Slippage estimate accuracy ±15%
-   - [ ] Fill rate >95% for liquid pairs
-   - [ ] No regressions in crypto/equity
+   - [ ] Fill rate >98% for major pairs
+   - [ ] No regressions in crypto/equity pipelines
+   - [ ] API rate limit compliance
 
 3. **Quality**
-   - [ ] 430+ tests passing
+   - [ ] 620+ tests passing
+   - [ ] Property-based tests coverage
+   - [ ] Stress scenarios handled
    - [ ] Code coverage >90%
    - [ ] Documentation complete
 
 ---
 
+## 📚 References
+
+### Academic
+- Lyons, R. (2001): "The Microstructure Approach to Exchange Rates", MIT Press
+- Evans, M. & Lyons, R. (2002): "Order Flow and Exchange Rate Dynamics", Journal of Political Economy
+- Berger, D. et al. (2008): "The Development of the Global FX Market", BIS Quarterly Review
+- **King, M., Osler, C., Rime, D. (2012)**: "Foreign Exchange Market Structure, Players, and Evolution"
+- Oomen, R. (2017): "Last Look", Journal of Financial Markets
+- **Chaboud, A. et al. (2014)**: "Rise of the Machines: Algorithmic Trading in the FX Market"
+- Hasbrouck, J. & Saar, G. (2013): "Low-latency Trading", Journal of Financial Markets
+- Brunnermeier, M. et al. (2008): "Carry Trades and Currency Crashes"
+- **Almgren, R. & Chriss, N. (2001)**: "Optimal Execution of Portfolio Transactions"
+
+### Industry
+- **BIS (2022)**: Triennial Central Bank Survey of Foreign Exchange Markets
+- OANDA v20 API Documentation: https://developer.oanda.com/rest-live-v20/
+- CFTC Commitments of Traders Reports
+- ForexFactory Economic Calendar
+
+---
+
 ## 🔜 Next Steps
 
-1. **Approve plan** - Review and finalize this document
-2. **Set up OANDA account** - Practice (demo) account for development
+1. **Approve plan v2.0** - Review and finalize
+2. **Set up OANDA demo account** - Practice account for development
 3. **Create branch** - `feature/forex-integration`
 4. **Phase 0** - Start research and infrastructure setup
+5. **Weekly sync** - Progress review and adjustment
 
 ---
 
 **Author**: Claude AI
-**Version**: 1.0
+**Version**: 2.0 (Reviewed & Corrected)
 **Last Updated**: 2025-11-29
+**Reviewer Notes**:
+- Fixed L3 terminology (OTC ≠ LOB)
+- Added missing services (position_sync, session_router)
+- Fixed file locations (execution_providers.py, services/)
+- Added property-based and stress testing
+- Extended timeline to 16 weeks
+- Added data sources for calendar/swaps
+- Added research references
