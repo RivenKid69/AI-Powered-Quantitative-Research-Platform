@@ -730,6 +730,56 @@ class VolatilityRegime(enum.Enum):
     HIGH = "high"
 
 
+# =============================================================================
+# Forex Parametric TCA Model Enums
+# =============================================================================
+
+class ForexSession(enum.Enum):
+    """
+    Forex trading session classification.
+
+    Sessions are based on major financial centers:
+    - Sydney: 21:00-06:00 UTC (lowest liquidity for majors)
+    - Tokyo: 00:00-09:00 UTC (JPY pairs active)
+    - London: 07:00-16:00 UTC (highest liquidity)
+    - New York: 12:00-21:00 UTC (USD pairs active)
+    - London/NY overlap: 12:00-16:00 UTC (peak liquidity)
+    - Tokyo/London overlap: 07:00-09:00 UTC (moderate liquidity)
+
+    References:
+        - BIS Triennial Central Bank Survey (2022)
+        - King, Osler, Rime (2012): "Foreign Exchange Market Structure"
+    """
+    SYDNEY = "sydney"
+    TOKYO = "tokyo"
+    LONDON = "london"
+    NEW_YORK = "new_york"
+    LONDON_NY_OVERLAP = "london_ny_overlap"
+    TOKYO_LONDON_OVERLAP = "tokyo_london_overlap"
+    OFF_HOURS = "off_hours"
+    WEEKEND = "weekend"
+
+
+class PairType(enum.Enum):
+    """
+    Currency pair classification by liquidity and spread characteristics.
+
+    Classification:
+    - MAJOR: G7 pairs with USD (highest liquidity)
+    - MINOR: Cross pairs without USD (EUR/GBP, EUR/CHF, etc.)
+    - CROSS: JPY crosses and other liquid crosses
+    - EXOTIC: Emerging market currencies (higher spreads)
+
+    References:
+        - BIS Triennial Survey (2022): Currency pair turnover data
+        - Berger et al. (2008): "The Development of the Global FX Market"
+    """
+    MAJOR = "major"
+    MINOR = "minor"
+    CROSS = "cross"
+    EXOTIC = "exotic"
+
+
 @dataclass
 class CryptoParametricConfig:
     """
@@ -1491,6 +1541,925 @@ class CryptoParametricSlippageProvider:
         return cls(**profile)
 
 
+# =============================================================================
+# Forex Parametric TCA Model
+# =============================================================================
+
+@dataclass
+class ForexParametricConfig:
+    """
+    Configuration for ForexParametricSlippageProvider.
+
+    Forex-specific parametric TCA model with 8 factors:
+    1. √Participation impact (Almgren-Chriss base)
+    2. Session liquidity (Sydney/Tokyo/London/NY/overlaps)
+    3. Spread regime (tight/normal/wide based on volatility)
+    4. Interest rate differential (carry trade effect)
+    5. Volatility regime (ATR-based)
+    6. News event proximity (economic calendar)
+    7. DXY correlation (for non-USD pairs)
+    8. Pair type multiplier (major/minor/cross/exotic)
+
+    IMPORTANT: All spreads and slippage values are in PIPS, not basis points.
+    1 pip = 0.0001 for most pairs, 0.01 for JPY pairs.
+    For rough conversion: 1 pip ≈ 1 bps for EUR/USD at ~1.10
+
+    References:
+        - Lyons (2001): "The Microstructure Approach to Exchange Rates"
+        - Evans & Lyons (2002): "Order Flow and Exchange Rate Dynamics"
+        - King, Osler, Rime (2012): "Foreign Exchange Market Structure"
+        - BIS (2022): Triennial Central Bank Survey of FX Markets
+        - Chaboud et al. (2014): "Rise of the Machines" (Algorithmic FX Trading)
+
+    Attributes:
+        impact_coef_base: Base market impact coefficient (lower than crypto due to FX liquidity)
+        impact_coef_range: (min, max) range for adaptive impact
+        default_spreads_pips: Default spreads by pair type in pips
+        spread_profiles: Spread profiles for different client types
+        session_liquidity: Liquidity multipliers by session
+        carry_sensitivity: Impact of interest rate differential
+        dxy_correlation_decay: Decay factor for non-USD pairs
+        news_event_multipliers: Spread multipliers for economic events
+        pair_type_multipliers: Slippage multipliers by pair classification
+        vol_regime_multipliers: Volatility regime adjustments
+        min_slippage_pips: Minimum slippage floor in pips
+        max_slippage_pips: Maximum slippage cap in pips
+    """
+    # Base impact parameters (Almgren-Chriss)
+    # Lower than crypto (0.10) and equity (0.05) due to higher FX liquidity
+    impact_coef_base: float = 0.03
+    impact_coef_range: Tuple[float, float] = (0.02, 0.05)
+
+    # Default spreads by pair type (pips) - RETAIL profile
+    default_spreads_pips: Dict[str, float] = field(default_factory=lambda: {
+        "major": 1.2,    # EUR/USD, GBP/USD, USD/JPY, etc.
+        "minor": 2.0,    # EUR/GBP, EUR/CHF, etc.
+        "cross": 3.0,    # EUR/JPY, GBP/JPY, etc.
+        "exotic": 25.0,  # USD/TRY, USD/ZAR, etc.
+    })
+
+    # Spread profiles for different client types
+    spread_profiles: Dict[str, Dict[str, float]] = field(default_factory=lambda: {
+        "institutional": {"major": 0.3, "minor": 0.8, "cross": 1.5, "exotic": 8.0},
+        "retail": {"major": 1.2, "minor": 2.0, "cross": 3.0, "exotic": 25.0},
+        "conservative": {"major": 1.8, "minor": 3.0, "cross": 4.5, "exotic": 40.0},
+    })
+
+    # Session liquidity factors (1.0 = normal liquidity)
+    # Higher value = more liquidity = lower slippage
+    session_liquidity: Dict[str, float] = field(default_factory=lambda: {
+        "sydney": 0.65,           # Lowest for majors
+        "tokyo": 0.75,            # JPY pairs more active
+        "london": 1.10,           # Highest single-session liquidity
+        "new_york": 1.05,         # Second highest
+        "london_ny_overlap": 1.35,  # Peak liquidity (12:00-16:00 UTC)
+        "tokyo_london_overlap": 0.90,  # Moderate
+        "off_hours": 0.50,        # Very low
+        "weekend": 0.0,           # Market closed
+    })
+
+    # Interest rate differential sensitivity
+    # Positive carry = more market makers = tighter spreads
+    # 3% slippage adjustment per 1% rate differential
+    carry_sensitivity: float = 0.03
+
+    # DXY correlation decay for non-USD pairs
+    # Low correlation with DXY = less USD liquidity spillover = more slippage
+    dxy_correlation_decay: float = 0.25
+
+    # News event impact multipliers
+    # Reference: ForexFactory impact ratings, OANDA volatility studies
+    news_event_multipliers: Dict[str, float] = field(default_factory=lambda: {
+        "nfp": 3.0,           # Non-Farm Payrolls (highest impact)
+        "fomc": 2.5,          # Fed decisions
+        "ecb": 2.0,           # ECB decisions
+        "boe": 1.8,           # Bank of England
+        "boj": 1.8,           # Bank of Japan
+        "rba": 1.5,           # Reserve Bank of Australia
+        "cpi": 1.8,           # Inflation data
+        "gdp": 1.5,           # GDP releases
+        "pmi": 1.3,           # PMI data
+        "retail_sales": 1.2,  # Retail sales
+        "employment": 1.5,    # Employment data (non-NFP)
+        "trade_balance": 1.2, # Trade data
+        "other": 1.1,         # Minor events
+    })
+
+    # Pair type slippage multipliers
+    pair_type_multipliers: Dict[str, float] = field(default_factory=lambda: {
+        "major": 1.0,   # Baseline
+        "minor": 1.4,   # 40% more slippage
+        "cross": 1.8,   # 80% more slippage
+        "exotic": 3.5,  # 250% more slippage
+    })
+
+    # Volatility regime multipliers
+    vol_regime_multipliers: Dict[str, float] = field(default_factory=lambda: {
+        "low": 0.80,      # Calm markets (VIX < 12 equivalent)
+        "normal": 1.00,   # Normal conditions (VIX 12-20)
+        "high": 1.50,     # Elevated volatility (VIX 20-30)
+        "extreme": 2.50,  # Crisis/flash crash (VIX > 30)
+    })
+
+    # Volatility regime detection parameters
+    vol_lookback_periods: int = 20
+    vol_regime_thresholds: Tuple[float, float] = (25.0, 75.0)  # Percentiles
+
+    # Bounds (in pips)
+    min_slippage_pips: float = 0.05   # Minimum realistic slippage
+    max_slippage_pips: float = 150.0  # For exotic pairs during extreme events
+
+    # Adaptive coefficient learning rate
+    adaptive_learning_rate: float = 0.1
+
+    def __post_init__(self) -> None:
+        """Validate configuration parameters."""
+        if self.impact_coef_base <= 0:
+            raise ValueError("impact_coef_base must be positive")
+        if self.impact_coef_range[0] >= self.impact_coef_range[1]:
+            raise ValueError("impact_coef_range must have min < max")
+        if self.vol_lookback_periods < 2:
+            raise ValueError("vol_lookback_periods must be >= 2")
+        if self.min_slippage_pips < 0:
+            raise ValueError("min_slippage_pips must be non-negative")
+        if self.max_slippage_pips <= self.min_slippage_pips:
+            raise ValueError("max_slippage_pips must be greater than min_slippage_pips")
+
+
+class ForexParametricSlippageProvider:
+    """
+    L2+: Smart parametric TCA model for forex OTC markets.
+
+    Extends the basic √participation model (Almgren-Chriss) with 8
+    forex-specific factors that capture OTC market microstructure.
+
+    IMPORTANT: Forex is an OTC (Over-The-Counter) market with dealer quotes,
+    NOT an exchange with a central limit order book. This means:
+    - No queue position concept
+    - Spread is quoted by dealers, not derived from order book
+    - Last-look rejection is simulated separately
+    - Liquidity varies significantly by session
+
+    Total Slippage Formula (in pips):
+        slippage_pips = half_spread_pips
+            × (1 + k × √participation)       # Almgren-Chriss impact
+            × (1 / session_liquidity_factor) # Session adjustment (inverted)
+            × volatility_regime_mult         # Vol regime
+            × (1 + carry_adjustment)         # Interest rate differential
+            × dxy_correlation_factor         # USD liquidity spillover
+            × news_event_factor              # Economic calendar
+            × pair_type_multiplier           # Major/Minor/Cross/Exotic
+
+    Key Differences from Crypto/Equity:
+        - All values in PIPS, not basis points
+        - Session-based liquidity (overlaps are best, Sydney is worst)
+        - Carry trade considerations (interest rate differential)
+        - No central LOB (OTC dealer market)
+        - Last-look rejection handled separately in forex_dealer.py
+
+    Smart Features:
+        - **Session Detection**: Auto-detects current forex session from timestamp
+        - **Pair Classification**: Classifies pairs as major/minor/cross/exotic
+        - **Volatility Regime**: Detects low/normal/high/extreme volatility
+        - **Adaptive Impact**: Coefficient k adjusts based on fill quality
+        - **News Awareness**: Adjusts for upcoming economic events
+
+    References:
+        - Lyons (2001): "The Microstructure Approach to Exchange Rates"
+        - Evans & Lyons (2002): "Order Flow and Exchange Rate Dynamics"
+        - Berger et al. (2008): "The Development of the Global FX Market"
+        - King, Osler, Rime (2012): "Foreign Exchange Market Structure"
+        - BIS (2022): Triennial Central Bank Survey of FX Markets
+        - Chaboud et al. (2014): "Rise of the Machines"
+        - Oomen (2017): "Last Look" in FX Markets
+
+    Attributes:
+        config: ForexParametricConfig with all tunable parameters
+        spread_profile: Active spread profile ("retail", "institutional", etc.)
+        _adaptive_k: Current adaptive impact coefficient
+        _fill_quality_history: Recent fill quality for adaptive adjustment
+        _volatility_history: Volatility history for regime detection
+    """
+
+    # Currency pair classifications (standard forex notation)
+    # Using underscore format for consistency (EUR_USD, not EURUSD)
+    MAJORS: frozenset = frozenset({
+        "EUR_USD", "USD_JPY", "GBP_USD", "USD_CHF",
+        "AUD_USD", "USD_CAD", "NZD_USD",
+    })
+
+    MINORS: frozenset = frozenset({
+        "EUR_GBP", "EUR_CHF", "GBP_CHF", "EUR_AUD",
+        "EUR_CAD", "EUR_NZD", "GBP_AUD", "GBP_CAD",
+        "AUD_NZD", "CHF_JPY",
+    })
+
+    EXOTICS: frozenset = frozenset({
+        "USD_TRY", "USD_ZAR", "USD_MXN", "USD_PLN",
+        "USD_HUF", "USD_CZK", "USD_SGD", "USD_HKD",
+        "USD_NOK", "USD_SEK", "USD_DKK", "EUR_TRY",
+        "EUR_ZAR", "EUR_NOK", "EUR_SEK", "EUR_PLN",
+    })
+
+    # JPY pairs (different pip size: 0.01 instead of 0.0001)
+    JPY_PAIRS: frozenset = frozenset({
+        "USD_JPY", "EUR_JPY", "GBP_JPY", "AUD_JPY",
+        "NZD_JPY", "CAD_JPY", "CHF_JPY",
+    })
+
+    def __init__(
+        self,
+        config: Optional[ForexParametricConfig] = None,
+        spread_profile: str = "retail",
+        *,
+        # Convenience overrides for common parameters
+        impact_coef: Optional[float] = None,
+        min_slippage_pips: Optional[float] = None,
+        max_slippage_pips: Optional[float] = None,
+    ) -> None:
+        """
+        Initialize forex parametric slippage provider.
+
+        Args:
+            config: Full configuration object (uses defaults if None)
+            spread_profile: Spread profile name ("retail", "institutional", "conservative")
+            impact_coef: Override base impact coefficient
+            min_slippage_pips: Override minimum slippage
+            max_slippage_pips: Override maximum slippage
+        """
+        self.config = config or ForexParametricConfig()
+        self.spread_profile = spread_profile
+
+        # Apply convenience overrides by creating new config
+        overrides = {}
+        if impact_coef is not None:
+            overrides["impact_coef_base"] = float(impact_coef)
+        if min_slippage_pips is not None:
+            overrides["min_slippage_pips"] = float(min_slippage_pips)
+        if max_slippage_pips is not None:
+            overrides["max_slippage_pips"] = float(max_slippage_pips)
+
+        if overrides:
+            # Create new config with overrides
+            config_dict = {
+                k: v for k, v in self.config.__dict__.items()
+                if not k.startswith("_")
+            }
+            config_dict.update(overrides)
+            self.config = ForexParametricConfig(**config_dict)
+
+        # Adaptive impact coefficient (starts at base)
+        self._adaptive_k: float = self.config.impact_coef_base
+
+        # Fill quality history for adaptive adjustment
+        self._fill_quality_history: List[Tuple[float, float]] = []
+        self._max_history_size: int = 100
+
+        # Volatility history for regime detection
+        self._volatility_history: List[float] = []
+
+    def compute_slippage_pips(
+        self,
+        order: Order,
+        market: MarketState,
+        participation_ratio: float,
+        *,
+        session: Optional[ForexSession] = None,
+        pair_type: Optional[PairType] = None,
+        interest_rate_diff: Optional[float] = None,
+        dxy_correlation: Optional[float] = None,
+        upcoming_news: Optional[str] = None,
+        recent_returns: Optional[Sequence[float]] = None,
+    ) -> float:
+        """
+        Compute expected slippage in pips using the full parametric model.
+
+        The model combines multiple factors to produce a realistic
+        slippage estimate that accounts for forex OTC market dynamics.
+
+        Formula:
+            slippage = half_spread × (1 + k × √participation) × Π(factors)
+
+        where Π(factors) includes session liquidity, volatility regime,
+        carry trade, DXY correlation, news events, and pair type.
+
+        Args:
+            order: Order to execute
+            market: Current market state
+            participation_ratio: Order size / estimated session volume
+            session: Current forex session (auto-detected if None)
+            pair_type: Currency pair classification (auto-detected if None)
+            interest_rate_diff: Base rate - Quote rate (annual %)
+            dxy_correlation: Correlation with Dollar Index (-1 to 1)
+            upcoming_news: Type of upcoming economic event
+            recent_returns: Recent price returns for regime detection
+
+        Returns:
+            Expected slippage in pips (always positive)
+
+        Example:
+            >>> provider = ForexParametricSlippageProvider()
+            >>> slippage = provider.compute_slippage_pips(
+            ...     order=Order("EUR_USD", "BUY", 100000, "MARKET"),
+            ...     market=MarketState(timestamp=1700000000000, bid=1.0850, ask=1.0852),
+            ...     participation_ratio=0.001,
+            ...     session=ForexSession.LONDON_NY_OVERLAP,
+            ...     interest_rate_diff=-0.50,  # EUR rates lower than USD
+            ... )
+        """
+        from datetime import datetime, timezone
+
+        # =====================================================================
+        # 1. Determine pair type and get base spread
+        # =====================================================================
+        pair_type = pair_type or self._classify_pair(order.symbol)
+        spreads = self.config.spread_profiles.get(
+            self.spread_profile,
+            self.config.default_spreads_pips
+        )
+        base_spread_pips = spreads.get(pair_type.value, 1.5)
+        half_spread = base_spread_pips / 2.0
+
+        # Override with market spread if available
+        # Market spread is in bps, convert to pips (rough approximation)
+        if market.spread_bps is not None and math.isfinite(market.spread_bps):
+            # 1 pip ≈ 1 bps for most pairs at typical rates
+            half_spread = market.spread_bps / 10.0 / 2.0
+
+        # =====================================================================
+        # 2. √Participation impact (Almgren-Chriss 2001)
+        # =====================================================================
+        participation = max(_MIN_PARTICIPATION, abs(participation_ratio))
+        impact = self._adaptive_k * math.sqrt(participation) * 100.0  # Scale for pips
+
+        # =====================================================================
+        # 3. Session liquidity adjustment
+        # =====================================================================
+        session = session or self._detect_session(market.timestamp)
+        session_factor = self.config.session_liquidity.get(session.value, 1.0)
+
+        # Handle weekend (market closed)
+        if session == ForexSession.WEEKEND or session_factor <= 0:
+            # Market closed - return maximum slippage as signal
+            return self.config.max_slippage_pips
+
+        # Invert: low liquidity (factor < 1) = higher slippage
+        session_adjustment = 1.0 / max(0.3, session_factor)
+
+        # =====================================================================
+        # 4. Volatility regime multiplier
+        # =====================================================================
+        vol_regime = self._detect_volatility_regime(recent_returns)
+        vol_mult = self.config.vol_regime_multipliers.get(vol_regime, 1.0)
+
+        # =====================================================================
+        # 5. Carry adjustment (interest rate differential)
+        # =====================================================================
+        carry_factor = 1.0
+        if interest_rate_diff is not None and math.isfinite(interest_rate_diff):
+            # Positive carry (long high-yield) = more liquidity = lower slippage
+            # Negative carry = less interest from dealers = wider spreads
+            carry_factor = 1.0 - interest_rate_diff * self.config.carry_sensitivity
+            carry_factor = max(0.7, min(1.4, carry_factor))
+
+        # =====================================================================
+        # 6. DXY correlation factor (for non-USD pairs)
+        # =====================================================================
+        dxy_factor = 1.0
+        if dxy_correlation is not None and not self._has_usd(order.symbol):
+            # Lower correlation with USD = less liquidity spillover = more slippage
+            corr_clamped = max(0.0, min(1.0, abs(dxy_correlation)))
+            dxy_factor = 1.0 + (1.0 - corr_clamped) * self.config.dxy_correlation_decay
+
+        # =====================================================================
+        # 7. News event impact
+        # =====================================================================
+        news_factor = 1.0
+        if upcoming_news is not None:
+            news_factor = self.config.news_event_multipliers.get(
+                upcoming_news.lower(), 1.0
+            )
+
+        # =====================================================================
+        # 8. Pair type multiplier
+        # =====================================================================
+        pair_mult = self.config.pair_type_multipliers.get(pair_type.value, 1.0)
+
+        # =====================================================================
+        # 9. Combine all factors
+        # =====================================================================
+        total_slippage = (
+            half_spread
+            * (1.0 + impact / half_spread if half_spread > 0 else 1.0 + impact)
+            * session_adjustment
+            * vol_mult
+            * carry_factor
+            * dxy_factor
+            * news_factor
+            * pair_mult
+        )
+
+        # Apply bounds
+        total_slippage = max(self.config.min_slippage_pips, total_slippage)
+        total_slippage = min(self.config.max_slippage_pips, total_slippage)
+
+        return float(total_slippage)
+
+    def compute_slippage_bps(
+        self,
+        order: Order,
+        market: MarketState,
+        participation_ratio: float,
+        **kwargs: Any,
+    ) -> float:
+        """
+        Compute slippage in basis points for compatibility with existing interfaces.
+
+        This is a convenience method that converts pip-based slippage to bps.
+        For accurate forex slippage, use compute_slippage_pips() directly.
+
+        Conversion: 1 pip ≈ 1 bps (rough approximation for EUR/USD at ~1.10)
+        More precise: bps = pips × 10 × pip_size / mid_price × 10000
+
+        Args:
+            order: Order to execute
+            market: Current market state
+            participation_ratio: Order size / volume
+            **kwargs: Additional parameters for compute_slippage_pips
+
+        Returns:
+            Expected slippage in basis points
+        """
+        slippage_pips = self.compute_slippage_pips(
+            order, market, participation_ratio, **kwargs
+        )
+
+        # Convert pips to bps (rough approximation)
+        # For most pairs: 1 pip ≈ 10 bps at mid-price around 1.0
+        # For JPY pairs: 1 pip ≈ 10 bps as well
+        # This is approximate; exact conversion depends on price
+        mid_price = market.get_mid_price() or 1.0
+        pip_size = 0.01 if self._is_jpy_pair(order.symbol) else 0.0001
+
+        # bps = (slippage_pips * pip_size / mid_price) * 10000
+        slippage_bps = (slippage_pips * pip_size / mid_price) * 10000.0
+
+        return float(slippage_bps)
+
+    def _classify_pair(self, symbol: str) -> PairType:
+        """
+        Classify currency pair by type.
+
+        Args:
+            symbol: Currency pair symbol (e.g., "EUR_USD", "EURUSD", "EUR/USD")
+
+        Returns:
+            PairType classification
+        """
+        # Normalize symbol format
+        norm = symbol.replace("/", "_").replace("-", "_").upper()
+        # Handle formats like "EURUSD" -> "EUR_USD"
+        if len(norm) == 6 and "_" not in norm:
+            norm = f"{norm[:3]}_{norm[3:]}"
+
+        if norm in self.MAJORS:
+            return PairType.MAJOR
+        if norm in self.MINORS:
+            return PairType.MINOR
+        if norm in self.EXOTICS:
+            return PairType.EXOTIC
+        # Default to CROSS for unclassified pairs (like EUR/JPY, GBP/JPY)
+        return PairType.CROSS
+
+    def _has_usd(self, symbol: str) -> bool:
+        """Check if pair contains USD."""
+        norm = symbol.upper().replace("/", "_").replace("-", "_")
+        return "USD" in norm
+
+    def _is_jpy_pair(self, symbol: str) -> bool:
+        """Check if pair is a JPY pair (different pip size)."""
+        norm = symbol.replace("/", "_").replace("-", "_").upper()
+        if len(norm) == 6 and "_" not in norm:
+            norm = f"{norm[:3]}_{norm[3:]}"
+        return norm in self.JPY_PAIRS or "JPY" in norm
+
+    def _detect_session(self, timestamp: int) -> ForexSession:
+        """
+        Detect current forex session from timestamp.
+
+        Sessions are based on UTC times:
+        - Sydney: 21:00-06:00 UTC
+        - Tokyo: 00:00-09:00 UTC
+        - London: 07:00-16:00 UTC
+        - New York: 12:00-21:00 UTC
+        - London/NY overlap: 12:00-16:00 UTC (priority)
+        - Tokyo/London overlap: 07:00-09:00 UTC (priority)
+
+        Args:
+            timestamp: Unix timestamp in milliseconds
+
+        Returns:
+            ForexSession classification
+        """
+        from datetime import datetime, timezone
+
+        try:
+            # Handle both milliseconds and seconds timestamps
+            ts_sec = timestamp / 1000.0 if timestamp > 1e12 else float(timestamp)
+            dt = datetime.fromtimestamp(ts_sec, tz=timezone.utc)
+        except (ValueError, OSError, OverflowError):
+            return ForexSession.OFF_HOURS
+
+        hour = dt.hour
+        weekday = dt.weekday()
+
+        # Weekend check (Fri 21:00 UTC - Sun 21:00 UTC)
+        # Friday after 21:00 UTC or Saturday or Sunday before 21:00 UTC
+        if weekday == 5:  # Saturday
+            return ForexSession.WEEKEND
+        if weekday == 6:  # Sunday
+            if hour < 21:  # Before Sydney open
+                return ForexSession.WEEKEND
+        if weekday == 4 and hour >= 21:  # Friday after NY close
+            return ForexSession.WEEKEND
+
+        # Check overlaps first (higher priority)
+        if 12 <= hour < 16:
+            return ForexSession.LONDON_NY_OVERLAP
+        if 7 <= hour < 9:
+            return ForexSession.TOKYO_LONDON_OVERLAP
+
+        # Individual sessions
+        if 21 <= hour or hour < 6:
+            return ForexSession.SYDNEY
+        if 0 <= hour < 9:
+            return ForexSession.TOKYO
+        if 7 <= hour < 16:
+            return ForexSession.LONDON
+        if 12 <= hour < 21:
+            return ForexSession.NEW_YORK
+
+        return ForexSession.OFF_HOURS
+
+    def _detect_volatility_regime(
+        self,
+        returns: Optional[Sequence[float]],
+    ) -> str:
+        """
+        Detect volatility regime from recent returns.
+
+        Uses rolling volatility percentile to classify into
+        low/normal/high/extreme regime.
+
+        Args:
+            returns: Sequence of recent price returns
+
+        Returns:
+            Volatility regime string ("low", "normal", "high", "extreme")
+        """
+        if returns is None or len(returns) < 2:
+            return "normal"
+
+        returns_list = list(returns)[-self.config.vol_lookback_periods:]
+        if len(returns_list) < 2:
+            return "normal"
+
+        # Compute realized volatility
+        mean_ret = sum(returns_list) / len(returns_list)
+        variance = sum((r - mean_ret) ** 2 for r in returns_list) / (len(returns_list) - 1)
+        current_vol = math.sqrt(variance) if variance > 0 else 0.0
+
+        if current_vol == 0:
+            return "normal"
+
+        # Update history
+        self._volatility_history.append(current_vol)
+        if len(self._volatility_history) > 500:
+            self._volatility_history = self._volatility_history[-250:]
+
+        # Need sufficient history for regime classification
+        if len(self._volatility_history) < 20:
+            return "normal"
+
+        # Compute percentile rank
+        sorted_vols = sorted(self._volatility_history)
+        rank = sum(1 for v in sorted_vols if v < current_vol)
+        percentile = (rank / len(sorted_vols)) * 100.0
+
+        low_threshold, high_threshold = self.config.vol_regime_thresholds
+
+        # Extreme is above 95th percentile (hardcoded threshold)
+        if percentile > 95.0:
+            return "extreme"
+        elif percentile > high_threshold:
+            return "high"
+        elif percentile < low_threshold:
+            return "low"
+        else:
+            return "normal"
+
+    def update_fill_quality(
+        self,
+        predicted_slippage_pips: float,
+        actual_slippage_pips: float,
+    ) -> None:
+        """
+        Update adaptive impact coefficient based on fill quality.
+
+        Tracks the ratio of actual to predicted slippage and adjusts
+        the impact coefficient k to minimize prediction error.
+
+        Args:
+            predicted_slippage_pips: Predicted slippage at order time (pips)
+            actual_slippage_pips: Realized slippage after fill (pips)
+        """
+        if predicted_slippage_pips <= 0 or actual_slippage_pips < 0:
+            return
+
+        # Add to history
+        self._fill_quality_history.append((predicted_slippage_pips, actual_slippage_pips))
+
+        # Trim history
+        if len(self._fill_quality_history) > self._max_history_size:
+            self._fill_quality_history = self._fill_quality_history[-self._max_history_size:]
+
+        # Compute adjustment based on recent prediction errors
+        if len(self._fill_quality_history) >= 10:
+            recent = self._fill_quality_history[-20:]
+            ratios = [actual / pred if pred > 0 else 1.0 for pred, actual in recent]
+            avg_ratio = sum(ratios) / len(ratios)
+
+            # Learning rate decays with history size
+            learning_rate = self.config.adaptive_learning_rate / math.sqrt(
+                len(self._fill_quality_history)
+            )
+
+            # Update adaptive k
+            adjustment = 1.0 + learning_rate * (avg_ratio - 1.0)
+            new_k = self._adaptive_k * adjustment
+
+            # Clamp to configured range
+            min_k, max_k = self.config.impact_coef_range
+            self._adaptive_k = max(min_k, min(max_k, new_k))
+
+    def reset_adaptive_state(self) -> None:
+        """Reset adaptive state to initial values."""
+        self._adaptive_k = self.config.impact_coef_base
+        self._fill_quality_history.clear()
+        self._volatility_history.clear()
+
+    def estimate_impact_cost(
+        self,
+        notional: float,
+        adv: float,
+        symbol: str = "EUR_USD",
+        side: str = "BUY",
+        session: Optional[ForexSession] = None,
+        hour_utc: Optional[int] = None,
+        interest_rate_diff: Optional[float] = None,
+        upcoming_news: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Pre-trade cost estimation with full model.
+
+        Useful for optimal execution planning and trade scheduling.
+
+        Args:
+            notional: Planned trade notional value (in quote currency)
+            adv: Average daily volume
+            symbol: Currency pair symbol
+            side: Trade side ("BUY" or "SELL")
+            session: Forex session (auto-detected from hour_utc if None)
+            hour_utc: Planned execution hour (UTC)
+            interest_rate_diff: Interest rate differential
+            upcoming_news: Expected news event type
+
+        Returns:
+            Dict with detailed cost breakdown and recommendations
+
+        Example:
+            >>> provider = ForexParametricSlippageProvider()
+            >>> estimate = provider.estimate_impact_cost(
+            ...     notional=10_000_000,  # $10M
+            ...     adv=500_000_000_000,  # $500B EUR/USD daily volume
+            ...     symbol="EUR_USD",
+            ...     hour_utc=14,  # London/NY overlap
+            ... )
+        """
+        if adv <= 0:
+            return {
+                "participation": 0.0,
+                "impact_pips": 0.0,
+                "impact_cost": 0.0,
+                "pair_type": "unknown",
+                "session": "unknown",
+                "recommendation": "Unable to estimate: ADV is zero",
+            }
+
+        participation = notional / adv
+        pair_type = self._classify_pair(symbol)
+
+        # Determine session from hour if not provided
+        if session is None and hour_utc is not None:
+            # Create fake timestamp for session detection
+            import time
+            fake_ts = int(time.time() * 1000)
+            # Adjust to the specified hour (rough approximation)
+            session = self._detect_session(fake_ts)
+        elif session is None:
+            session = ForexSession.LONDON  # Default to highest liquidity
+
+        # Create dummy order and market for estimation
+        dummy_order = Order(symbol, side, 1.0, "MARKET")
+        dummy_market = MarketState(
+            timestamp=int(hour_utc * 3600 * 1000) if hour_utc else 0,
+            adv=adv,
+        )
+
+        # Compute slippage
+        impact_pips = self.compute_slippage_pips(
+            dummy_order,
+            dummy_market,
+            participation,
+            session=session,
+            pair_type=pair_type,
+            interest_rate_diff=interest_rate_diff,
+            upcoming_news=upcoming_news,
+        )
+
+        # Convert to cost
+        pip_size = 0.01 if self._is_jpy_pair(symbol) else 0.0001
+        impact_cost = notional * impact_pips * pip_size
+
+        # Generate recommendation
+        recommendation = self._generate_execution_recommendation(
+            participation, session, hour_utc, pair_type, upcoming_news
+        )
+
+        return {
+            "participation": participation,
+            "participation_pct": participation * 100,
+            "impact_pips": impact_pips,
+            "impact_cost": impact_cost,
+            "pair_type": pair_type.value,
+            "session": session.value,
+            "liquidity_factor": self.config.session_liquidity.get(session.value, 1.0),
+            "recommendation": recommendation,
+        }
+
+    def _generate_execution_recommendation(
+        self,
+        participation: float,
+        session: ForexSession,
+        hour_utc: Optional[int],
+        pair_type: PairType,
+        upcoming_news: Optional[str],
+    ) -> str:
+        """Generate execution recommendation based on analysis."""
+        recommendations = []
+
+        # Participation-based recommendations
+        if participation > 0.01:  # > 1% of ADV is large for FX
+            recommendations.append(
+                f"Large order ({participation*100:.3f}% ADV). "
+                "Consider TWAP over multiple sessions."
+            )
+        elif participation > 0.001:
+            recommendations.append(
+                "Moderate size order. Consider splitting across session overlap."
+            )
+
+        # Session-based recommendations
+        if session == ForexSession.WEEKEND:
+            recommendations.append(
+                "⚠️ Market closed (weekend). Delay execution to Sunday 21:00 UTC."
+            )
+        elif session == ForexSession.SYDNEY:
+            recommendations.append(
+                "Low liquidity session (Sydney). Consider delaying to London or overlap."
+            )
+        elif session == ForexSession.LONDON_NY_OVERLAP:
+            recommendations.append("Optimal execution window (London/NY overlap).")
+
+        # Pair type recommendations
+        if pair_type == PairType.EXOTIC:
+            recommendations.append(
+                "Exotic pair - expect wider spreads. Consider limit orders."
+            )
+
+        # News recommendations
+        if upcoming_news:
+            news_mult = self.config.news_event_multipliers.get(upcoming_news.lower(), 1.0)
+            if news_mult > 2.0:
+                recommendations.append(
+                    f"⚠️ High-impact event ({upcoming_news}) expected. "
+                    "Spreads may be {news_mult:.1f}x wider."
+                )
+
+        if not recommendations:
+            return "Standard execution conditions."
+
+        return " ".join(recommendations)
+
+    @classmethod
+    def from_config(
+        cls,
+        config: Union[Mapping[str, Any], Any, None],
+        **kwargs: Any,
+    ) -> "ForexParametricSlippageProvider":
+        """
+        Create provider from configuration dict or object.
+
+        Args:
+            config: Configuration dict, Pydantic model, or None
+            **kwargs: Override parameters
+
+        Returns:
+            ForexParametricSlippageProvider instance
+        """
+        if config is None:
+            return cls(**kwargs)
+
+        # Extract parameters
+        params: Dict[str, Any] = {}
+
+        def _extract(cfg: Any, *keys: str, default: Any = None) -> Any:
+            for key in keys:
+                if isinstance(cfg, Mapping) and key in cfg:
+                    return cfg[key]
+                if hasattr(cfg, key):
+                    return getattr(cfg, key)
+            return default
+
+        # Map config keys to init parameters
+        if _extract(config, "impact_coef", "impact_coef_base", "k") is not None:
+            params["impact_coef"] = float(_extract(config, "impact_coef", "impact_coef_base", "k"))
+        if _extract(config, "spread_profile", "profile") is not None:
+            params["spread_profile"] = str(_extract(config, "spread_profile", "profile"))
+        if _extract(config, "min_slippage_pips", "min_pips") is not None:
+            params["min_slippage_pips"] = float(_extract(config, "min_slippage_pips", "min_pips"))
+        if _extract(config, "max_slippage_pips", "max_pips") is not None:
+            params["max_slippage_pips"] = float(_extract(config, "max_slippage_pips", "max_pips"))
+
+        # Allow kwargs to override
+        params.update(kwargs)
+
+        return cls(**params)
+
+    @classmethod
+    def from_profile(
+        cls,
+        profile_name: str,
+    ) -> "ForexParametricSlippageProvider":
+        """
+        Create provider from named profile.
+
+        Available profiles:
+        - "retail": Standard retail spreads (default)
+        - "institutional": Tight institutional spreads
+        - "conservative": Wider spreads for safety margin
+        - "major_only": Optimized for major pairs
+        - "exotic": Wider spreads for exotic pairs
+
+        Args:
+            profile_name: Profile name
+
+        Returns:
+            ForexParametricSlippageProvider instance
+        """
+        profiles: Dict[str, Dict[str, Any]] = {
+            "retail": {
+                "spread_profile": "retail",
+            },
+            "institutional": {
+                "impact_coef": 0.02,
+                "spread_profile": "institutional",
+                "min_slippage_pips": 0.02,
+            },
+            "conservative": {
+                "impact_coef": 0.04,
+                "spread_profile": "conservative",
+                "min_slippage_pips": 0.1,
+                "max_slippage_pips": 200.0,
+            },
+            "major_only": {
+                "impact_coef": 0.025,
+                "spread_profile": "institutional",
+                "min_slippage_pips": 0.01,
+                "max_slippage_pips": 50.0,
+            },
+            "exotic": {
+                "impact_coef": 0.05,
+                "spread_profile": "conservative",
+                "min_slippage_pips": 1.0,
+                "max_slippage_pips": 200.0,
+            },
+        }
+
+        profile = profiles.get(profile_name.lower(), profiles["retail"])
+        return cls(**profile)
+
+
 class OHLCVFillProvider:
     """
     L2: Fill provider based on OHLCV bar data.
@@ -1967,6 +2936,147 @@ class EquityFeeProvider:
         )
 
 
+class ForexFeeProvider:
+    """
+    Forex fee provider (spread-based, zero commission).
+
+    In forex markets, transaction costs are embedded in the bid-ask spread.
+    There are no separate maker/taker fees or regulatory fees like in equity.
+
+    This provider always returns 0 for compute_fee() because:
+    1. Spread cost is already captured in the slippage model
+    2. Retail forex is typically commission-free
+    3. Swap/rollover costs are handled separately (overnight positions)
+
+    For institutional pricing with commission-based models,
+    use the commission_bps parameter.
+
+    Attributes:
+        commission_bps: Optional commission in basis points (institutional)
+        include_swap: Whether to estimate swap cost (for overnight holds)
+    """
+
+    def __init__(
+        self,
+        commission_bps: float = 0.0,
+        include_swap: bool = False,
+    ) -> None:
+        """
+        Initialize forex fee provider.
+
+        Args:
+            commission_bps: Commission per side in bps (0 for retail, ~0.5-1 for institutional)
+            include_swap: Whether to include swap cost placeholder
+        """
+        self.commission_bps = float(commission_bps)
+        self.include_swap = include_swap
+
+    def compute_fee(
+        self,
+        notional: float,
+        side: str,
+        liquidity: str,
+        qty: float,
+    ) -> float:
+        """
+        Compute trading fee.
+
+        For retail forex, this returns 0 (cost is in spread).
+        For institutional, may include commission.
+
+        Args:
+            notional: Trade notional value
+            side: Trade side ("BUY" or "SELL")
+            liquidity: Liquidity role (not used for forex)
+            qty: Trade quantity (not used for forex)
+
+        Returns:
+            Fee amount (0 for retail, commission for institutional)
+        """
+        if self.commission_bps <= 0:
+            return 0.0
+
+        # Institutional commission
+        fee = abs(notional) * self.commission_bps / 10000.0
+        return float(fee)
+
+    def estimate_swap_cost(
+        self,
+        notional: float,
+        side: str,
+        holding_days: int = 1,
+        swap_points_long: float = 0.0,
+        swap_points_short: float = 0.0,
+    ) -> float:
+        """
+        Estimate swap/rollover cost for overnight positions.
+
+        Forex positions held overnight incur swap costs based on
+        interest rate differential between currencies.
+
+        Args:
+            notional: Position notional value
+            side: Position side ("BUY" or "SELL")
+            holding_days: Number of nights position is held
+            swap_points_long: Swap points for long positions (pips/day)
+            swap_points_short: Swap points for short positions (pips/day)
+
+        Returns:
+            Estimated swap cost (negative = cost, positive = credit)
+
+        Note:
+            Wednesday positions incur 3x swap (weekend rollover).
+        """
+        if not self.include_swap:
+            return 0.0
+
+        side_str = str(side).upper()
+        swap_points = swap_points_long if side_str == "BUY" else swap_points_short
+
+        # Convert pips to cost (assuming standard pip size)
+        pip_value = notional * 0.0001  # Simplified
+        swap_cost = swap_points * pip_value * holding_days
+
+        return float(swap_cost)
+
+    @classmethod
+    def from_config(
+        cls,
+        config: Union[Mapping[str, Any], Any, None],
+    ) -> "ForexFeeProvider":
+        """
+        Create ForexFeeProvider from configuration dict or object.
+
+        Args:
+            config: Configuration dict or object with fee parameters
+
+        Returns:
+            ForexFeeProvider instance
+        """
+        if config is None:
+            return cls()
+
+        def _extract_value(cfg: Any, *keys: str, default: Any = None) -> Any:
+            for key in keys:
+                if isinstance(cfg, Mapping) and key in cfg:
+                    return cfg[key]
+                if hasattr(cfg, key):
+                    return getattr(cfg, key)
+            return default
+
+        commission_bps = _extract_value(
+            config, "commission_bps", "commission", "fee_bps", default=0.0
+        )
+        include_swap = _extract_value(
+            config, "include_swap", "swap", "include_rollover", default=False
+        )
+
+        return cls(
+            commission_bps=float(commission_bps) if commission_bps else 0.0,
+            include_swap=bool(include_swap),
+        )
+
+
 # =============================================================================
 # L2 Combined Execution Provider
 # =============================================================================
@@ -2250,7 +3360,16 @@ def create_slippage_provider(
             return LOBSlippageProvider(**kwargs)
 
     # L1/L2: Statistical model
-    if asset_class == AssetClass.EQUITY:
+    if asset_class == AssetClass.FOREX:
+        # FOREX: Use ForexParametricSlippageProvider (L2+)
+        profile = kwargs.pop("profile", None)
+        if profile:
+            return ForexParametricSlippageProvider.from_profile(profile)
+        config_dict = kwargs.pop("config", None)
+        if config_dict:
+            return ForexParametricSlippageProvider.from_config(config_dict)
+        return ForexParametricSlippageProvider(**kwargs)
+    elif asset_class == AssetClass.EQUITY:
         defaults = {"impact_coef": 0.05, "spread_bps": 2.0}
     else:
         defaults = {"impact_coef": 0.1, "spread_bps": 5.0}
@@ -2277,6 +3396,11 @@ def create_fee_provider(
         return EquityFeeProvider(**kwargs)
     elif asset_class == AssetClass.CRYPTO:
         return CryptoFeeProvider(**kwargs)
+    elif asset_class == AssetClass.FOREX:
+        config_dict = kwargs.pop("config", None)
+        if config_dict:
+            return ForexFeeProvider.from_config(config_dict)
+        return ForexFeeProvider(**kwargs)
     else:
         return ZeroFeeProvider()
 
@@ -2347,7 +3471,7 @@ def create_execution_provider(
     Factory function to create combined execution provider.
 
     Args:
-        asset_class: Asset class (CRYPTO or EQUITY)
+        asset_class: Asset class (CRYPTO, EQUITY, or FOREX)
         level: Fidelity level ("L2", "L3")
         **kwargs: Provider-specific configuration
 
@@ -2365,6 +3489,10 @@ def create_execution_provider(
         >>> from lob.config import L3ExecutionConfig
         >>> config = L3ExecutionConfig.for_equity()
         >>> provider = create_execution_provider(AssetClass.EQUITY, level="L3", config=config)
+
+        # FOREX provider (L2+ parametric TCA)
+        >>> provider = create_execution_provider(AssetClass.FOREX, level="L2")
+        >>> provider = create_execution_provider(AssetClass.FOREX, profile="conservative")
     """
     level_upper = str(level).upper()
 
