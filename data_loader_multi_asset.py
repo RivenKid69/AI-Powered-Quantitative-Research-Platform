@@ -70,6 +70,10 @@ class DataVendor(str, Enum):
     CSV = "csv"
     FEATHER = "feather"
     PARQUET = "parquet"
+    # Forex vendors (Phase 1)
+    OANDA = "oanda"
+    IG = "ig"
+    DUKASCOPY = "dukascopy"
 
 
 # =============================================================================

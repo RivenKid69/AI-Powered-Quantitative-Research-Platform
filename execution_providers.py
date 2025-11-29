@@ -61,6 +61,7 @@ class AssetClass(enum.Enum):
     EQUITY = "equity"
     FUTURES = "futures"
     OPTIONS = "options"
+    FOREX = "forex"  # Phase 0: Forex support
 
 
 class OrderSide(enum.Enum):

@@ -167,6 +167,10 @@ class AdapterRegistry:
             ExchangeVendor.BINANCE_US: "adapters.binance",
             ExchangeVendor.ALPACA: "adapters.alpaca",
             ExchangeVendor.YAHOO: "adapters.yahoo",
+            # Forex vendors (Phase 1)
+            ExchangeVendor.OANDA: "adapters.oanda",
+            ExchangeVendor.IG: "adapters.ig",
+            ExchangeVendor.DUKASCOPY: "adapters.dukascopy",
         }
 
         # Track which vendors have been loaded

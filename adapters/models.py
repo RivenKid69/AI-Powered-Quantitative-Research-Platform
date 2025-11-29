@@ -16,6 +16,7 @@ Design Principles:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from decimal import Decimal
 from enum import Enum, auto
@@ -52,11 +53,18 @@ class MarketType(str, Enum):
 
 class ExchangeVendor(str, Enum):
     """Supported exchange vendors."""
+    # Crypto
     BINANCE = "binance"
     BINANCE_US = "binance_us"
+    # Equity
     ALPACA = "alpaca"
     POLYGON = "polygon"  # Data provider
     YAHOO = "yahoo"      # Data provider for corporate actions, earnings (Phase 7)
+    # Forex (Phase 0)
+    OANDA = "oanda"          # Primary forex broker (OANDA v20 API)
+    IG = "ig"                # IG Markets (alternative)
+    DUKASCOPY = "dukascopy"  # Dukascopy (historical tick data)
+    # Unknown
     UNKNOWN = "unknown"
 
     @property
@@ -66,7 +74,14 @@ class ExchangeVendor(str, Enum):
             return MarketType.CRYPTO_SPOT
         elif self == ExchangeVendor.ALPACA:
             return MarketType.EQUITY
+        elif self in (ExchangeVendor.OANDA, ExchangeVendor.IG, ExchangeVendor.DUKASCOPY):
+            return MarketType.FOREX
         return MarketType.CRYPTO_SPOT
+
+    @property
+    def is_forex(self) -> bool:
+        """Returns True if this vendor is a forex broker/data provider."""
+        return self in (ExchangeVendor.OANDA, ExchangeVendor.IG, ExchangeVendor.DUKASCOPY)
 
 
 class FeeStructure(str, Enum):
@@ -1206,3 +1221,601 @@ class AdjustmentFactors:
             split_factor=float(d.get("split_factor", 1.0)),
             dividend_factor=float(d.get("dividend_factor", 1.0)),
         )
+
+
+# =========================
+# Forex Models (Phase 0)
+# =========================
+
+class ForexSessionType(str, Enum):
+    """
+    Forex trading session type.
+
+    The forex market operates in overlapping sessions with varying liquidity:
+    - Sydney: Lowest liquidity, widest spreads
+    - Tokyo: Moderate liquidity, JPY pairs active
+    - London: Highest liquidity, EUR/GBP pairs active
+    - New York: High liquidity, USD pairs active
+    - Overlaps: Best liquidity and tightest spreads
+
+    References:
+        - BIS Triennial Survey 2022: https://www.bis.org/statistics/rpfx22.htm
+        - Forex session times: Standard GMT/UTC-based windows
+    """
+    SYDNEY = "sydney"
+    TOKYO = "tokyo"
+    LONDON = "london"
+    NEW_YORK = "new_york"
+    LONDON_NY_OVERLAP = "london_ny_overlap"
+    TOKYO_LONDON_OVERLAP = "tokyo_london_overlap"
+    WEEKEND = "weekend"
+    OFF_HOURS = "off_hours"  # Between sessions, low liquidity
+
+
+class CurrencyPairCategory(str, Enum):
+    """
+    Currency pair classification by liquidity and spread characteristics.
+
+    Categories based on BIS Triennial Survey 2022 volume data:
+    - MAJOR: USD pairs with G7 currencies, $500B+ daily volume
+    - MINOR: Cross rates without USD but major currencies, $50-100B
+    - CROSS: JPY crosses and other liquid crosses, $20-50B
+    - EXOTIC: Emerging market currencies, $1-10B
+
+    References:
+        - BIS Triennial Survey 2022
+        - Standard institutional classification
+    """
+    MAJOR = "major"    # EUR/USD, USD/JPY, GBP/USD, USD/CHF, AUD/USD, USD/CAD, NZD/USD
+    MINOR = "minor"    # EUR/GBP, EUR/CHF, GBP/CHF, EUR/AUD, GBP/AUD
+    CROSS = "cross"    # EUR/JPY, GBP/JPY, AUD/JPY, CHF/JPY, CAD/JPY, NZD/JPY
+    EXOTIC = "exotic"  # USD/TRY, USD/ZAR, USD/MXN, USD/SGD, USD/HKD, USD/NOK, USD/SEK
+
+
+@dataclass(frozen=True)
+class ForexSessionWindow:
+    """
+    Forex session trading window with liquidity characteristics.
+
+    Attributes:
+        session_type: Type of forex session
+        start_hour_utc: Start hour in UTC (0-23)
+        end_hour_utc: End hour in UTC (0-23), can be < start for overnight
+        liquidity_factor: Relative liquidity (1.0 = London session baseline)
+        spread_multiplier: Spread adjustment (1.0 = tightest spreads, >1 = wider)
+        days_of_week: Active days (0=Monday, 6=Sunday)
+
+    Note:
+        liquidity_factor and spread_multiplier are inversely related:
+        Higher liquidity → Lower spread multiplier
+    """
+    session_type: ForexSessionType
+    start_hour_utc: int
+    end_hour_utc: int
+    liquidity_factor: float
+    spread_multiplier: float
+    days_of_week: Tuple[int, ...] = (0, 1, 2, 3, 4)  # Mon-Fri by default
+
+    def __post_init__(self) -> None:
+        """Validate session window parameters."""
+        if not (0 <= self.start_hour_utc <= 23):
+            raise ValueError(f"start_hour_utc must be 0-23, got {self.start_hour_utc}")
+        if not (0 <= self.end_hour_utc <= 23):
+            raise ValueError(f"end_hour_utc must be 0-23, got {self.end_hour_utc}")
+        # Allow 0.0 for weekend (no trading) but reject negative
+        if self.liquidity_factor < 0:
+            raise ValueError(f"liquidity_factor must be non-negative, got {self.liquidity_factor}")
+        # Allow infinity for weekend spread but reject zero/negative
+        if self.spread_multiplier <= 0 and not math.isinf(self.spread_multiplier):
+            raise ValueError(f"spread_multiplier must be positive, got {self.spread_multiplier}")
+
+    @property
+    def is_overnight(self) -> bool:
+        """Returns True if session spans midnight UTC."""
+        return self.end_hour_utc < self.start_hour_utc
+
+    @property
+    def duration_hours(self) -> int:
+        """Duration of session in hours."""
+        if self.is_overnight:
+            return (24 - self.start_hour_utc) + self.end_hour_utc
+        return self.end_hour_utc - self.start_hour_utc
+
+    def contains_hour(self, hour_utc: int, day_of_week: int) -> bool:
+        """
+        Check if given UTC hour is within this session.
+
+        Args:
+            hour_utc: Hour in UTC (0-23)
+            day_of_week: Day of week (0=Monday, 6=Sunday)
+
+        Returns:
+            True if hour is within session window
+        """
+        if day_of_week not in self.days_of_week:
+            return False
+
+        if self.is_overnight:
+            return hour_utc >= self.start_hour_utc or hour_utc < self.end_hour_utc
+        return self.start_hour_utc <= hour_utc < self.end_hour_utc
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "session_type": self.session_type.value,
+            "start_hour_utc": self.start_hour_utc,
+            "end_hour_utc": self.end_hour_utc,
+            "liquidity_factor": self.liquidity_factor,
+            "spread_multiplier": self.spread_multiplier,
+            "days_of_week": list(self.days_of_week),
+        }
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> "ForexSessionWindow":
+        session_type_val = d.get("session_type", "off_hours")
+        try:
+            session_type = ForexSessionType(str(session_type_val))
+        except ValueError:
+            session_type = ForexSessionType.OFF_HOURS
+
+        days = d.get("days_of_week", [0, 1, 2, 3, 4])
+        if isinstance(days, (list, tuple)):
+            days_tuple = tuple(int(x) for x in days)
+        else:
+            days_tuple = (0, 1, 2, 3, 4)
+
+        return cls(
+            session_type=session_type,
+            start_hour_utc=int(d.get("start_hour_utc", 0)),
+            end_hour_utc=int(d.get("end_hour_utc", 0)),
+            liquidity_factor=float(d.get("liquidity_factor", 1.0)),
+            spread_multiplier=float(d.get("spread_multiplier", 1.0)),
+            days_of_week=days_tuple,
+        )
+
+
+# =========================
+# Forex Session Constants
+# =========================
+
+# Session windows based on standard forex market hours
+# Liquidity factors relative to London session (peak = 1.0)
+# Spread multipliers: 1.0 = tightest (London/NY overlap), >1 = wider
+
+FOREX_SESSION_WINDOWS: List[ForexSessionWindow] = [
+    # Sydney Session: 21:00-06:00 UTC (lowest liquidity for major pairs)
+    ForexSessionWindow(
+        session_type=ForexSessionType.SYDNEY,
+        start_hour_utc=21,
+        end_hour_utc=6,
+        liquidity_factor=0.65,
+        spread_multiplier=1.5,
+        days_of_week=(0, 1, 2, 3, 4, 6),  # Sun evening to Fri, starts Sun
+    ),
+    # Tokyo Session: 00:00-09:00 UTC (good for JPY pairs)
+    ForexSessionWindow(
+        session_type=ForexSessionType.TOKYO,
+        start_hour_utc=0,
+        end_hour_utc=9,
+        liquidity_factor=0.75,
+        spread_multiplier=1.3,
+        days_of_week=(0, 1, 2, 3, 4),  # Mon-Fri
+    ),
+    # London Session: 07:00-16:00 UTC (highest overall liquidity)
+    ForexSessionWindow(
+        session_type=ForexSessionType.LONDON,
+        start_hour_utc=7,
+        end_hour_utc=16,
+        liquidity_factor=1.10,
+        spread_multiplier=1.0,
+        days_of_week=(0, 1, 2, 3, 4),  # Mon-Fri
+    ),
+    # New York Session: 12:00-21:00 UTC (high USD pair liquidity)
+    ForexSessionWindow(
+        session_type=ForexSessionType.NEW_YORK,
+        start_hour_utc=12,
+        end_hour_utc=21,
+        liquidity_factor=1.05,
+        spread_multiplier=1.0,
+        days_of_week=(0, 1, 2, 3, 4),  # Mon-Fri
+    ),
+    # London/NY Overlap: 12:00-16:00 UTC (BEST liquidity, tightest spreads)
+    ForexSessionWindow(
+        session_type=ForexSessionType.LONDON_NY_OVERLAP,
+        start_hour_utc=12,
+        end_hour_utc=16,
+        liquidity_factor=1.35,
+        spread_multiplier=0.8,  # Tightest spreads!
+        days_of_week=(0, 1, 2, 3, 4),  # Mon-Fri
+    ),
+    # Tokyo/London Overlap: 07:00-09:00 UTC (moderate boost)
+    ForexSessionWindow(
+        session_type=ForexSessionType.TOKYO_LONDON_OVERLAP,
+        start_hour_utc=7,
+        end_hour_utc=9,
+        liquidity_factor=0.90,
+        spread_multiplier=1.1,
+        days_of_week=(0, 1, 2, 3, 4),  # Mon-Fri
+    ),
+]
+
+# Weekend: Forex market closed from Fri 21:00 UTC to Sun 21:00 UTC
+FOREX_WEEKEND_WINDOW = ForexSessionWindow(
+    session_type=ForexSessionType.WEEKEND,
+    start_hour_utc=21,  # Friday 21:00 UTC
+    end_hour_utc=21,    # Sunday 21:00 UTC (special case: 48h)
+    liquidity_factor=0.0,  # No trading
+    spread_multiplier=float("inf"),  # Cannot trade
+    days_of_week=(4, 5, 6),  # Fri evening, Sat, Sun until evening
+)
+
+
+# =========================
+# Forex Pip Sizes
+# =========================
+
+# Standard pip sizes by base currency
+# Most pairs: 0.0001 (4 decimal places)
+# JPY pairs: 0.01 (2 decimal places)
+
+PIP_SIZE_BY_QUOTE_CURRENCY: Dict[str, float] = {
+    "JPY": 0.01,    # Japanese Yen pairs
+    "HUF": 0.01,    # Hungarian Forint
+    "default": 0.0001,  # Standard 4-decimal pairs
+}
+
+
+def get_pip_size(symbol: str) -> float:
+    """
+    Get pip size for a currency pair.
+
+    Args:
+        symbol: Currency pair (e.g., "EUR_USD", "USD_JPY", "EUR/USD")
+
+    Returns:
+        Pip size (0.0001 for most, 0.01 for JPY pairs)
+
+    Examples:
+        >>> get_pip_size("EUR_USD")
+        0.0001
+        >>> get_pip_size("USD_JPY")
+        0.01
+        >>> get_pip_size("EUR/JPY")
+        0.01
+    """
+    # Normalize symbol: EUR_USD -> EUR/USD -> check quote (second currency)
+    normalized = symbol.upper().replace("_", "/")
+    parts = normalized.split("/")
+    if len(parts) == 2:
+        quote_currency = parts[1]
+        return PIP_SIZE_BY_QUOTE_CURRENCY.get(
+            quote_currency,
+            PIP_SIZE_BY_QUOTE_CURRENCY["default"]
+        )
+    return PIP_SIZE_BY_QUOTE_CURRENCY["default"]
+
+
+def pips_to_price(pips: float, symbol: str) -> float:
+    """
+    Convert pips to price difference.
+
+    Args:
+        pips: Number of pips
+        symbol: Currency pair
+
+    Returns:
+        Price difference
+
+    Examples:
+        >>> pips_to_price(10, "EUR_USD")
+        0.001
+        >>> pips_to_price(10, "USD_JPY")
+        0.1
+    """
+    return pips * get_pip_size(symbol)
+
+
+def price_to_pips(price_diff: float, symbol: str) -> float:
+    """
+    Convert price difference to pips.
+
+    Args:
+        price_diff: Price difference
+        symbol: Currency pair
+
+    Returns:
+        Number of pips
+
+    Examples:
+        >>> price_to_pips(0.001, "EUR_USD")
+        10.0
+        >>> price_to_pips(0.1, "USD_JPY")
+        10.0
+    """
+    pip_size = get_pip_size(symbol)
+    if pip_size == 0:
+        return 0.0
+    return price_diff / pip_size
+
+
+# =========================
+# Forex Pair Classification
+# =========================
+
+# Major pairs: USD with G7 currencies
+FOREX_MAJOR_PAIRS: Tuple[str, ...] = (
+    "EUR_USD", "USD_JPY", "GBP_USD", "USD_CHF",
+    "AUD_USD", "USD_CAD", "NZD_USD",
+)
+
+# Minor pairs (crosses): G7 without USD
+FOREX_MINOR_PAIRS: Tuple[str, ...] = (
+    "EUR_GBP", "EUR_CHF", "GBP_CHF", "EUR_AUD",
+    "GBP_AUD", "EUR_CAD", "GBP_CAD", "AUD_NZD",
+    "AUD_CAD", "NZD_CAD",
+)
+
+# JPY crosses
+FOREX_JPY_CROSSES: Tuple[str, ...] = (
+    "EUR_JPY", "GBP_JPY", "AUD_JPY", "CHF_JPY",
+    "CAD_JPY", "NZD_JPY",
+)
+
+# Exotic pairs (emerging markets)
+FOREX_EXOTIC_PAIRS: Tuple[str, ...] = (
+    "USD_TRY", "USD_ZAR", "USD_MXN", "USD_SGD",
+    "USD_HKD", "USD_NOK", "USD_SEK", "USD_DKK",
+    "USD_PLN", "USD_CZK", "USD_HUF", "USD_RUB",
+    "EUR_TRY", "EUR_ZAR", "EUR_NOK", "EUR_SEK",
+)
+
+
+def classify_currency_pair(symbol: str) -> CurrencyPairCategory:
+    """
+    Classify a currency pair by its category.
+
+    Args:
+        symbol: Currency pair (e.g., "EUR_USD", "EUR/USD")
+
+    Returns:
+        CurrencyPairCategory enum value
+
+    Examples:
+        >>> classify_currency_pair("EUR_USD")
+        CurrencyPairCategory.MAJOR
+        >>> classify_currency_pair("EUR/JPY")
+        CurrencyPairCategory.CROSS
+        >>> classify_currency_pair("USD_TRY")
+        CurrencyPairCategory.EXOTIC
+    """
+    normalized = symbol.upper().replace("/", "_")
+
+    if normalized in FOREX_MAJOR_PAIRS:
+        return CurrencyPairCategory.MAJOR
+    elif normalized in FOREX_MINOR_PAIRS:
+        return CurrencyPairCategory.MINOR
+    elif normalized in FOREX_JPY_CROSSES:
+        return CurrencyPairCategory.CROSS
+    elif normalized in FOREX_EXOTIC_PAIRS:
+        return CurrencyPairCategory.EXOTIC
+
+    # Heuristic for unknown pairs
+    parts = normalized.split("_")
+    if len(parts) == 2:
+        base, quote = parts
+        major_currencies = {"EUR", "USD", "JPY", "GBP", "CHF", "AUD", "CAD", "NZD"}
+        if base in major_currencies and quote in major_currencies:
+            if "USD" in (base, quote):
+                return CurrencyPairCategory.MAJOR
+            elif "JPY" in (base, quote):
+                return CurrencyPairCategory.CROSS
+            return CurrencyPairCategory.MINOR
+    return CurrencyPairCategory.EXOTIC
+
+
+# =========================
+# Forex Spread Profiles
+# =========================
+
+@dataclass(frozen=True)
+class ForexSpreadProfile:
+    """
+    Spread profile for a currency pair category.
+
+    Attributes:
+        category: Currency pair category
+        retail_spread_pips: Typical retail broker spread
+        institutional_spread_pips: Institutional/ECN spread
+        conservative_spread_pips: Conservative estimate for simulation
+        avg_daily_range_pips: Average daily price range in pips
+
+    References:
+        - BIS Triennial Survey 2022
+        - Major broker spread sheets
+    """
+    category: CurrencyPairCategory
+    retail_spread_pips: float
+    institutional_spread_pips: float
+    conservative_spread_pips: float
+    avg_daily_range_pips: float
+
+    def get_spread(self, profile: str = "conservative") -> float:
+        """Get spread in pips for given profile."""
+        if profile == "retail":
+            return self.retail_spread_pips
+        elif profile == "institutional":
+            return self.institutional_spread_pips
+        return self.conservative_spread_pips
+
+
+# Default spread profiles by category
+FOREX_SPREAD_PROFILES: Dict[CurrencyPairCategory, ForexSpreadProfile] = {
+    CurrencyPairCategory.MAJOR: ForexSpreadProfile(
+        category=CurrencyPairCategory.MAJOR,
+        retail_spread_pips=1.2,
+        institutional_spread_pips=0.3,
+        conservative_spread_pips=1.5,
+        avg_daily_range_pips=75.0,
+    ),
+    CurrencyPairCategory.MINOR: ForexSpreadProfile(
+        category=CurrencyPairCategory.MINOR,
+        retail_spread_pips=2.0,
+        institutional_spread_pips=0.6,
+        conservative_spread_pips=2.5,
+        avg_daily_range_pips=60.0,
+    ),
+    CurrencyPairCategory.CROSS: ForexSpreadProfile(
+        category=CurrencyPairCategory.CROSS,
+        retail_spread_pips=3.0,
+        institutional_spread_pips=1.0,
+        conservative_spread_pips=4.0,
+        avg_daily_range_pips=100.0,
+    ),
+    CurrencyPairCategory.EXOTIC: ForexSpreadProfile(
+        category=CurrencyPairCategory.EXOTIC,
+        retail_spread_pips=30.0,
+        institutional_spread_pips=10.0,
+        conservative_spread_pips=50.0,
+        avg_daily_range_pips=300.0,
+    ),
+}
+
+
+def get_spread_profile(symbol: str) -> ForexSpreadProfile:
+    """
+    Get spread profile for a currency pair.
+
+    Args:
+        symbol: Currency pair (e.g., "EUR_USD")
+
+    Returns:
+        ForexSpreadProfile for the pair's category
+    """
+    category = classify_currency_pair(symbol)
+    return FOREX_SPREAD_PROFILES[category]
+
+
+# =========================
+# Forex Calendar Helper
+# =========================
+
+def create_forex_calendar(vendor: ExchangeVendor = ExchangeVendor.OANDA) -> MarketCalendar:
+    """
+    Create forex market calendar.
+
+    Forex market hours: Sunday 21:00 UTC to Friday 21:00 UTC
+    (or Sunday 5pm ET to Friday 5pm ET)
+    """
+    # Create a continuous session for forex (with weekend closure handled separately)
+    forex_session = TradingSession(
+        session_type=SessionType.CONTINUOUS,
+        start_minutes=21 * 60,  # Sunday 21:00 UTC
+        end_minutes=21 * 60,    # Friday 21:00 UTC (special handling)
+        timezone="UTC",
+        days_of_week=(0, 1, 2, 3, 4),  # Active Mon-Fri
+        is_active=True,
+    )
+    return MarketCalendar(
+        vendor=vendor,
+        market_type=MarketType.FOREX,
+        sessions=[forex_session],
+        timezone="UTC",
+    )
+
+
+def get_current_forex_session(hour_utc: int, day_of_week: int) -> ForexSessionType:
+    """
+    Determine current forex session based on UTC hour and day.
+
+    Priority order for overlapping sessions:
+    1. LONDON_NY_OVERLAP (best liquidity)
+    2. TOKYO_LONDON_OVERLAP
+    3. Individual sessions (LONDON > NEW_YORK > TOKYO > SYDNEY)
+    4. OFF_HOURS
+
+    Args:
+        hour_utc: Current hour in UTC (0-23)
+        day_of_week: Day of week (0=Monday, 6=Sunday)
+
+    Returns:
+        ForexSessionType for current session
+    """
+    # Check weekend first
+    if day_of_week == 5:  # Saturday
+        return ForexSessionType.WEEKEND
+    if day_of_week == 6 and hour_utc < 21:  # Sunday before 21:00 UTC
+        return ForexSessionType.WEEKEND
+    if day_of_week == 4 and hour_utc >= 21:  # Friday after 21:00 UTC
+        return ForexSessionType.WEEKEND
+
+    # Check overlaps first (highest priority)
+    for window in FOREX_SESSION_WINDOWS:
+        if window.session_type == ForexSessionType.LONDON_NY_OVERLAP:
+            if window.contains_hour(hour_utc, day_of_week):
+                return ForexSessionType.LONDON_NY_OVERLAP
+
+    for window in FOREX_SESSION_WINDOWS:
+        if window.session_type == ForexSessionType.TOKYO_LONDON_OVERLAP:
+            if window.contains_hour(hour_utc, day_of_week):
+                return ForexSessionType.TOKYO_LONDON_OVERLAP
+
+    # Check individual sessions in priority order
+    session_priority = [
+        ForexSessionType.LONDON,
+        ForexSessionType.NEW_YORK,
+        ForexSessionType.TOKYO,
+        ForexSessionType.SYDNEY,
+    ]
+
+    for session_type in session_priority:
+        for window in FOREX_SESSION_WINDOWS:
+            if window.session_type == session_type:
+                if window.contains_hour(hour_utc, day_of_week):
+                    return session_type
+
+    return ForexSessionType.OFF_HOURS
+
+
+def get_session_liquidity_factor(hour_utc: int, day_of_week: int) -> float:
+    """
+    Get liquidity factor for current forex session.
+
+    Args:
+        hour_utc: Current hour in UTC (0-23)
+        day_of_week: Day of week (0=Monday, 6=Sunday)
+
+    Returns:
+        Liquidity factor (1.0 = London baseline, 0.0 = weekend/closed)
+    """
+    session = get_current_forex_session(hour_utc, day_of_week)
+
+    if session == ForexSessionType.WEEKEND:
+        return 0.0
+
+    for window in FOREX_SESSION_WINDOWS:
+        if window.session_type == session:
+            return window.liquidity_factor
+
+    return 0.5  # Default for OFF_HOURS
+
+
+def get_session_spread_multiplier(hour_utc: int, day_of_week: int) -> float:
+    """
+    Get spread multiplier for current forex session.
+
+    Args:
+        hour_utc: Current hour in UTC (0-23)
+        day_of_week: Day of week (0=Monday, 6=Sunday)
+
+    Returns:
+        Spread multiplier (1.0 = London, <1 = London/NY overlap, >1 = low liquidity)
+    """
+    session = get_current_forex_session(hour_utc, day_of_week)
+
+    if session == ForexSessionType.WEEKEND:
+        return float("inf")  # Cannot trade
+
+    for window in FOREX_SESSION_WINDOWS:
+        if window.session_type == session:
+            return window.spread_multiplier
+
+    return 2.0  # Default for OFF_HOURS (wider spreads)
