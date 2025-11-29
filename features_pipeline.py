@@ -202,6 +202,7 @@ class FeaturePipeline:
         preserve_close_orig: bool = True,  # REQUIRED for TradingEnv reward calculation
         asset_class: Optional[str] = None,  # FIX: Asset class awareness
         auto_stock_features: bool = True,  # FIX: Auto-apply stock features for equity
+        auto_forex_features: bool = True,  # FIX: Auto-apply forex features for forex
     ):
         """Container for feature normalization statistics.
 
@@ -251,6 +252,13 @@ class FeaturePipeline:
             Default: True
 
             Note: This only affects equity asset class. Crypto/forex are unchanged.
+        auto_forex_features:
+            If True (default) and asset_class="forex", automatically add forex-specific
+            features (carry, session, spread regime, etc.) during transform.
+            Set to False to disable automatic feature addition (e.g., if features already added).
+            Default: True
+
+            Note: This only affects forex asset class. Crypto/equity are unchanged.
         """
         # Validate asset_class
         if asset_class is not None and asset_class.lower() not in self.VALID_ASSET_CLASSES:
@@ -268,6 +276,7 @@ class FeaturePipeline:
         self.preserve_close_orig = preserve_close_orig
         self.asset_class = asset_class.lower() if asset_class else None
         self.auto_stock_features = auto_stock_features
+        self.auto_forex_features = auto_forex_features
 
     def reset(self) -> None:
         """Drop previously computed statistics.
@@ -322,6 +331,75 @@ class FeaturePipeline:
             logger.warning(
                 f"Failed to add stock features to {symbol}: {e}. "
                 "Returning DataFrame without additional stock features."
+            )
+            return df
+
+    def _add_forex_features_internal(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Internal method to add forex-specific features.
+
+        Called automatically by transform_df() when asset_class="forex"
+        and auto_forex_features=True.
+
+        Features added:
+        - Carry differential (normalized interest rate spread)
+        - Session indicators (sydney, tokyo, london, new_york, overlap)
+        - Session liquidity multiplier
+        - Spread regime (if spread column available)
+        - Volatility features (5d, 20d, ratio)
+
+        Args:
+            df: DataFrame with OHLCV data
+
+        Returns:
+            DataFrame with forex features added
+
+        Note:
+            For DXY relative strength, COT positioning, and economic calendar
+            features, use add_forex_features_to_dataframe() from forex_features.py
+            which requires benchmark data (DXY, rates, COT).
+        """
+        # Extract symbol from DataFrame if present
+        symbol = df["symbol"].iloc[0] if "symbol" in df.columns and len(df) > 0 else "EUR_USD"
+
+        try:
+            from forex_features import (
+                add_forex_features_to_dataframe,
+                ForexFeatureConfig,
+            )
+
+            # Use the forex features function with minimal config
+            # (no benchmark data - just session and basic features)
+            config = ForexFeatureConfig(
+                session_check_enabled=True,
+                vol_window_short=5,
+                vol_window_long=20,
+            )
+
+            return add_forex_features_to_dataframe(
+                df,
+                symbol=symbol,
+                dxy_df=None,  # Optional benchmark
+                rates_df=None,  # Optional rates
+                cot_df=None,  # Optional COT
+                calendar_events=None,  # Optional calendar
+                config=config,
+            )
+        except ImportError:
+            # forex_features module not available - return as-is
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.debug(
+                "forex_features module not available, skipping forex feature addition"
+            )
+            return df
+        except Exception as e:
+            # Log warning but don't fail - return original DataFrame
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(
+                f"Failed to add forex features to {symbol}: {e}. "
+                "Returning DataFrame without additional forex features."
             )
             return df
 
@@ -626,6 +704,17 @@ class FeaturePipeline:
             if "gap_pct" not in out.columns:
                 out = self._add_stock_features_internal(out)
 
+        # ═══════════════════════════════════════════════════════════════════════
+        # FIX (2025-11-30): AUTO FOREX FEATURES FOR FOREX
+        # ═══════════════════════════════════════════════════════════════════════
+        # When asset_class="forex" and auto_forex_features=True, automatically
+        # add forex-specific features (carry, session indicators, spread regime).
+        # ═══════════════════════════════════════════════════════════════════════
+        if self.asset_class == "forex" and self.auto_forex_features:
+            # Only add if not already present (check for carry_diff as marker)
+            if "carry_diff" not in out.columns:
+                out = self._add_forex_features_internal(out)
+
         # Shift ALL feature columns to prevent data leakage (look-ahead bias)
         # This must match the shifting logic in fit() for consistency
         #
@@ -749,6 +838,7 @@ class FeaturePipeline:
                 # FIX (2025-11-28): Persist asset_class for reproducibility
                 "asset_class": self.asset_class,
                 "auto_stock_features": self.auto_stock_features,
+                "auto_forex_features": self.auto_forex_features,
             }
         }
         with open(path, "w", encoding="utf-8") as f:
@@ -779,6 +869,7 @@ class FeaturePipeline:
                 preserve_close_orig=config.get("preserve_close_orig", True),
                 asset_class=config.get("asset_class", None),
                 auto_stock_features=config.get("auto_stock_features", True),
+                auto_forex_features=config.get("auto_forex_features", True),
             )
         else:
             # Backwards compatibility for legacy artifacts containing only stats.
