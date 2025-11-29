@@ -28,6 +28,13 @@ from __future__ import annotations
 
 import math
 import pytest
+import requests
+from requests.exceptions import (
+    Timeout as RequestsTimeout,
+    ConnectionError as RequestsConnectionError,
+    HTTPError as RequestsHTTPError,
+    RequestException,
+)
 from datetime import datetime, date, timezone, timedelta
 from decimal import Decimal
 from typing import Dict, Any
@@ -1004,6 +1011,475 @@ class TestOandaBackwardCompatibility:
         assert ForexSessionType.NEW_YORK.value == "new_york"
         assert ForexSessionType.TOKYO.value == "tokyo"
         assert ForexSessionType.SYDNEY.value == "sydney"
+
+
+# =========================
+# API Error Handling Tests
+# =========================
+
+class TestOandaApiErrorHandling:
+    """Tests for OANDA API error handling."""
+
+    def test_market_data_network_timeout(self, market_data_adapter):
+        """Test handling of network timeout."""
+        with patch.object(market_data_adapter, '_ensure_session') as mock_session:
+            mock_session.return_value.get.side_effect = RequestsTimeout(
+                "Connection timed out"
+            )
+
+            # Adapter wraps exceptions in ConnectionError
+            with pytest.raises(ConnectionError) as exc_info:
+                market_data_adapter.get_bars("EUR_USD", "H1", limit=10)
+            assert "Connection timed out" in str(exc_info.value)
+
+    def test_market_data_connection_error(self, market_data_adapter):
+        """Test handling of connection error."""
+        with patch.object(market_data_adapter, '_ensure_session') as mock_session:
+            mock_session.return_value.get.side_effect = RequestsConnectionError(
+                "Failed to establish connection"
+            )
+
+            # Adapter wraps exceptions in ConnectionError
+            with pytest.raises(ConnectionError) as exc_info:
+                market_data_adapter.get_bars("EUR_USD", "H1", limit=10)
+            assert "Failed to establish connection" in str(exc_info.value)
+
+    def test_order_execution_rate_limit_exceeded(self, order_execution_adapter):
+        """Test handling of rate limit exceeded (HTTP 429)."""
+        with patch.object(order_execution_adapter, '_ensure_session') as mock_session:
+            mock_response = Mock()
+            mock_response.status_code = 429
+            mock_response.raise_for_status.side_effect = RequestsHTTPError(
+                "429 Too Many Requests"
+            )
+            mock_session.return_value.post.return_value = mock_response
+
+            order = Order(
+                ts=1609459200000,
+                symbol="EUR_USD",
+                side=Side.BUY,
+                quantity=Decimal("10000"),
+                order_type=OrderType.MARKET,
+            )
+            result = order_execution_adapter.submit_order(order)
+
+            assert result.success is False
+            assert "429" in result.error_message or "API_ERROR" in result.error_code
+
+    def test_order_execution_server_error(self, order_execution_adapter):
+        """Test handling of server error (HTTP 500)."""
+        with patch.object(order_execution_adapter, '_ensure_session') as mock_session:
+            mock_response = Mock()
+            mock_response.status_code = 500
+            mock_response.raise_for_status.side_effect = RequestsHTTPError(
+                "500 Internal Server Error"
+            )
+            mock_session.return_value.post.return_value = mock_response
+
+            order = Order(
+                ts=1609459200000,
+                symbol="EUR_USD",
+                side=Side.BUY,
+                quantity=Decimal("10000"),
+                order_type=OrderType.MARKET,
+            )
+            result = order_execution_adapter.submit_order(order)
+
+            assert result.success is False
+
+    def test_order_execution_api_maintenance(self, order_execution_adapter):
+        """Test handling of API maintenance (HTTP 503)."""
+        with patch.object(order_execution_adapter, '_ensure_session') as mock_session:
+            mock_response = Mock()
+            mock_response.status_code = 503
+            mock_response.raise_for_status.side_effect = RequestsHTTPError(
+                "503 Service Unavailable"
+            )
+            mock_session.return_value.post.return_value = mock_response
+
+            order = Order(
+                ts=1609459200000,
+                symbol="EUR_USD",
+                side=Side.BUY,
+                quantity=Decimal("10000"),
+                order_type=OrderType.MARKET,
+            )
+            result = order_execution_adapter.submit_order(order)
+
+            assert result.success is False
+
+    def test_market_data_invalid_json_response(self, market_data_adapter):
+        """Test handling of invalid JSON response."""
+        with patch.object(market_data_adapter, '_ensure_session') as mock_session:
+            mock_response = Mock()
+            mock_response.raise_for_status = Mock()
+            mock_response.json.side_effect = ValueError("Invalid JSON")
+            mock_session.return_value.get.return_value = mock_response
+
+            # Adapter catches ValueError and raises ConnectionError
+            with pytest.raises(ConnectionError):
+                market_data_adapter.get_bars("EUR_USD", "H1", limit=10)
+
+    def test_order_execution_unauthorized(self, order_execution_adapter):
+        """Test handling of unauthorized request (HTTP 401)."""
+        with patch.object(order_execution_adapter, '_ensure_session') as mock_session:
+            mock_response = Mock()
+            mock_response.status_code = 401
+            mock_response.raise_for_status.side_effect = RequestsHTTPError(
+                "401 Unauthorized"
+            )
+            mock_session.return_value.post.return_value = mock_response
+
+            order = Order(
+                ts=1609459200000,
+                symbol="EUR_USD",
+                side=Side.BUY,
+                quantity=Decimal("10000"),
+                order_type=OrderType.MARKET,
+            )
+            result = order_execution_adapter.submit_order(order)
+
+            assert result.success is False
+
+    def test_get_positions_with_api_error(self, order_execution_adapter):
+        """Test get_positions handles API errors gracefully."""
+        with patch.object(order_execution_adapter, '_ensure_session') as mock_session:
+            mock_session.return_value.get.side_effect = RequestException(
+                "Network error"
+            )
+
+            positions = order_execution_adapter.get_positions()
+            assert positions == {}
+
+    def test_get_account_info_with_error(self, order_execution_adapter):
+        """Test get_account_info handles errors gracefully."""
+        with patch.object(order_execution_adapter, '_ensure_session') as mock_session:
+            mock_session.return_value.get.side_effect = RequestException(
+                "Network error"
+            )
+
+            account_info = order_execution_adapter.get_account_info()
+            # AccountInfo uses cash_balance, not balance
+            assert account_info.cash_balance is None or account_info.cash_balance == Decimal("0")
+
+
+# =========================
+# Async Streaming Tests
+# =========================
+
+class TestOandaAsyncStreaming:
+    """Tests for OANDA async streaming functionality."""
+
+    @pytest.mark.asyncio
+    async def test_rate_limiter_async_acquire(self):
+        """Test async rate limiter token acquisition."""
+        limiter = RateLimiter(rate=120.0, burst=200)
+
+        # Should not block with available tokens
+        import asyncio
+        start = asyncio.get_event_loop().time()
+        await limiter.acquire()
+        elapsed = asyncio.get_event_loop().time() - start
+
+        assert elapsed < 0.1  # Should be nearly instant
+
+    @pytest.mark.asyncio
+    async def test_rate_limiter_token_replenishment(self):
+        """Test that tokens replenish over time."""
+        limiter = RateLimiter(rate=120.0, burst=10)
+
+        # Consume all tokens
+        for _ in range(10):
+            await limiter.acquire()
+
+        # Wait for partial replenishment
+        import asyncio
+        await asyncio.sleep(0.1)  # Should add ~12 tokens (120 * 0.1)
+
+        # Should be able to acquire again without long wait
+        start = asyncio.get_event_loop().time()
+        await limiter.acquire()
+        elapsed = asyncio.get_event_loop().time() - start
+
+        assert elapsed < 0.05  # Should be quick after replenishment
+
+    @pytest.mark.asyncio
+    async def test_market_data_streaming_mock(self, market_data_adapter):
+        """Test that streaming method signatures are correct."""
+        # The adapter should have stream_ticks_async method
+        assert hasattr(market_data_adapter, 'stream_ticks_async')
+        assert callable(market_data_adapter.stream_ticks_async)
+
+        # Check that stream_bars_async also exists
+        assert hasattr(market_data_adapter, 'stream_bars_async')
+        assert callable(market_data_adapter.stream_bars_async)
+
+    def test_market_data_has_streaming_methods(self, market_data_adapter):
+        """Test that market data adapter has streaming method signatures."""
+        # Check that async streaming methods exist
+        assert hasattr(market_data_adapter, 'stream_ticks_async')
+        assert hasattr(market_data_adapter, 'stream_bars_async')
+        assert hasattr(market_data_adapter, 'stream_ticks')
+        assert hasattr(market_data_adapter, 'stream_bars')
+
+    def test_rate_limiter_available_tokens_property(self):
+        """Test rate limiter available_tokens property."""
+        limiter = RateLimiter(rate=120.0, burst=200)
+
+        initial_tokens = limiter.available_tokens
+        assert initial_tokens >= 199.0  # Should be near burst limit
+
+        limiter.acquire_sync()
+        after_acquire = limiter.available_tokens
+
+        assert after_acquire < initial_tokens
+
+
+# =========================
+# Last-Look Rejection Tests
+# =========================
+
+class TestOandaLastLookRejection:
+    """Tests for OANDA last-look order rejection handling."""
+
+    def test_parse_last_look_rejection(self, order_execution_adapter):
+        """Test parsing of last-look rejection response."""
+        response = {
+            "orderCancelTransaction": {
+                "orderID": "999",
+                "reason": "MARKET_ORDER_FILL_TIMEOUT",
+            }
+        }
+        result = order_execution_adapter._parse_order_response(response, "client999")
+
+        assert result.success is False
+        assert result.error_code == "LAST_LOOK_REJECTED"
+        assert "MARKET_ORDER_FILL_TIMEOUT" in result.error_message or "cancelled" in result.error_message.lower()
+
+    def test_parse_insufficient_liquidity(self, order_execution_adapter):
+        """Test parsing of insufficient liquidity rejection."""
+        response = {
+            "orderRejectTransaction": {
+                "rejectReason": "INSUFFICIENT_LIQUIDITY",
+            }
+        }
+        result = order_execution_adapter._parse_order_response(response, "client_liq")
+
+        assert result.success is False
+        assert result.error_code == "INSUFFICIENT_LIQUIDITY"
+
+    def test_parse_market_halted(self, order_execution_adapter):
+        """Test parsing of market halted rejection."""
+        response = {
+            "orderRejectTransaction": {
+                "rejectReason": "MARKET_HALTED",
+            }
+        }
+        result = order_execution_adapter._parse_order_response(response, "client_halt")
+
+        assert result.success is False
+        assert result.error_code == "MARKET_HALTED"
+
+    def test_parse_price_bound_violation(self, order_execution_adapter):
+        """Test parsing of price bound violation."""
+        response = {
+            "orderRejectTransaction": {
+                "rejectReason": "BOUNDS_VIOLATION",
+            }
+        }
+        result = order_execution_adapter._parse_order_response(response, "client_bounds")
+
+        assert result.success is False
+        assert result.error_code == "BOUNDS_VIOLATION"
+
+
+# =========================
+# Position Management Tests
+# =========================
+
+class TestOandaPositionManagement:
+    """Tests for OANDA position management."""
+
+    def test_get_positions_with_long_position(self, order_execution_adapter):
+        """Test parsing positions with long position."""
+        with patch.object(order_execution_adapter, '_ensure_session') as mock_session:
+            mock_response = Mock()
+            mock_response.json.return_value = {
+                "positions": [{
+                    "instrument": "EUR_USD",
+                    "long": {
+                        "units": "100000",
+                        "averagePrice": "1.10500",
+                        "unrealizedPL": "250.00",
+                    },
+                    "short": {
+                        "units": "0",
+                        "averagePrice": "0.0",
+                        "unrealizedPL": "0.0",
+                    }
+                }]
+            }
+            mock_response.raise_for_status = Mock()
+            mock_session.return_value.get.return_value = mock_response
+
+            positions = order_execution_adapter.get_positions()
+
+            assert "EUR_USD" in positions
+            pos = positions["EUR_USD"]
+            # Position qty is positive for long
+            assert pos.qty == Decimal("100000")
+            assert pos.qty > 0  # Long position
+            assert pos.avg_entry_price == Decimal("1.10500")
+            assert pos.meta.get("side") == "BUY"
+
+    def test_get_positions_with_short_position(self, order_execution_adapter):
+        """Test parsing positions with short position."""
+        with patch.object(order_execution_adapter, '_ensure_session') as mock_session:
+            mock_response = Mock()
+            mock_response.json.return_value = {
+                "positions": [{
+                    "instrument": "GBP_USD",
+                    "long": {
+                        "units": "0",
+                        "averagePrice": "0.0",
+                        "unrealizedPL": "0.0",
+                    },
+                    "short": {
+                        "units": "-50000",
+                        "averagePrice": "1.25000",
+                        "unrealizedPL": "-125.00",
+                    }
+                }]
+            }
+            mock_response.raise_for_status = Mock()
+            mock_session.return_value.get.return_value = mock_response
+
+            positions = order_execution_adapter.get_positions()
+
+            assert "GBP_USD" in positions
+            pos = positions["GBP_USD"]
+            # Position qty is negative for short
+            assert pos.qty == Decimal("-50000")
+            assert pos.qty < 0  # Short position
+            assert pos.meta.get("side") == "SELL"
+
+    def test_get_positions_with_hedged_position(self, order_execution_adapter):
+        """Test parsing hedged positions (net zero)."""
+        with patch.object(order_execution_adapter, '_ensure_session') as mock_session:
+            mock_response = Mock()
+            mock_response.json.return_value = {
+                "positions": [{
+                    "instrument": "USD_JPY",
+                    "long": {
+                        "units": "50000",
+                        "averagePrice": "140.00",
+                        "unrealizedPL": "100.00",
+                    },
+                    "short": {
+                        "units": "-50000",
+                        "averagePrice": "140.50",
+                        "unrealizedPL": "-50.00",
+                    }
+                }]
+            }
+            mock_response.raise_for_status = Mock()
+            mock_session.return_value.get.return_value = mock_response
+
+            positions = order_execution_adapter.get_positions()
+
+            # Net position is zero, should not appear in results
+            assert "USD_JPY" not in positions
+
+    def test_close_position_success(self, order_execution_adapter):
+        """Test successful position close."""
+        with patch.object(order_execution_adapter, '_ensure_session') as mock_session:
+            mock_response = Mock()
+            mock_response.json.return_value = {
+                "longOrderFillTransaction": {
+                    "orderID": "12345",
+                    "units": "-100000",
+                    "price": "1.10600",
+                }
+            }
+            mock_response.raise_for_status = Mock()
+            mock_session.return_value.put.return_value = mock_response
+
+            result = order_execution_adapter.close_position("EUR_USD")
+
+            assert result.success is True
+            assert result.status == "FILLED"
+
+    def test_close_position_no_position(self, order_execution_adapter):
+        """Test closing non-existent position."""
+        with patch.object(order_execution_adapter, '_ensure_session') as mock_session:
+            mock_response = Mock()
+            mock_response.json.return_value = {}
+            mock_response.raise_for_status = Mock()
+            mock_session.return_value.put.return_value = mock_response
+
+            result = order_execution_adapter.close_position("EUR_USD")
+
+            assert result.success is False
+            assert result.error_code == "NO_FILL"
+
+
+# =========================
+# Account Info Tests
+# =========================
+
+class TestOandaAccountInfo:
+    """Tests for OANDA account information."""
+
+    def test_get_account_info_success(self, order_execution_adapter):
+        """Test successful account info retrieval."""
+        with patch.object(order_execution_adapter, '_ensure_session') as mock_session:
+            mock_response = Mock()
+            mock_response.json.return_value = {
+                "account": {
+                    "id": "101-001-12345-001",
+                    "currency": "USD",
+                    "balance": "100000.00",
+                    "marginAvailable": "95000.00",
+                    "marginUsed": "5000.00",
+                    "unrealizedPL": "1500.00",
+                }
+            }
+            mock_response.raise_for_status = Mock()
+            mock_session.return_value.get.return_value = mock_response
+
+            account = order_execution_adapter.get_account_info()
+
+            assert account.account_id == "101-001-12345-001"
+            assert account.cash_balance == Decimal("100000.00")
+            assert account.buying_power == Decimal("95000.00")
+            assert account.margin_enabled is True
+            assert account.raw_data.get("currency") == "USD"
+            assert account.raw_data.get("margin_used") == "5000.00"
+
+    def test_get_account_info_with_leverage(self, order_execution_adapter):
+        """Test account info with high margin usage."""
+        with patch.object(order_execution_adapter, '_ensure_session') as mock_session:
+            mock_response = Mock()
+            mock_response.json.return_value = {
+                "account": {
+                    "id": "test_account",
+                    "currency": "EUR",
+                    "balance": "50000.00",
+                    "marginAvailable": "10000.00",
+                    "marginUsed": "40000.00",
+                    "unrealizedPL": "-500.00",
+                }
+            }
+            mock_response.raise_for_status = Mock()
+            mock_session.return_value.get.return_value = mock_response
+
+            account = order_execution_adapter.get_account_info()
+
+            # margin_used and unrealized_pnl are in raw_data now
+            assert account.raw_data.get("margin_used") == "40000.00"
+            assert account.raw_data.get("unrealized_pnl") == "-500.00"
+            assert account.buying_power == Decimal("10000.00")
+            assert account.cash_balance == Decimal("50000.00")
 
 
 if __name__ == "__main__":

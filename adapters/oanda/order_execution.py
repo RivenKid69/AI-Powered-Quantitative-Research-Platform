@@ -569,12 +569,13 @@ class OandaOrderExecutionAdapter(OrderExecutionAdapter):
             short_pnl = float(short_data.get("unrealizedPL", "0"))
             unrealized_pnl = long_pnl + short_pnl
 
+            # Position uses signed qty (negative for short)
+            signed_qty = Decimal(str(net_units))  # Already signed: negative for short
             positions[instrument] = Position(
                 symbol=instrument,
-                side=side,
-                qty=Decimal(str(abs(net_units))),
-                avg_price=avg_price,
-                unrealized_pnl=Decimal(str(unrealized_pnl)),
+                qty=signed_qty,
+                avg_entry_price=avg_price,
+                meta={"unrealized_pnl": unrealized_pnl, "side": side},
             )
 
         return positions
@@ -597,21 +598,26 @@ class OandaOrderExecutionAdapter(OrderExecutionAdapter):
         except Exception as e:
             logger.error(f"Failed to get account info: {e}")
             return AccountInfo(
+                vendor=ExchangeVendor.OANDA,
                 account_id=self._account_id or "",
-                currency="USD",
-                balance=Decimal("0"),
-                available=Decimal("0"),
+                account_type="margin",
+                margin_enabled=True,
             )
 
         account = data.get("account", {})
 
         return AccountInfo(
+            vendor=ExchangeVendor.OANDA,
             account_id=account.get("id", self._account_id or ""),
-            currency=account.get("currency", "USD"),
-            balance=Decimal(str(account.get("balance", "0"))),
-            available=Decimal(str(account.get("marginAvailable", "0"))),
-            margin_used=Decimal(str(account.get("marginUsed", "0"))),
-            unrealized_pnl=Decimal(str(account.get("unrealizedPL", "0"))),
+            account_type="margin",
+            buying_power=Decimal(str(account.get("marginAvailable", "0"))),
+            cash_balance=Decimal(str(account.get("balance", "0"))),
+            margin_enabled=True,
+            raw_data={
+                "currency": account.get("currency", "USD"),
+                "margin_used": account.get("marginUsed", "0"),
+                "unrealized_pnl": account.get("unrealizedPL", "0"),
+            },
         )
 
     def modify_order(

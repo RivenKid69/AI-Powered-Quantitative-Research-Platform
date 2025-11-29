@@ -1193,24 +1193,31 @@ class TestStressBoundary:
 
 
 # =============================================================================
-# Test: OANDA Adapter Stub
+# Test: OANDA Adapter Full Implementation (Phase 2 Complete)
 # =============================================================================
 
-class TestOandaAdapterStub:
-    """Tests for OANDA adapter stub (Phase 0)."""
+class TestOandaAdapterImplementation:
+    """Tests for OANDA adapter full implementation (Phase 2)."""
 
     def test_oanda_module_exists(self):
         """Test that oanda adapter module exists."""
         import adapters.oanda
         assert adapters.oanda is not None
 
-    def test_oanda_module_is_stub(self):
-        """Test that oanda module is a stub (Phase 0)."""
+    def test_oanda_module_exports_adapters(self):
+        """Test that oanda module exports all adapters (Phase 2 complete)."""
         import adapters.oanda as oanda
 
-        # __all__ should be empty in Phase 0 stub
+        # __all__ should contain all 5 adapters after Phase 2
         assert hasattr(oanda, "__all__")
-        assert oanda.__all__ == []
+        expected_exports = {
+            "OandaMarketDataAdapter",
+            "OandaFeeAdapter",
+            "OandaTradingHoursAdapter",
+            "OandaExchangeInfoAdapter",
+            "OandaOrderExecutionAdapter",
+        }
+        assert set(oanda.__all__) == expected_exports
 
     def test_oanda_docstring_present(self):
         """Test that oanda module has proper documentation."""
@@ -1218,4 +1225,43 @@ class TestOandaAdapterStub:
 
         assert oanda.__doc__ is not None
         assert "OANDA" in oanda.__doc__
-        assert "Phase 0" in oanda.__doc__ or "Stub" in oanda.__doc__
+        # Phase 2 complete - should say "Production Ready"
+        assert "Production Ready" in oanda.__doc__ or "Phase 2" in oanda.__doc__
+
+    def test_oanda_adapters_importable(self):
+        """Test that all OANDA adapters can be imported."""
+        from adapters.oanda import (
+            OandaMarketDataAdapter,
+            OandaFeeAdapter,
+            OandaTradingHoursAdapter,
+            OandaExchangeInfoAdapter,
+            OandaOrderExecutionAdapter,
+        )
+        assert OandaMarketDataAdapter is not None
+        assert OandaFeeAdapter is not None
+        assert OandaTradingHoursAdapter is not None
+        assert OandaExchangeInfoAdapter is not None
+        assert OandaOrderExecutionAdapter is not None
+
+    def test_oanda_adapters_inherit_from_base(self):
+        """Test that OANDA adapters inherit from proper base classes."""
+        from adapters.oanda import (
+            OandaMarketDataAdapter,
+            OandaFeeAdapter,
+            OandaTradingHoursAdapter,
+            OandaExchangeInfoAdapter,
+            OandaOrderExecutionAdapter,
+        )
+        from adapters.base import (
+            MarketDataAdapter,
+            FeeAdapter,
+            TradingHoursAdapter,
+            ExchangeInfoAdapter,
+            OrderExecutionAdapter,
+        )
+
+        assert issubclass(OandaMarketDataAdapter, MarketDataAdapter)
+        assert issubclass(OandaFeeAdapter, FeeAdapter)
+        assert issubclass(OandaTradingHoursAdapter, TradingHoursAdapter)
+        assert issubclass(OandaExchangeInfoAdapter, ExchangeInfoAdapter)
+        assert issubclass(OandaOrderExecutionAdapter, OrderExecutionAdapter)
