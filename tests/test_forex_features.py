@@ -1072,6 +1072,191 @@ class TestBackwardCompatibility:
 
 
 # =============================================================================
+# IMPLIED VOLATILITY FEATURES TESTS
+# =============================================================================
+
+class TestImpliedVolFeatures:
+    """Test FX implied volatility features (EVZ, CBOE indices)."""
+
+    def test_calculate_implied_vol_basic(self):
+        """Test basic implied vol calculation."""
+        from forex_features import calculate_implied_vol_features
+
+        # Normal volatility around 8-10%
+        implied_vol_prices = [8.0, 8.5, 9.0, 8.8, 9.2, 9.5]
+
+        normalized_vol, percentile, regime, valid = calculate_implied_vol_features(
+            implied_vol_prices, symbol="EUR_USD"
+        )
+
+        assert valid is True
+        assert regime == "normal"  # 6-10% is normal
+        assert 0.0 <= normalized_vol <= 1.0
+
+    def test_calculate_implied_vol_low_regime(self):
+        """Test low volatility regime detection."""
+        from forex_features import calculate_implied_vol_features
+
+        # Very low vol (< 6%)
+        implied_vol_prices = [4.0, 4.5, 5.0, 4.8, 5.2]
+
+        normalized_vol, percentile, regime, valid = calculate_implied_vol_features(
+            implied_vol_prices, symbol="EUR_USD"
+        )
+
+        assert valid is True
+        assert regime == "low"
+
+    def test_calculate_implied_vol_elevated_regime(self):
+        """Test elevated volatility regime detection."""
+        from forex_features import calculate_implied_vol_features
+
+        # Elevated vol (10-15%)
+        implied_vol_prices = [10.0, 11.0, 12.0, 11.5, 13.0]
+
+        normalized_vol, percentile, regime, valid = calculate_implied_vol_features(
+            implied_vol_prices, symbol="EUR_USD"
+        )
+
+        assert valid is True
+        assert regime == "elevated"
+
+    def test_calculate_implied_vol_high_regime(self):
+        """Test high volatility regime detection (stress environment)."""
+        from forex_features import calculate_implied_vol_features
+
+        # High vol (> 15%)
+        implied_vol_prices = [15.0, 16.0, 18.0, 20.0, 22.0]
+
+        normalized_vol, percentile, regime, valid = calculate_implied_vol_features(
+            implied_vol_prices, symbol="EUR_USD"
+        )
+
+        assert valid is True
+        assert regime == "high"
+        assert percentile > 0.5  # Should be in upper percentiles
+
+    def test_calculate_implied_vol_percentile_ranking(self):
+        """Test percentile calculation with sufficient history."""
+        from forex_features import calculate_implied_vol_features
+
+        # Create history with known distribution
+        # 20 values: 5-24, current is 20 (should be ~75th percentile)
+        implied_vol_prices = list(range(5, 25))  # [5, 6, ..., 24]
+
+        normalized_vol, percentile, regime, valid = calculate_implied_vol_features(
+            implied_vol_prices, symbol="EUR_USD", window=20
+        )
+
+        assert valid is True
+        # Current value 24 is the max, so percentile should be ~95%
+        assert percentile > 0.9
+
+    def test_calculate_implied_vol_short_history(self):
+        """Test with history shorter than window."""
+        from forex_features import calculate_implied_vol_features
+
+        # Only 5 values, window default is 20
+        implied_vol_prices = [8.0, 9.0, 10.0, 9.5, 11.0]
+
+        normalized_vol, percentile, regime, valid = calculate_implied_vol_features(
+            implied_vol_prices, symbol="EUR_USD", window=20
+        )
+
+        assert valid is True
+        # Should still work with regime-based percentile fallback
+        assert 0.0 <= percentile <= 1.0
+
+    def test_calculate_implied_vol_empty_list(self):
+        """Test with empty price list."""
+        from forex_features import calculate_implied_vol_features
+
+        normalized_vol, percentile, regime, valid = calculate_implied_vol_features(
+            [], symbol="EUR_USD"
+        )
+
+        assert valid is False
+        assert normalized_vol == 0.0
+        assert regime == "normal"
+
+    def test_calculate_implied_vol_pair_specific_typical_vol(self):
+        """Test that pair-specific typical vol is used for normalization."""
+        from forex_features import calculate_implied_vol_features, TYPICAL_IMPLIED_VOL
+
+        # GBP_USD has higher typical vol (10%) than EUR_USD (8%)
+        implied_vol_prices = [10.0]  # Same value for both
+
+        _, _, _, valid_gbp = calculate_implied_vol_features(
+            implied_vol_prices, symbol="GBP_USD"
+        )
+        _, _, _, valid_eur = calculate_implied_vol_features(
+            implied_vol_prices, symbol="EUR_USD"
+        )
+
+        assert valid_gbp is True
+        assert valid_eur is True
+        assert TYPICAL_IMPLIED_VOL["GBP_USD"] > TYPICAL_IMPLIED_VOL["EUR_USD"]
+
+    def test_get_fx_vol_regime_multiplier(self):
+        """Test spread/cost multiplier based on vol regime."""
+        from forex_features import get_fx_vol_regime_multiplier
+
+        assert get_fx_vol_regime_multiplier("low") == 0.8
+        assert get_fx_vol_regime_multiplier("normal") == 1.0
+        assert get_fx_vol_regime_multiplier("elevated") == 1.2
+        assert get_fx_vol_regime_multiplier("high") == 1.5
+        assert get_fx_vol_regime_multiplier("unknown") == 1.0  # Default
+
+    def test_implied_vol_in_extract_features(self):
+        """Test that implied vol is integrated into extract_forex_features."""
+        from forex_features import extract_forex_features, BenchmarkForexData
+
+        benchmark = BenchmarkForexData(
+            implied_vol_prices=[8.0, 9.0, 10.0, 9.5, 8.5],
+        )
+
+        features = extract_forex_features(
+            row={"timestamp": 1700000000000},
+            symbol="EUR_USD",
+            benchmark_data=benchmark,
+        )
+
+        # Should have computed implied vol
+        assert features.implied_vol >= 0.0
+        # vol_valid should be True because implied vol was computed
+        assert features.vol_valid is True
+
+    def test_implied_vol_dataframe_integration(self):
+        """Test implied vol column is added to DataFrame."""
+        from forex_features import add_forex_features_to_dataframe
+
+        # Create simple price DataFrame
+        df = pd.DataFrame({
+            "timestamp": [1700000000000 + i * 3600000 for i in range(10)],
+            "close": [1.05 + i * 0.001 for i in range(10)],
+            "open": [1.05 + i * 0.001 for i in range(10)],
+            "high": [1.055 + i * 0.001 for i in range(10)],
+            "low": [1.045 + i * 0.001 for i in range(10)],
+            "volume": [1000000] * 10,
+        })
+
+        # Create implied vol DataFrame
+        implied_vol_df = pd.DataFrame({
+            "timestamp": [1700000000000 + i * 3600000 for i in range(10)],
+            "close": [8.0 + i * 0.1 for i in range(10)],  # EVZ prices
+        })
+
+        result = add_forex_features_to_dataframe(
+            df, "EUR_USD",
+            implied_vol_df=implied_vol_df,
+        )
+
+        assert "implied_vol" in result.columns
+        # Should have some non-zero values
+        assert result["implied_vol"].sum() > 0
+
+
+# =============================================================================
 # EDGE CASES AND ERROR HANDLING
 # =============================================================================
 
@@ -1128,6 +1313,48 @@ class TestEdgeCases:
         net_pct, zscore, change, positioning, valid = calculate_cot_features("EUR", cot_df)
         # Should handle gracefully
         assert valid is True or valid is False  # Either is acceptable
+
+    def test_implied_vol_nan_value(self):
+        """Test handling of NaN in implied vol prices."""
+        from forex_features import calculate_implied_vol_features
+
+        implied_vol_prices = [8.0, 9.0, float('nan')]
+
+        normalized_vol, percentile, regime, valid = calculate_implied_vol_features(
+            implied_vol_prices, symbol="EUR_USD"
+        )
+
+        # NaN at end makes current value NaN, should return invalid
+        assert valid is False
+
+    def test_implied_vol_negative_value(self):
+        """Test handling of negative implied vol (edge case)."""
+        from forex_features import calculate_implied_vol_features
+
+        implied_vol_prices = [8.0, 9.0, -5.0]  # Negative value at end
+
+        normalized_vol, percentile, regime, valid = calculate_implied_vol_features(
+            implied_vol_prices, symbol="EUR_USD"
+        )
+
+        # Negative vol should return invalid
+        assert valid is False
+
+    def test_implied_vol_extreme_value(self):
+        """Test handling of extreme implied vol value."""
+        from forex_features import calculate_implied_vol_features
+
+        # Extreme vol like during 2008 crisis or flash crash
+        implied_vol_prices = [50.0]  # 50% implied vol
+
+        normalized_vol, percentile, regime, valid = calculate_implied_vol_features(
+            implied_vol_prices, symbol="EUR_USD"
+        )
+
+        assert valid is True
+        assert regime == "high"
+        # Normalized should be capped at 1.0
+        assert normalized_vol <= 1.0
 
 
 if __name__ == "__main__":

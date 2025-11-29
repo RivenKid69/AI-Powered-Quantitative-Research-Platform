@@ -138,6 +138,37 @@ DEFAULT_RS_DXY = 0.0
 DEFAULT_SPREAD_ZSCORE = 0.0
 DEFAULT_COT_NET = 0.5  # Neutral positioning
 DEFAULT_VOL = 0.0
+DEFAULT_IMPLIED_VOL = 0.0
+
+# FX Implied Volatility Indices (CBOE)
+# Source: CBOE Global Markets - Currency Volatility Indices
+# These track 30-day implied volatility from currency options
+FX_VOL_INDICES = {
+    "EUR": "^EVZ",      # CBOE EuroCurrency ETF Volatility Index (EUR/USD implied vol)
+    "GBP": "^BPVIX",    # CBOE British Pound Volatility Index (not always available)
+    "JPY": "^JYVIX",    # CBOE Japanese Yen Volatility Index (not always available)
+    "DEFAULT": "^EVZ",  # Use EUR vol as proxy for other pairs
+}
+
+# FX VIX regime thresholds (similar to equity VIX)
+# Based on historical EVZ distribution
+FX_VOL_REGIMES = {
+    "low": 6.0,         # Below 6% = low vol environment
+    "normal": 10.0,     # 6-10% = normal
+    "elevated": 15.0,   # 10-15% = elevated
+    "high": 20.0,       # Above 15% = high vol (risk-off)
+}
+
+# Typical implied vol levels for reference
+TYPICAL_IMPLIED_VOL = {
+    "EUR_USD": 8.0,     # EUR/USD typically 6-10%
+    "GBP_USD": 10.0,    # GBP/USD typically 8-12%
+    "USD_JPY": 9.0,     # USD/JPY typically 7-11%
+    "USD_CHF": 8.0,     # Similar to EUR/USD
+    "AUD_USD": 11.0,    # Higher vol commodity currency
+    "USD_CAD": 7.0,     # Lower vol, correlated to oil
+    "NZD_USD": 12.0,    # Highest vol among majors
+}
 
 
 # =============================================================================
@@ -249,7 +280,7 @@ class ForexFeatures:
 @dataclass
 class BenchmarkForexData:
     """
-    Container for forex benchmark data (DXY, rates).
+    Container for forex benchmark data (DXY, rates, implied vol).
 
     Used to pass benchmark data to feature calculators.
     """
@@ -258,6 +289,8 @@ class BenchmarkForexData:
     historical_rates: Optional[pd.DataFrame] = None
     cot_data: Optional[pd.DataFrame] = None
     calendar_events: List[Dict[str, Any]] = field(default_factory=list)
+    # FX Implied Volatility (from CBOE FX VIX indices like EVZ)
+    implied_vol_prices: List[float] = field(default_factory=list)
 
 
 @dataclass
@@ -877,6 +910,117 @@ def calculate_volatility_features(
 
 
 # =============================================================================
+# IMPLIED VOLATILITY FEATURES
+# =============================================================================
+
+def calculate_implied_vol_features(
+    implied_vol_prices: List[float],
+    symbol: str = "",
+    window: int = 20,
+) -> Tuple[float, float, str, bool]:
+    """
+    Calculate FX implied volatility features from CBOE FX VIX indices.
+
+    FX implied volatility provides forward-looking risk expectations:
+    - EVZ (EUR/USD vol index): Primary FX fear gauge
+    - Low implied vol (<6%): Carry-friendly environment
+    - High implied vol (>15%): Risk-off, potential for reversals
+
+    Unlike realized vol, implied vol is priced from options and reflects
+    market's expectation of future volatility over 30 days.
+
+    Args:
+        implied_vol_prices: Historical FX VIX values (e.g., EVZ)
+        symbol: Currency pair for pair-specific typical vol reference
+        window: Lookback for percentile ranking
+
+    Returns:
+        Tuple of (current_vol, vol_percentile, regime, valid)
+        - current_vol: Latest FX VIX value (normalized 0-1 scale)
+        - vol_percentile: Where current vol sits in historical distribution
+        - regime: "low", "normal", "elevated", or "high"
+        - valid: Whether calculation succeeded
+
+    References:
+        - CBOE: FX Volatility Index methodology
+        - Della Corte et al. (2016): "Volatility Risk Premia and Exchange Rate Predictability"
+    """
+    if not implied_vol_prices or len(implied_vol_prices) < 1:
+        return (0.0, 0.5, "normal", False)
+
+    try:
+        # Get current implied vol
+        current_vol = float(implied_vol_prices[-1])
+
+        if not math.isfinite(current_vol) or current_vol < 0:
+            return (0.0, 0.5, "normal", False)
+
+        # Classify regime based on FX_VOL_REGIMES thresholds
+        if current_vol < FX_VOL_REGIMES["low"]:
+            regime = "low"
+        elif current_vol < FX_VOL_REGIMES["normal"]:
+            regime = "normal"
+        elif current_vol < FX_VOL_REGIMES["elevated"]:
+            regime = "elevated"
+        else:
+            regime = "high"
+
+        # Calculate percentile rank if enough history
+        if len(implied_vol_prices) >= window:
+            lookback = implied_vol_prices[-window:]
+            # Percentile rank: what % of historical values are below current
+            below_count = sum(1 for v in lookback if v < current_vol)
+            vol_percentile = below_count / len(lookback)
+        else:
+            # Not enough history - use regime-based estimate
+            regime_percentile = {
+                "low": 0.2,
+                "normal": 0.5,
+                "elevated": 0.75,
+                "high": 0.9,
+            }
+            vol_percentile = regime_percentile.get(regime, 0.5)
+
+        # Normalize current vol to [0, 1] scale
+        # Typical FX vol range: 4-25%, use 20 as saturation point
+        # Reference: TYPICAL_IMPLIED_VOL values around 7-12%
+        typical_vol = TYPICAL_IMPLIED_VOL.get(
+            symbol.upper().replace("/", "_"),
+            10.0  # Default typical vol
+        )
+        # Normalize: 0 at 0%, 0.5 at typical, 1.0 at 2x typical
+        normalized_vol = min(1.0, current_vol / (typical_vol * 2.0))
+
+        return (normalized_vol, vol_percentile, regime, True)
+
+    except Exception:
+        return (0.0, 0.5, "normal", False)
+
+
+def get_fx_vol_regime_multiplier(regime: str) -> float:
+    """
+    Get liquidity/cost multiplier based on FX vol regime.
+
+    Similar to equity VIX regimes affecting execution costs:
+    - Low vol: tighter spreads, better fills
+    - High vol: wider spreads, more slippage
+
+    Args:
+        regime: Vol regime ("low", "normal", "elevated", "high")
+
+    Returns:
+        Multiplier for spread/slippage adjustment (0.8 - 1.5)
+    """
+    regime_multipliers = {
+        "low": 0.8,       # Low vol = tighter spreads
+        "normal": 1.0,    # Baseline
+        "elevated": 1.2,  # Slightly wider
+        "high": 1.5,      # Much wider during stress
+    }
+    return regime_multipliers.get(regime, 1.0)
+
+
+# =============================================================================
 # CROSS-CURRENCY MOMENTUM FEATURES
 # =============================================================================
 
@@ -1074,6 +1218,20 @@ def extract_forex_features(
             features.vol_valid = True
 
     # ===================
+    # IMPLIED VOLATILITY
+    # ===================
+    if benchmark_data and benchmark_data.implied_vol_prices:
+        implied_vol, vol_pct, vol_regime, implied_valid = calculate_implied_vol_features(
+            benchmark_data.implied_vol_prices, symbol
+        )
+
+        if implied_valid:
+            features.implied_vol = implied_vol
+            # Note: vol_valid already set by realized vol, but implied vol enhances it
+            if not features.vol_valid:
+                features.vol_valid = True
+
+    # ===================
     # ECONOMIC CALENDAR
     # ===================
     if timestamp and benchmark_data and benchmark_data.calendar_events:
@@ -1257,6 +1415,7 @@ def add_forex_features_to_dataframe(
     rates_df: Optional[pd.DataFrame] = None,
     cot_df: Optional[pd.DataFrame] = None,
     calendar_events: Optional[List[Dict[str, Any]]] = None,
+    implied_vol_df: Optional[pd.DataFrame] = None,
     config: Optional[ForexFeatureConfig] = None,
 ) -> pd.DataFrame:
     """
@@ -1272,6 +1431,7 @@ def add_forex_features_to_dataframe(
         rates_df: Interest rates DataFrame
         cot_df: COT positioning DataFrame
         calendar_events: Economic calendar events
+        implied_vol_df: FX implied volatility DataFrame (EVZ from CBOE)
         config: Feature configuration
 
     Returns:
@@ -1287,6 +1447,7 @@ def add_forex_features_to_dataframe(
         - spread_regime: Spread regime
         - cot_net: COT net positioning
         - vol_ratio: Short/long volatility ratio
+        - implied_vol: FX implied volatility (from EVZ/CBOE)
     """
     if config is None:
         config = ForexFeatureConfig()
@@ -1313,6 +1474,7 @@ def add_forex_features_to_dataframe(
         "vol_5d": 0.0,
         "vol_20d": 0.0,
         "vol_ratio": 1.0,
+        "implied_vol": 0.0,
         "hours_to_event": 999.0,
         "is_news_window": 0.0,
     }
@@ -1329,6 +1491,7 @@ def add_forex_features_to_dataframe(
 
     # Align benchmark data using timestamp-based merge
     dxy_aligned = _align_forex_benchmark(df, dxy_df, "close") if dxy_df is not None else [None] * n_rows
+    implied_vol_aligned = _align_forex_benchmark(df, implied_vol_df, "close") if implied_vol_df is not None else [None] * n_rows
 
     # Get spread history
     spread_col = None
@@ -1353,6 +1516,7 @@ def add_forex_features_to_dataframe(
 
     # Build cumulative lists
     dxy_cumulative: List[float] = []
+    implied_vol_cumulative: List[float] = []
 
     # Calculate rolling features
     for i in range(n_rows):
@@ -1363,6 +1527,10 @@ def add_forex_features_to_dataframe(
         if dxy_aligned[i] is not None:
             dxy_cumulative.append(dxy_aligned[i])
 
+        # Build implied vol cumulative
+        if implied_vol_aligned[i] is not None:
+            implied_vol_cumulative.append(implied_vol_aligned[i])
+
         # Build benchmark data
         benchmark = BenchmarkForexData(
             dxy_prices=dxy_cumulative.copy(),
@@ -1370,6 +1538,7 @@ def add_forex_features_to_dataframe(
             historical_rates=rates_df,
             cot_data=cot_df,
             calendar_events=calendar_events or [],
+            implied_vol_prices=implied_vol_cumulative.copy(),
         )
 
         # Extract features
@@ -1400,6 +1569,7 @@ def add_forex_features_to_dataframe(
         df.iloc[i, df.columns.get_loc("vol_5d")] = features.realized_vol_5d if features.vol_valid else 0.0
         df.iloc[i, df.columns.get_loc("vol_20d")] = features.realized_vol_20d if features.vol_valid else 0.0
         df.iloc[i, df.columns.get_loc("vol_ratio")] = features.vol_ratio if features.vol_valid else 1.0
+        df.iloc[i, df.columns.get_loc("implied_vol")] = features.implied_vol if features.vol_valid else 0.0
         df.iloc[i, df.columns.get_loc("hours_to_event")] = min(features.hours_to_next_event, 999.0) if features.calendar_valid else 999.0
         df.iloc[i, df.columns.get_loc("is_news_window")] = 1.0 if features.is_news_window else 0.0
 
