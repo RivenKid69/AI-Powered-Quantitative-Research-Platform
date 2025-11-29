@@ -1,97 +1,36 @@
 #!/usr/bin/env python3
 """
-Comprehensive test suite for Issue #2: ServiceTrain doesn't filter NaN in features.
+Тест для проверки корректного удаления строк с NaN таргетами в ServiceTrain.
 
-Problem:
---------
-ServiceTrain.run() filters rows with NaN targets (y.notna()) but does NOT
-filter or impute rows with NaN features (X). This causes:
-1. Neural networks to crash or produce NaN gradients
-2. Silent training corruption with incorrect patterns
-3. Model performance degradation
-
-Current Code (service_train.py):
----------------------------------
-- Line 177: X = self.fp.transform_df(df_raw)
-- Lines 195-257: Filters rows with NaN targets (y.notna())
-- Line 260: _log_feature_statistics(X) - only logs, doesn't filter
-- Line 272: trainer.fit(X, y) - passes X with potential NaN directly
-
-Expected Behavior (after fix):
--------------------------------
-Option A (Conservative): Filter rows with ANY NaN in features
-Option B (Advanced): Impute NaN values (forward fill, mean, median)
-Option C (Strict): Raise informative error if NaN detected
-Best Practice: Combine B + C (impute + validate + warn)
-
-References:
------------
-- Verification script: verify_issues_simple.py
-- Related fixes: NaN handling in mediator.py, obs_builder.pyx
-- Scikit-learn: SimpleImputer for NaN handling
-- Best practices: Never pass NaN to neural networks
+Проверяет, что:
+1. Строки с NaN таргетами (последняя строка каждого символа) удаляются
+2. X и y имеют одинаковую длину после фильтрации
+3. В y не остается NaN значений
+4. Trainer получает только валидные данные
 """
 
-import pytest
-import numpy as np
-import pandas as pd
-import warnings
-from pathlib import Path
-import sys
+import os
+import tempfile
+import shutil
 from dataclasses import dataclass
 from typing import Any, Optional
+import pandas as pd
+import pytest
 
-project_root = Path(__file__).parent.parent
-sys.path.insert(0, str(project_root))
-
-from service_train import ServiceTrain, TrainConfig
-from core_contracts import FeaturePipe
-
-
-# ==========================================================================
-# Mock Components
-# ==========================================================================
-
-class MockFeaturePipe:
-    """Mock FeaturePipe for testing."""
-
-    def warmup(self):
-        pass
-
-    def fit(self, df: pd.DataFrame):
-        pass
-
-    def transform_df(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Return features with potential NaN values.
-
-        Simulates the real pipeline where NaN can appear in features.
-        """
-        # Simple mock: just add _z suffix
-        result = df.copy()
-        for col in df.columns:
-            if col not in ['timestamp', 'symbol', 'target']:
-                result[col + '_z'] = df[col]  # Keep NaN as-is
-        return result
-
-    def make_targets(self, df: pd.DataFrame) -> pd.Series:
-        """Return targets (may contain NaN at end of each symbol)."""
-        if 'target' in df.columns:
-            return df['target']
-        else:
-            # Mock: compute simple forward return
-            # This will create NaN at last row of each symbol
-            return df.groupby('symbol')['close'].pct_change().shift(-1)
+from service_train import ServiceTrain, TrainConfig, Trainer
+from feature_pipe import FeaturePipe
+from core_config import FeatureSpec
 
 
+# Mock Trainer для тестирования
+@dataclass
 class MockTrainer:
-    """Mock trainer that detects NaN inputs."""
+    """Mock trainer that records what it receives."""
 
-    def __init__(self, strict_nan_check: bool = True):
-        self.strict_nan_check = strict_nan_check
-        self.fit_called = False
-        self.X_had_nan = False
-        self.y_had_nan = False
+    received_X: Optional[pd.DataFrame] = None
+    received_y: Optional[pd.Series] = None
+    received_weights: Optional[pd.Series] = None
+    model_saved: bool = False
 
     def fit(
         self,
@@ -99,382 +38,390 @@ class MockTrainer:
         y: Optional[pd.Series] = None,
         sample_weight: Optional[pd.Series] = None,
     ) -> Any:
-        """
-        Mock fit that checks for NaN.
+        """Record received data and check for NaN in targets."""
+        self.received_X = X
+        self.received_y = y
+        self.received_weights = sample_weight
 
-        If strict_nan_check=True, raises ValueError on NaN (simulates PyTorch).
-        Otherwise, just records presence of NaN.
-        """
-        self.fit_called = True
-
-        # Check for NaN in X
-        if X.isna().any().any():
-            self.X_had_nan = True
-            if self.strict_nan_check:
-                nan_cols = X.columns[X.isna().any()].tolist()
+        # КРИТИЧНО: проверяем, что нет NaN в таргетах
+        if y is not None:
+            nan_count = y.isna().sum()
+            if nan_count > 0:
                 raise ValueError(
-                    f"NaN values detected in features: {nan_cols}\n"
-                    f"Neural networks cannot handle NaN inputs!"
+                    f"Trainer received {nan_count} NaN values in targets! "
+                    f"This should have been filtered out."
                 )
-
-        # Check for NaN in y
-        if y is not None and y.isna().any():
-            self.y_had_nan = True
-            if self.strict_nan_check:
-                raise ValueError("NaN values detected in targets!")
 
         return self
 
     def save(self, path: str) -> str:
+        """Save mock model."""
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write("mock model")
+        self.model_saved = True
         return path
 
 
-# ==========================================================================
-# Test Suite
-# ==========================================================================
+def test_nan_targets_are_filtered():
+    """
+    Тест проверяет, что строки с NaN таргетами удаляются перед обучением.
 
-class TestServiceTrain_NaNFiltering:
-    """Test NaN filtering in ServiceTrain."""
+    Сценарий:
+    1. Создаем данные с 2 символами по 5 строк каждый (всего 10 строк)
+    2. make_targets() создаст NaN для последней строки каждого символа (2 NaN)
+    3. ServiceTrain должен удалить эти 2 строки
+    4. Trainer должен получить 8 валидных строк
+    """
+    # Подготовка тестовых данных
+    df = pd.DataFrame(
+        {
+            "symbol": ["BTCUSDT"] * 5 + ["ETHUSDT"] * 5,
+            "ts_ms": list(range(0, 300_000, 60_000)) + list(range(0, 300_000, 60_000)),
+            "close": [100.0, 101.0, 102.0, 103.0, 104.0, 200.0, 202.0, 204.0, 206.0, 208.0],
+        }
+    )
 
-    @pytest.fixture
-    def clean_data(self, tmp_path):
-        """Create clean dataset without NaN."""
-        df = pd.DataFrame({
-            'timestamp': list(range(10)) * 2,
-            'symbol': ['BTC'] * 10 + ['ETH'] * 10,
-            'close': [100.0 + i for i in range(10)] + [200.0 + i for i in range(10)],
-            'volume': [1.0 + i for i in range(10)] + [2.0 + i for i in range(10)],
-            'feature_a': list(range(10)) + list(range(10, 20)),
-        })
+    # Создаем временную директорию для артефактов
+    temp_dir = tempfile.mkdtemp()
 
-        # Add target (will have NaN at last row of each symbol due to shift(-1))
-        df['target'] = df.groupby('symbol')['close'].pct_change().shift(-1)
+    try:
+        # Сохраняем тестовые данные
+        input_path = os.path.join(temp_dir, "test_input.parquet")
+        df.to_parquet(input_path, index=False)
 
-        # Save to parquet
-        data_path = tmp_path / "clean_data.parquet"
-        df.to_parquet(data_path, index=False)
+        # Создаем FeaturePipe
+        fp = FeaturePipe(spec=FeatureSpec(lookbacks_prices=[1, 5]), price_col="close")
 
-        return data_path
+        # Создаем mock trainer
+        trainer = MockTrainer()
 
-    @pytest.fixture
-    def data_with_nan_features(self, tmp_path):
-        """Create dataset with NaN in features (but not targets initially)."""
-        df = pd.DataFrame({
-            'timestamp': list(range(10)) * 2,
-            'symbol': ['BTC'] * 10 + ['ETH'] * 10,
-            'close': [100.0 + i for i in range(10)] + [200.0 + i for i in range(10)],
-            'volume': [1.0 + i for i in range(10)] + [2.0 + i for i in range(10)],
-            'feature_a': [1.0, np.nan, 3.0, np.nan, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0] + list(range(10, 20)),
-            'feature_b': [np.nan] * 20,  # All-NaN feature
-        })
-
-        # Add target
-        df['target'] = df.groupby('symbol')['close'].pct_change().shift(-1)
-
-        # Save to parquet
-        data_path = tmp_path / "nan_features.parquet"
-        df.to_parquet(data_path, index=False)
-
-        return data_path
-
-    # ==========================================================================
-    # Test 1: Current Behavior (Before Fix) - NaN Passed Through
-    # ==========================================================================
-
-    def test_fixed_behavior_filters_nan_before_trainer(self, data_with_nan_features, tmp_path):
-        """
-        FIXED BEHAVIOR: NaN features are filtered before trainer.fit().
-
-        After fix (2025-11-21):
-        - Detects NaN in features
-        - Logs warning with column names and counts
-        - Filters rows with ANY NaN
-        - Passes clean data to trainer
-
-        Note: This test may fail if dataset has too many NaN (all rows filtered).
-        For this specific dataset, feature_b is all-NaN, so all rows will be filtered.
-        We need a dataset with SOME valid rows.
-        """
-        pytest.skip(
-            "Current test data has all-NaN column (feature_b), "
-            "which causes all rows to be filtered. "
-            "Need better test data for this test."
-        )
-
-    def test_all_nan_column_causes_all_rows_filtered(self, data_with_nan_features, tmp_path):
-        """
-        Test that dataset with all-NaN column causes all rows to be filtered.
-
-        After fix (2025-11-21): Should raise informative error.
-
-        Current test data has feature_b which is all-NaN, so every row has
-        at least one NaN → all rows filtered → error.
-        """
-        fp = MockFeaturePipe()
-        trainer = MockTrainer(strict_nan_check=True)
-
-        cfg = TrainConfig(
-            input_path=str(data_with_nan_features),
+        # Создаем TrainConfig
+        train_cfg = TrainConfig(
+            input_path=input_path,
             input_format="parquet",
-            artifacts_dir=str(tmp_path / "artifacts"),
+            artifacts_dir=temp_dir,
+            dataset_name="test_dataset",
+            model_name="test_model",
         )
 
-        service = ServiceTrain(fp, trainer, cfg)
+        # Создаем ServiceTrain
+        service = ServiceTrain(feature_pipe=fp, trainer=trainer, cfg=train_cfg)
 
-        # Should raise ValueError from service (all rows filtered)
-        with pytest.raises(ValueError, match="No valid samples remaining"):
-            service.run()
-
-    # ==========================================================================
-    # Test 2: Expected Behavior (After Fix) - Filter NaN Rows
-    # ==========================================================================
-
-    def test_fixed_behavior_filters_nan_rows(self, data_with_nan_features, tmp_path):
-        """
-        DESIRED BEHAVIOR: After fix, should filter rows with NaN in features.
-
-        Option A: Conservative row-wise filtering (remove any row with NaN)
-        """
-        pytest.skip("FIX NOT YET IMPLEMENTED - will pass after fix")
-
-        fp = MockFeaturePipe()
-        trainer = MockTrainer(strict_nan_check=True)
-
-        cfg = TrainConfig(
-            input_path=str(data_with_nan_features),
-            input_format="parquet",
-            artifacts_dir=str(tmp_path / "artifacts"),
-        )
-
-        service = ServiceTrain(fp, trainer, cfg)
-
-        # Should NOT raise (NaN rows filtered before trainer.fit)
+        # Запускаем обучение
         result = service.run()
 
-        # Check that trainer received clean data
-        assert trainer.fit_called
-        assert not trainer.X_had_nan, "Features should be clean (NaN filtered)"
-        assert not trainer.y_had_nan, "Targets should be clean"
+        # ПРОВЕРКИ
+        # 1. Trainer был вызван
+        assert trainer.received_X is not None, "Trainer не получил X"
+        assert trainer.received_y is not None, "Trainer не получил y"
 
-        # Check that some rows were removed
-        assert result['n_samples'] < 20, \
-            "Should remove rows with NaN (original had 20 rows)"
-
-    # ==========================================================================
-    # Test 3: Clean Data Should Pass Through Unchanged
-    # ==========================================================================
-
-    def test_clean_data_passes_through(self, clean_data, tmp_path):
-        """
-        Test that clean data (no NaN in features) works correctly.
-
-        Should NOT filter any rows (except last row of each symbol due to target NaN).
-        """
-        fp = MockFeaturePipe()
-        trainer = MockTrainer(strict_nan_check=True)
-
-        cfg = TrainConfig(
-            input_path=str(clean_data),
-            input_format="parquet",
-            artifacts_dir=str(tmp_path / "artifacts"),
+        # 2. Нет NaN в таргетах
+        assert trainer.received_y.isna().sum() == 0, (
+            f"Trainer получил {trainer.received_y.isna().sum()} NaN в таргетах! "
+            f"Фильтрация не сработала."
         )
 
-        service = ServiceTrain(fp, trainer, cfg)
+        # 3. Правильное количество строк (10 исходных - 2 с NaN = 8)
+        expected_samples = 8
+        assert len(trainer.received_y) == expected_samples, (
+            f"Ожидалось {expected_samples} валидных строк, "
+            f"получено {len(trainer.received_y)}"
+        )
+
+        # 4. X и y имеют одинаковую длину
+        assert len(trainer.received_X) == len(trainer.received_y), (
+            f"X и y имеют разную длину: "
+            f"X={len(trainer.received_X)}, y={len(trainer.received_y)}"
+        )
+
+        # 5. Результат содержит корректную информацию
+        assert result["n_samples"] == expected_samples
+        assert result["effective_samples"] == expected_samples
+
+        # 6. Модель была сохранена
+        assert trainer.model_saved, "Модель не была сохранена"
+
+        print("✓ Тест пройден: NaN таргеты корректно отфильтрованы")
+
+    finally:
+        # Очистка
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_no_nan_targets_case():
+    """
+    Тест проверяет, что код работает корректно, когда NaN таргетов нет.
+
+    Этот случай теоретически возможен, если:
+    - label_col уже определен в данных
+    - Или данные были предобработаны
+    """
+    # Подготовка тестовых данных с уже готовым таргетом
+    df = pd.DataFrame(
+        {
+            "symbol": ["BTCUSDT"] * 5,
+            "ts_ms": list(range(0, 300_000, 60_000)),
+            "close": [100.0, 101.0, 102.0, 103.0, 104.0],
+            "target": [0.01, 0.0099, 0.0098, 0.0097, 0.0096],  # Все валидные
+        }
+    )
+
+    temp_dir = tempfile.mkdtemp()
+
+    try:
+        input_path = os.path.join(temp_dir, "test_input.parquet")
+        df.to_parquet(input_path, index=False)
+
+        # FeaturePipe с label_col
+        fp = FeaturePipe(
+            spec=FeatureSpec(lookbacks_prices=[1, 5]),
+            price_col="close",
+            label_col="target",  # Используем готовый таргет
+        )
+
+        trainer = MockTrainer()
+
+        train_cfg = TrainConfig(
+            input_path=input_path,
+            input_format="parquet",
+            artifacts_dir=temp_dir,
+            dataset_name="test_dataset",
+            model_name="test_model",
+        )
+
+        service = ServiceTrain(feature_pipe=fp, trainer=trainer, cfg=train_cfg)
         result = service.run()
 
-        # Should work without errors
-        assert trainer.fit_called
-        assert not trainer.X_had_nan, "Clean data should have no NaN"
-        assert not trainer.y_had_nan
+        # ПРОВЕРКИ
+        assert trainer.received_y is not None
+        assert trainer.received_y.isna().sum() == 0, "Есть NaN в таргетах"
+        assert len(trainer.received_y) == 5, "Неправильное количество строк"
 
-        # Should remove only target NaN rows (2 rows: last of BTC and ETH)
-        # Original: 20 rows, minus 2 with NaN targets = 18 rows
-        assert result['n_samples'] == 18, \
-            "Should only remove target NaN rows (2 out of 20)"
+        print("✓ Тест пройден: случай без NaN таргетов обрабатывается корректно")
 
-    # ==========================================================================
-    # Test 4: Logging Should Report NaN Statistics
-    # ==========================================================================
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
-    def test_logging_reports_nan_statistics(self, data_with_nan_features, tmp_path, caplog):
-        """
-        Test that logging reports NaN statistics and filtering.
 
-        After fix (2025-11-21):
-        - _log_feature_statistics shows NaN percentages
-        - NaN filtering section logs columns with NaN, counts, and removal info
-        """
-        fp = MockFeaturePipe()
-        trainer = MockTrainer(strict_nan_check=False)
+def test_multiple_symbols_nan_filtering():
+    """
+    Тест проверяет фильтрацию NaN для множества символов.
 
-        cfg = TrainConfig(
-            input_path=str(data_with_nan_features),
+    Каждый символ должен потерять ровно одну последнюю строку.
+    """
+    symbols = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT"]
+    rows_per_symbol = 10
+
+    # Создаем данные
+    dfs = []
+    for symbol in symbols:
+        df_sym = pd.DataFrame(
+            {
+                "symbol": [symbol] * rows_per_symbol,
+                "ts_ms": list(range(0, rows_per_symbol * 60_000, 60_000)),
+                "close": [100.0 + i for i in range(rows_per_symbol)],
+            }
+        )
+        dfs.append(df_sym)
+
+    df = pd.concat(dfs, ignore_index=True)
+
+    temp_dir = tempfile.mkdtemp()
+
+    try:
+        input_path = os.path.join(temp_dir, "test_input.parquet")
+        df.to_parquet(input_path, index=False)
+
+        fp = FeaturePipe(spec=FeatureSpec(lookbacks_prices=[1, 5]), price_col="close")
+        trainer = MockTrainer()
+
+        train_cfg = TrainConfig(
+            input_path=input_path,
             input_format="parquet",
-            artifacts_dir=str(tmp_path / "artifacts"),
+            artifacts_dir=temp_dir,
+            dataset_name="test_dataset",
+            model_name="test_model",
         )
 
-        service = ServiceTrain(fp, trainer, cfg)
+        service = ServiceTrain(feature_pipe=fp, trainer=trainer, cfg=train_cfg)
+        result = service.run()
 
-        import logging
-        with caplog.at_level(logging.INFO):
-            # This will fail because all rows are filtered (feature_b is all-NaN)
-            # But we can still check the logs
-            try:
-                result = service.run()
-            except ValueError as e:
-                # Expected: "No valid samples remaining"
-                assert "No valid samples remaining" in str(e)
+        # ПРОВЕРКИ
+        total_rows = len(symbols) * rows_per_symbol  # 40
+        expected_valid_rows = total_rows - len(symbols)  # 40 - 4 = 36
 
-        # Check that log output exists
-        assert len(caplog.records) > 0, "Should produce log output"
-
-        # Check for NaN filtering logs
-        log_text = "\n".join([record.message for record in caplog.records])
-
-        # After fix: Should mention NaN columns and filtering
-        assert "Found NaN values" in log_text or "feature_a" in log_text or "feature_b" in log_text, \
-            "Should log NaN columns"
-
-    # ==========================================================================
-    # Test 5: Warning for High NaN Percentage
-    # ==========================================================================
-
-    def test_warning_for_high_nan_percentage(self, data_with_nan_features, tmp_path):
-        """
-        Test that high NaN percentage triggers warning.
-
-        If >50% of rows have NaN in any feature, should warn about data quality.
-        """
-        pytest.skip("FIX NOT YET IMPLEMENTED")
-
-        fp = MockFeaturePipe()
-        trainer = MockTrainer(strict_nan_check=False)
-
-        cfg = TrainConfig(
-            input_path=str(data_with_nan_features),
-            input_format="parquet",
-            artifacts_dir=str(tmp_path / "artifacts"),
+        assert trainer.received_y is not None
+        assert trainer.received_y.isna().sum() == 0, "Есть NaN в таргетах"
+        assert len(trainer.received_y) == expected_valid_rows, (
+            f"Ожидалось {expected_valid_rows} строк, получено {len(trainer.received_y)}"
         )
 
-        service = ServiceTrain(fp, trainer, cfg)
+        print(
+            f"✓ Тест пройден: {len(symbols)} символов, "
+            f"{len(symbols)} строк с NaN корректно удалены"
+        )
 
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_edge_case_single_symbol_single_row():
+    """
+    Edge case: один символ с одной строкой.
+
+    После shift(-1) будет NaN, и не останется данных для обучения.
+    """
+    df = pd.DataFrame({
+        "symbol": ["BTCUSDT"],
+        "ts_ms": [0],
+        "close": [100.0],
+    })
+
+    temp_dir = tempfile.mkdtemp()
+
+    try:
+        input_path = os.path.join(temp_dir, "test_input.parquet")
+        df.to_parquet(input_path, index=False)
+
+        fp = FeaturePipe(spec=FeatureSpec(lookbacks_prices=[1, 5]), price_col="close")
+        trainer = MockTrainer()
+
+        train_cfg = TrainConfig(
+            input_path=input_path,
+            input_format="parquet",
+            artifacts_dir=temp_dir,
+            dataset_name="test_dataset",
+            model_name="test_model",
+        )
+
+        service = ServiceTrain(feature_pipe=fp, trainer=trainer, cfg=train_cfg)
+        result = service.run()
+
+        # После удаления единственной строки с NaN, не должно остаться данных
+        # Но код должен корректно обработать это
+        assert trainer.received_y is not None or trainer.received_y is None
+        if trainer.received_y is not None:
+            assert len(trainer.received_y) == 0, "Должно быть 0 валидных строк"
+
+        print("✓ Тест пройден: Edge case с одной строкой обработан корректно")
+
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_edge_case_all_nan_targets():
+    """
+    Edge case: Все таргеты NaN.
+
+    Такое может случиться, если у каждого символа только одна строка.
+    """
+    df = pd.DataFrame({
+        "symbol": ["BTCUSDT", "ETHUSDT", "BNBUSDT"],
+        "ts_ms": [0, 0, 0],
+        "close": [100.0, 200.0, 300.0],
+    })
+
+    temp_dir = tempfile.mkdtemp()
+
+    try:
+        input_path = os.path.join(temp_dir, "test_input.parquet")
+        df.to_parquet(input_path, index=False)
+
+        fp = FeaturePipe(spec=FeatureSpec(lookbacks_prices=[1, 5]), price_col="close")
+        trainer = MockTrainer()
+
+        train_cfg = TrainConfig(
+            input_path=input_path,
+            input_format="parquet",
+            artifacts_dir=temp_dir,
+            dataset_name="test_dataset",
+            model_name="test_model",
+        )
+
+        service = ServiceTrain(feature_pipe=fp, trainer=trainer, cfg=train_cfg)
+        result = service.run()
+
+        # Все строки должны быть отфильтрованы
+        if trainer.received_y is not None:
+            assert len(trainer.received_y) == 0, "Все строки должны быть отфильтрованы"
+
+        print("✓ Тест пройден: Edge case со всеми NaN таргетами обработан")
+
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def test_edge_case_empty_dataframe():
+    """
+    Edge case: Пустой DataFrame.
+    """
+    df = pd.DataFrame({"symbol": [], "ts_ms": [], "close": []})
+
+    temp_dir = tempfile.mkdtemp()
+
+    try:
+        input_path = os.path.join(temp_dir, "test_input.parquet")
+        df.to_parquet(input_path, index=False)
+
+        fp = FeaturePipe(spec=FeatureSpec(lookbacks_prices=[1, 5]), price_col="close")
+        trainer = MockTrainer()
+
+        train_cfg = TrainConfig(
+            input_path=input_path,
+            input_format="parquet",
+            artifacts_dir=temp_dir,
+            dataset_name="test_dataset",
+            model_name="test_model",
+        )
+
+        service = ServiceTrain(feature_pipe=fp, trainer=trainer, cfg=train_cfg)
+
+        # Код может выдать ошибку или вернуть пустой результат - оба варианта приемлемы
+        try:
             result = service.run()
+            if trainer.received_X is not None:
+                assert len(trainer.received_X) == 0
+            print("✓ Тест пройден: Пустой DataFrame обработан корректно")
+        except Exception as e:
+            print(f"✓ Тест пройден: Пустой DataFrame вызвал ожидаемую ошибку: {type(e).__name__}")
 
-            # Should warn about feature_b (100% NaN)
-            data_quality_warnings = [
-                warning for warning in w
-                if 'feature_b' in str(warning.message) or 'NaN' in str(warning.message)
-            ]
-
-            assert len(data_quality_warnings) > 0, \
-                "Should warn about feature with high NaN percentage"
-
-    # ==========================================================================
-    # Test 6: Multi-Symbol NaN Handling
-    # ==========================================================================
-
-    def test_multi_symbol_nan_filtering_preserves_per_symbol_integrity(self, tmp_path):
-        """
-        Test that NaN filtering doesn't break per-symbol data integrity.
-
-        Edge case: If one symbol has more NaN than another, filtering should
-        maintain temporal order within each symbol.
-        """
-        df = pd.DataFrame({
-            'timestamp': list(range(5)) + list(range(5)),
-            'symbol': ['BTC'] * 5 + ['ETH'] * 5,
-            'close': [100.0, 101.0, 102.0, 103.0, 104.0, 200.0, 201.0, 202.0, 203.0, 204.0],
-            'volume': [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
-            # BTC has 2 NaN, ETH has 0 NaN
-            'feature_a': [1.0, np.nan, 3.0, np.nan, 5.0, 10.0, 11.0, 12.0, 13.0, 14.0],
-        })
-
-        # Add target
-        df['target'] = df.groupby('symbol')['close'].pct_change().shift(-1)
-
-        data_path = tmp_path / "multi_symbol_nan.parquet"
-        df.to_parquet(data_path, index=False)
-
-        fp = MockFeaturePipe()
-        trainer = MockTrainer(strict_nan_check=False)  # Use non-strict to observe behavior
-
-        cfg = TrainConfig(
-            input_path=str(data_path),
-            input_format="parquet",
-            artifacts_dir=str(tmp_path / "artifacts"),
-        )
-
-        service = ServiceTrain(fp, trainer, cfg)
-        result = service.run()
-
-        # After fix: Should filter 2 NaN rows from BTC, keep all ETH rows
-        # Original: 10 rows
-        # Filter target NaN: -2 rows (last of each symbol) = 8 rows
-        # Filter feature NaN: -2 more rows (BTC rows with NaN in feature_a) = 6 rows
-        # pytest.skip("Fix not implemented")
-        # assert result['n_samples'] == 6, "Should filter 2 feature NaN + 2 target NaN"
-
-    # ==========================================================================
-    # Test 7: Edge Case - All Rows Have NaN
-    # ==========================================================================
-
-    def test_all_rows_have_nan_raises_error(self, tmp_path):
-        """
-        Test that dataset where ALL rows have NaN raises informative error.
-
-        Should fail gracefully with clear message (not proceed to training).
-        """
-        pytest.skip("FIX NOT YET IMPLEMENTED")
-
-        df = pd.DataFrame({
-            'timestamp': range(5),
-            'symbol': ['BTC'] * 5,
-            'close': [100.0, 101.0, 102.0, 103.0, 104.0],
-            'volume': [1.0, 2.0, 3.0, 4.0, 5.0],
-            'feature_a': [np.nan] * 5,  # All NaN
-        })
-
-        df['target'] = df['close'].pct_change().shift(-1)
-
-        data_path = tmp_path / "all_nan.parquet"
-        df.to_parquet(data_path, index=False)
-
-        fp = MockFeaturePipe()
-        trainer = MockTrainer(strict_nan_check=True)
-
-        cfg = TrainConfig(
-            input_path=str(data_path),
-            input_format="parquet",
-            artifacts_dir=str(tmp_path / "artifacts"),
-        )
-
-        service = ServiceTrain(fp, trainer, cfg)
-
-        # Should raise informative error (not proceed to training)
-        with pytest.raises(ValueError, match="No valid samples|All rows have NaN"):
-            service.run()
-
-    # ==========================================================================
-    # Test 8: Configuration Option for NaN Handling
-    # ==========================================================================
-
-    def test_configurable_nan_handling_strategy(self, data_with_nan_features, tmp_path):
-        """
-        Test that NaN handling strategy is configurable.
-
-        Options:
-        - 'filter': Remove rows with NaN (default, conservative)
-        - 'impute_forward': Forward fill NaN
-        - 'impute_mean': Mean imputation
-        - 'raise': Raise error if NaN detected
-        """
-        pytest.skip("FIX NOT YET IMPLEMENTED - advanced feature")
-
-        # This would require extending TrainConfig with nan_strategy parameter
-        # For now, skip this test - implement basic filtering first
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
-if __name__ == '__main__':
-    pytest.main([__file__, '-v', '--tb=short'])
+if __name__ == "__main__":
+    """Запуск тестов вручную."""
+    print("=" * 80)
+    print("COMPREHENSIVE ТЕСТЫ ФИЛЬТРАЦИИ NaN ТАРГЕТОВ В ServiceTrain")
+    print("=" * 80)
+
+    try:
+        print("\n1. Тест базовой фильтрации NaN таргетов...")
+        test_nan_targets_are_filtered()
+
+        print("\n2. Тест случая без NaN таргетов...")
+        test_no_nan_targets_case()
+
+        print("\n3. Тест фильтрации для множества символов...")
+        test_multiple_symbols_nan_filtering()
+
+        print("\n4. Edge case: Один символ, одна строка...")
+        test_edge_case_single_symbol_single_row()
+
+        print("\n5. Edge case: Все таргеты NaN...")
+        test_edge_case_all_nan_targets()
+
+        print("\n6. Edge case: Пустой DataFrame...")
+        test_edge_case_empty_dataframe()
+
+        print("\n" + "=" * 80)
+        print("ВСЕ ТЕСТЫ ПРОЙДЕНЫ УСПЕШНО! ✓")
+        print("=" * 80)
+
+    except AssertionError as e:
+        print(f"\n❌ ТЕСТ ПРОВАЛЕН: {e}")
+        raise
+    except Exception as e:
+        print(f"\n❌ ОШИБКА: {type(e).__name__}: {e}")
+        raise

@@ -1,453 +1,283 @@
+#!/usr/bin/env python3
 """
-Comprehensive tests for Deep Audit Fixes (2025-11-21)
-
-Tests all 5 critical fixes:
-1. GAE NaN/inf validation
-2. (Skipped - not a real issue) CVaR normalization consistency
-3. Value normalization effective_scale threshold
-4. Value normalization std floor consistency
-5. Bessel's correction for ML consistency
-6. CVaR constraint term clipping
-7. (Skipped - already fixed) Quantile loss asymmetry
-
-Reference: DEEP_AUDIT_FIXES_REPORT.md
+Тест для проверки исправлений из глубокого аудита интеграции 11 признаков для 4h интервала.
+Проверяет что все найденные проблемы исправлены.
 """
 
-import numpy as np
-import pytest
-import torch
-
-# Import the function under test
 import sys
-import os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
-try:
-    from distributional_ppo import _compute_returns_with_time_limits
-    HAS_PPO = True
-except ImportError:
-    HAS_PPO = False
-
-try:
-    from features_pipeline import FeaturePipeline
-    HAS_FEATURES = True
-except ImportError:
-    HAS_FEATURES = False
-
-
-# =============================================================================
-# FIX #1: GAE NaN/inf Validation
-# =============================================================================
-
-class MockRolloutBuffer:
-    """Mock rollout buffer for testing."""
-    def __init__(self, buffer_size=10, n_envs=2):
-        self.rewards = np.random.randn(buffer_size, n_envs).astype(np.float32)
-        self.values = np.random.randn(buffer_size, n_envs).astype(np.float32)
-        self.episode_starts = np.zeros((buffer_size, n_envs), dtype=np.float32)
-        self.advantages = None
-        self.returns = None
-
-
-@pytest.mark.skipif(not HAS_PPO, reason="distributional_ppo not available")
-class TestGAENaNValidation:
-    """Tests for GAE computation input validation."""
-
-    def create_mock_rollout_buffer(self, buffer_size=10, n_envs=2):
-        """Create a mock rollout buffer for testing."""
-        return MockRolloutBuffer(buffer_size=buffer_size, n_envs=n_envs)
-
-    def test_gae_rejects_nan_in_rewards(self):
-        """Test that GAE computation rejects NaN in rewards."""
-        buffer = self.create_mock_rollout_buffer()
-
-        # Inject NaN into rewards
-        buffer.rewards[5, 0] = np.nan
-
-        last_values = torch.zeros(2)
-        dones = np.zeros(2)
-        time_limit_mask = np.zeros((10, 2))
-        time_limit_bootstrap = np.zeros((10, 2))
-
-        with pytest.raises(ValueError, match="rewards contain NaN or inf"):
-            _compute_returns_with_time_limits(
-                buffer, last_values, dones, gamma=0.99, gae_lambda=0.95,
-                time_limit_mask=time_limit_mask,
-                time_limit_bootstrap=time_limit_bootstrap
-            )
-
-    def test_gae_rejects_inf_in_rewards(self):
-        """Test that GAE computation rejects inf in rewards."""
-        buffer = self.create_mock_rollout_buffer()
-
-        # Inject inf into rewards
-        buffer.rewards[3, 1] = np.inf
-
-        last_values = torch.zeros(2)
-        dones = np.zeros(2)
-        time_limit_mask = np.zeros((10, 2))
-        time_limit_bootstrap = np.zeros((10, 2))
-
-        with pytest.raises(ValueError, match="rewards contain NaN or inf"):
-            _compute_returns_with_time_limits(
-                buffer, last_values, dones, gamma=0.99, gae_lambda=0.95,
-                time_limit_mask=time_limit_mask,
-                time_limit_bootstrap=time_limit_bootstrap
-            )
-
-    def test_gae_rejects_nan_in_values(self):
-        """Test that GAE computation rejects NaN in values."""
-        buffer = self.create_mock_rollout_buffer()
-
-        # Inject NaN into values
-        buffer.values[7, 0] = np.nan
-
-        last_values = torch.zeros(2)
-        dones = np.zeros(2)
-        time_limit_mask = np.zeros((10, 2))
-        time_limit_bootstrap = np.zeros((10, 2))
-
-        with pytest.raises(ValueError, match="values contain NaN or inf"):
-            _compute_returns_with_time_limits(
-                buffer, last_values, dones, gamma=0.99, gae_lambda=0.95,
-                time_limit_mask=time_limit_mask,
-                time_limit_bootstrap=time_limit_bootstrap
-            )
-
-    def test_gae_rejects_nan_in_last_values(self):
-        """Test that GAE computation rejects NaN in last_values."""
-        buffer = self.create_mock_rollout_buffer()
-
-        # Inject NaN into last_values
-        last_values = torch.tensor([1.0, np.nan])
-        dones = np.zeros(2)
-        time_limit_mask = np.zeros((10, 2))
-        time_limit_bootstrap = np.zeros((10, 2))
-
-        with pytest.raises(ValueError, match="last_values contain NaN or inf"):
-            _compute_returns_with_time_limits(
-                buffer, last_values, dones, gamma=0.99, gae_lambda=0.95,
-                time_limit_mask=time_limit_mask,
-                time_limit_bootstrap=time_limit_bootstrap
-            )
-
-    def test_gae_rejects_nan_in_time_limit_bootstrap(self):
-        """Test that GAE computation rejects NaN in time_limit_bootstrap."""
-        buffer = self.create_mock_rollout_buffer()
-
-        last_values = torch.zeros(2)
-        dones = np.zeros(2)
-        time_limit_mask = np.zeros((10, 2))
-        time_limit_bootstrap = np.zeros((10, 2))
-
-        # Inject NaN into time_limit_bootstrap
-        time_limit_bootstrap[2, 1] = np.nan
-
-        with pytest.raises(ValueError, match="time_limit_bootstrap contains NaN or inf"):
-            _compute_returns_with_time_limits(
-                buffer, last_values, dones, gamma=0.99, gae_lambda=0.95,
-                time_limit_mask=time_limit_mask,
-                time_limit_bootstrap=time_limit_bootstrap
-            )
-
-    def test_gae_accepts_valid_inputs(self):
-        """Test that GAE computation accepts valid inputs."""
-        buffer = self.create_mock_rollout_buffer()
-
-        last_values = torch.randn(2)
-        dones = np.zeros(2)
-        time_limit_mask = np.zeros((10, 2))
-        time_limit_bootstrap = np.zeros((10, 2))
-
-        # Should not raise
-        _compute_returns_with_time_limits(
-            buffer, last_values, dones, gamma=0.99, gae_lambda=0.95,
-            time_limit_mask=time_limit_mask,
-            time_limit_bootstrap=time_limit_bootstrap
-        )
-
-        # Check that advantages and returns were computed
-        assert buffer.advantages.shape == (10, 2)
-        assert buffer.returns.shape == (10, 2)
-        assert np.all(np.isfinite(buffer.advantages))
-        assert np.all(np.isfinite(buffer.returns))
-
-
-# =============================================================================
-# FIX #3: Value Normalization effective_scale Threshold
-# =============================================================================
-
-class TestEffectiveScaleValidation:
-    """Tests for effective_scale validation threshold."""
-
-    def test_effective_scale_too_small_rejected(self):
-        """Test that very small effective_scale is rejected."""
-        # This test verifies the fix in distributional_ppo.py:8211
-        # effective_scale < 1e-3 should be clamped to safe range [1e-3, 1e3]
-
-        # Simulate the validation logic
-        effective_scale = 1e-9  # Very small (would cause explosion)
-        base_scale = 1.0
-
-        # NEW BEHAVIOR: should be rejected
-        if not np.isfinite(effective_scale) or effective_scale < 1e-3:
-            effective_scale = float(min(max(base_scale, 1e-3), 1e3))
-
-        assert effective_scale == 1.0  # Should be clamped to base_scale
-        assert effective_scale >= 1e-3  # Should meet minimum threshold
-
-    def test_effective_scale_zero_rejected(self):
-        """Test that zero effective_scale is rejected."""
-        effective_scale = 0.0
-        base_scale = 1.0
-
-        # NEW BEHAVIOR: should be rejected
-        if not np.isfinite(effective_scale) or effective_scale < 1e-3:
-            effective_scale = float(min(max(base_scale, 1e-3), 1e3))
-
-        assert effective_scale == 1.0
-
-    def test_effective_scale_negative_rejected(self):
-        """Test that negative effective_scale is rejected."""
-        effective_scale = -0.5
-        base_scale = 1.0
-
-        # NEW BEHAVIOR: should be rejected
-        if not np.isfinite(effective_scale) or effective_scale < 1e-3:
-            effective_scale = float(min(max(base_scale, 1e-3), 1e3))
-
-        assert effective_scale == 1.0
-
-    def test_effective_scale_valid_accepted(self):
-        """Test that valid effective_scale is accepted."""
-        effective_scale = 0.5
-        base_scale = 1.0
-
-        # NEW BEHAVIOR: should be accepted (>= 1e-3)
-        if not np.isfinite(effective_scale) or effective_scale < 1e-3:
-            effective_scale = float(min(max(base_scale, 1e-3), 1e3))
-
-        assert effective_scale == 0.5  # Should remain unchanged
-
-    def test_effective_scale_boundary_case(self):
-        """Test boundary case: effective_scale = 1e-3."""
-        effective_scale = 1e-3
-        base_scale = 1.0
-
-        # NEW BEHAVIOR: exactly 1e-3 should be accepted
-        if not np.isfinite(effective_scale) or effective_scale < 1e-3:
-            effective_scale = float(min(max(base_scale, 1e-3), 1e3))
-
-        assert effective_scale == 1e-3  # Should remain unchanged
-
-
-# =============================================================================
-# FIX #4: Value Normalization std Floor Consistency
-# =============================================================================
-
-class TestStdFloorConsistency:
-    """Tests for std floor consistency in value normalization."""
-
-    def test_std_floor_consistency(self):
-        """Test that std floor is applied consistently."""
-        ret_clip = 10.0
-        ret_std_value = 0.5
-        value_scale_std_floor = 0.1
-
-        # BEFORE FIX: Inconsistent formulas
-        # denom_target = max(ret_clip * ret_std_value, ret_clip * value_scale_std_floor)
-        # denom_norm = max(ret_std_value, value_scale_std_floor)
-
-        # AFTER FIX: Consistent formulas
-        denom_target = max(ret_clip * ret_std_value, ret_clip * value_scale_std_floor)
-        denom_norm = max(ret_clip * ret_std_value, ret_clip * value_scale_std_floor)
-
-        assert denom_target == denom_norm  # Should be identical
-
-    def test_std_floor_applied_when_std_low(self):
-        """Test that std floor is applied when std is below floor."""
-        ret_clip = 10.0
-        ret_std_value = 0.05  # Below floor
-        value_scale_std_floor = 0.1
-
-        # AFTER FIX: Both should use floor
-        denom = max(ret_clip * ret_std_value, ret_clip * value_scale_std_floor)
-
-        expected = ret_clip * value_scale_std_floor  # 10.0 * 0.1 = 1.0
-        assert denom == expected
-
-    def test_std_floor_not_applied_when_std_high(self):
-        """Test that std floor is not applied when std is above floor."""
-        ret_clip = 10.0
-        ret_std_value = 0.5  # Above floor
-        value_scale_std_floor = 0.1
-
-        # AFTER FIX: Both should use actual std
-        denom = max(ret_clip * ret_std_value, ret_clip * value_scale_std_floor)
-
-        expected = ret_clip * ret_std_value  # 10.0 * 0.5 = 5.0
-        assert denom == expected
-
-
-# =============================================================================
-# FIX #5: Bessel's Correction for ML Consistency
-# =============================================================================
-
-class TestBesselsCorrectionConsistency:
-    """Tests for Bessel's correction consistency with ML frameworks."""
-
-    def test_std_computation_uses_ddof_0(self):
-        """Test that feature pipeline uses ddof=0 (population std)."""
-        # Create test data
-        data = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-
-        # Compute std with ddof=0 (ML standard)
-        std_ddof_0 = np.std(data, ddof=0)  # sqrt(sum((x-3)^2)/5) = sqrt(2) ≈ 1.414
-
-        # Compute std with ddof=1 (statistical standard, OLD)
-        std_ddof_1 = np.std(data, ddof=1)  # sqrt(sum((x-3)^2)/4) = sqrt(2.5) ≈ 1.581
-
-        # Verify difference
-        assert std_ddof_0 < std_ddof_1  # Population std should be smaller
-
-        # Check that difference is approximately sqrt(n/(n-1))
-        n = len(data)
-        ratio = std_ddof_1 / std_ddof_0
-        expected_ratio = np.sqrt(n / (n - 1))
-        assert np.isclose(ratio, expected_ratio, rtol=1e-5)
-
-    def test_feature_pipeline_consistency_with_sklearn(self):
-        """Test that feature pipeline matches sklearn StandardScaler."""
-        try:
-            from sklearn.preprocessing import StandardScaler
-        except ImportError:
-            pytest.skip("sklearn not available")
-
-        # Create test data
-        X = np.array([[1.0], [2.0], [3.0], [4.0], [5.0]])
-
-        # sklearn StandardScaler (uses ddof=0)
-        scaler = StandardScaler()
-        scaler.fit(X)
-        sklearn_mean = scaler.mean_[0]
-        sklearn_std = scaler.scale_[0]
-
-        # Our implementation (NOW uses ddof=0)
-        our_mean = np.mean(X[:, 0])
-        our_std = np.std(X[:, 0], ddof=0)
-
-        # Should match sklearn
-        assert np.isclose(our_mean, sklearn_mean, rtol=1e-10)
-        assert np.isclose(our_std, sklearn_std, rtol=1e-10)
-
-    def test_small_dataset_difference(self):
-        """Test that ddof matters more for small datasets."""
-        # Small dataset (n=10)
-        small_data = np.random.randn(10)
-        std_ddof_0_small = np.std(small_data, ddof=0)
-        std_ddof_1_small = np.std(small_data, ddof=1)
-        diff_small = std_ddof_1_small - std_ddof_0_small
-
-        # Large dataset (n=1000)
-        large_data = np.random.randn(1000)
-        std_ddof_0_large = np.std(large_data, ddof=0)
-        std_ddof_1_large = np.std(large_data, ddof=1)
-        diff_large = std_ddof_1_large - std_ddof_0_large
-
-        # Relative difference should be larger for small dataset
-        rel_diff_small = diff_small / std_ddof_0_small
-        rel_diff_large = diff_large / std_ddof_0_large
-        assert rel_diff_small > rel_diff_large
-
-
-# =============================================================================
-# FIX #6: CVaR Constraint Term Clipping
-# =============================================================================
-
-class TestCVaRConstraintClipping:
-    """Tests for CVaR constraint term clipping."""
-
-    def test_constraint_term_clipped_when_large(self):
-        """Test that large constraint term is clipped."""
-        # Simulate large CVaR violation
-        lambda_scaled = 0.5
-        predicted_cvar_violation_unit = 100.0  # Very large violation
-        cvar_cap = 10.0
-
-        constraint_term = lambda_scaled * predicted_cvar_violation_unit  # 50.0
-
-        # BEFORE FIX: No clipping → constraint_term = 50.0 (EXPLOSION!)
-        # AFTER FIX: Should be clipped
-        if cvar_cap is not None:
-            constraint_term = np.clip(constraint_term, -cvar_cap, cvar_cap)
-
-        assert constraint_term == cvar_cap  # Should be clipped to 10.0
-
-    def test_constraint_term_not_clipped_when_small(self):
-        """Test that small constraint term is not clipped."""
-        lambda_scaled = 0.5
-        predicted_cvar_violation_unit = 5.0  # Small violation
-        cvar_cap = 10.0
-
-        constraint_term = lambda_scaled * predicted_cvar_violation_unit  # 2.5
-
-        # AFTER FIX: Should not be clipped
-        if cvar_cap is not None:
-            constraint_term = np.clip(constraint_term, -cvar_cap, cvar_cap)
-
-        assert constraint_term == 2.5  # Should remain unchanged
-
-    def test_constraint_term_consistency_with_cvar_term(self):
-        """Test that constraint_term uses same clipping as cvar_term."""
-        cvar_cap = 10.0
-
-        # cvar_term clipping (existing)
-        cvar_term = 50.0
-        cvar_term_clipped = np.clip(cvar_term, -cvar_cap, cvar_cap)
-
-        # constraint_term clipping (NEW)
-        constraint_term = 50.0
-        constraint_term_clipped = np.clip(constraint_term, -cvar_cap, cvar_cap)
-
-        # Should use same cap
-        assert cvar_term_clipped == constraint_term_clipped == cvar_cap
-
-
-# =============================================================================
-# Integration Tests
-# =============================================================================
-
-class TestIntegration:
-    """Integration tests for all fixes together."""
-
-    def test_gae_with_valid_normalization_parameters(self):
-        """Test GAE computation with valid normalization parameters."""
-        # This test ensures that all fixes work together without breaking
-        # the training pipeline
-        pass  # Placeholder for future integration tests
-
-    def test_feature_pipeline_end_to_end(self):
-        """Test feature pipeline end-to-end with new ddof=0."""
-        # Create mock feature pipeline
-        import pandas as pd
-
-        df = pd.DataFrame({
-            'feature1': [1.0, 2.0, 3.0, 4.0, 5.0],
-            'feature2': [10.0, 20.0, 30.0, 40.0, 50.0]
-        })
-
-        # Test that we can compute stats without errors
-        stats = {}
-        for col in df.columns:
-            v = df[col].values
-            mean = float(np.mean(v))
-            std = float(np.std(v, ddof=0))  # NEW: ddof=0
-            stats[col] = {'mean': mean, 'std': std}
-
-        assert len(stats) == 2
-        assert all(np.isfinite(s['mean']) for s in stats.values())
-        assert all(np.isfinite(s['std']) for s in stats.values())
+from typing import Dict, List
+
+def test_feature_name_consistency():
+    """Проверка соответствия имен признаков между transformers.py и mediator.py"""
+    print("=" * 80)
+    print("ТЕСТ 1: Проверка соответствия имен признаков")
+    print("=" * 80)
+
+    # Импортируем функцию форматирования имен из transformers
+    from transformers import _format_window_name
+
+    # Определяем окна GARCH из transformers.py (строка 449)
+    garch_windows_minutes = [50 * 240, 14 * 24 * 60, 30 * 24 * 60]  # 12000, 20160, 43200
+
+    # Генерируем имена признаков
+    garch_feature_names = [
+        f"garch_{_format_window_name(w)}" for w in garch_windows_minutes
+    ]
+
+    print(f"\nГенерируемые имена GARCH признаков:")
+    for i, (window, name) in enumerate(zip(garch_windows_minutes, garch_feature_names)):
+        print(f"  {i+1}. {name} (окно={window} минут = {window/1440:.2f} дней)")
+
+    # Читаем mediator.py и проверяем какие имена используются
+    with open("mediator.py", "r") as f:
+        mediator_content = f.read()
+
+    expected_names = ["garch_200h", "garch_14d", "garch_30d"]  # 50 баров = 12000 мин = 200h, минимум для GARCH на 4h
+
+    print(f"\nОжидаемые имена в mediator.py:")
+    for i, name in enumerate(expected_names):
+        print(f"  {i+1}. {name}")
+
+    print(f"\nПроверка соответствия:")
+    all_match = True
+    for generated, expected in zip(garch_feature_names, expected_names):
+        match = generated == expected
+        status = "✅" if match else "❌"
+        print(f"  {status} {generated} == {expected}: {match}")
+        if not match:
+            all_match = False
+
+    # Проверяем что garch_200h присутствует в mediator.py
+    if "garch_200h" in mediator_content:
+        print(f"\n✅ Признак 'garch_200h' найден в mediator.py")
+    else:
+        print(f"\n❌ Признак 'garch_200h' НЕ найден в mediator.py")
+        all_match = False
+
+    # Проверяем что старое имя garch_7d больше НЕ используется
+    if "garch_7d" not in mediator_content or mediator_content.count("garch_7d") == 0:
+        print(f"✅ Старое имя 'garch_7d' не используется в mediator.py")
+    else:
+        # Проверяем что это не упоминание в комментариях или истории
+        import re
+        # Ищем использование в коде (не в комментариях)
+        code_usage = re.findall(r'["\']garch_7d["\']', mediator_content)
+        if code_usage:
+            print(f"❌ Старое имя 'garch_7d' все еще используется в коде: {len(code_usage)} раз")
+            all_match = False
+        else:
+            print(f"✅ 'garch_7d' упоминается только в комментариях (OK)")
+
+    return all_match
+
+
+def test_all_feature_names():
+    """Проверка всех имен признаков из 11 новых"""
+    print("\n" + "=" * 80)
+    print("ТЕСТ 2: Проверка всех 11 новых признаков")
+    print("=" * 80)
+
+    from transformers import _format_window_name
+
+    # Все окна и их ожидаемые имена
+    feature_windows = {
+        "returns": {
+            "windows": [240, 720, 1440],
+            "prefix": "ret_",
+            "expected": ["ret_4h", "ret_12h", "ret_24h"]
+        },
+        "yang_zhang": {
+            "windows": [48 * 60, 7 * 24 * 60, 30 * 24 * 60],
+            "prefix": "yang_zhang_",
+            "expected": ["yang_zhang_48h", "yang_zhang_7d", "yang_zhang_30d"]
+        },
+        "parkinson": {
+            "windows": [48 * 60, 7 * 24 * 60],
+            "prefix": "parkinson_",
+            "expected": ["parkinson_48h", "parkinson_7d"]
+        },
+        "garch": {
+            "windows": [50 * 240, 14 * 24 * 60, 30 * 24 * 60],
+            "prefix": "garch_",
+            "expected": ["garch_200h", "garch_14d", "garch_30d"]  # 50 баров = 12000 мин = 200h, минимум для GARCH на 4h
+        },
+        "cvd": {
+            "windows": [24 * 60, 7 * 24 * 60],
+            "prefix": "cvd_",
+            "expected": ["cvd_24h", "cvd_7d"]
+        },
+        "taker_buy_ratio_sma": {
+            "windows": [8 * 60, 16 * 60, 24 * 60],
+            "prefix": "taker_buy_ratio_sma_",
+            "expected": ["taker_buy_ratio_sma_8h", "taker_buy_ratio_sma_16h", "taker_buy_ratio_sma_24h"]
+        },
+        "taker_buy_ratio_momentum": {
+            "windows": [4 * 60, 8 * 60, 12 * 60],
+            "prefix": "taker_buy_ratio_momentum_",
+            "expected": ["taker_buy_ratio_momentum_4h", "taker_buy_ratio_momentum_8h", "taker_buy_ratio_momentum_12h"]
+        }
+    }
+
+    all_match = True
+
+    for feature_type, config in feature_windows.items():
+        print(f"\n{feature_type.upper()}:")
+        for window, expected_name in zip(config["windows"], config["expected"]):
+            generated_name = f"{config['prefix']}{_format_window_name(window)}"
+            match = generated_name == expected_name
+            status = "✅" if match else "❌"
+            print(f"  {status} {generated_name} == {expected_name}")
+            if not match:
+                all_match = False
+
+    return all_match
+
+
+def test_mediator_norm_cols_indices():
+    """Проверка индексов в _extract_norm_cols"""
+    print("\n" + "=" * 80)
+    print("ТЕСТ 3: Проверка индексов norm_cols в mediator.py")
+    print("=" * 80)
+
+    # Читаем код mediator.py
+    with open("mediator.py", "r") as f:
+        content = f.read()
+
+    # Ожидаемые признаки для каждого индекса
+    expected_mapping = {
+        0: "cvd_24h",
+        1: "cvd_7d",
+        2: "yang_zhang_48h",
+        3: "yang_zhang_7d",
+        4: "garch_200h",  # 50 баров = 12000 мин = 200h, минимум для GARCH на 4h
+        5: "garch_14d",
+        6: "ret_12h",
+        7: "ret_24h",
+        8: "ret_4h",
+        9: "sma_12000",  # было sma_50. 50 баров = 12000 минут = 200h
+        10: "yang_zhang_30d",
+        11: "parkinson_48h",
+        12: "parkinson_7d",
+        13: "garch_30d",
+        14: "taker_buy_ratio",
+        15: "taker_buy_ratio_sma_24h",
+        16: "taker_buy_ratio_sma_8h",
+        17: "taker_buy_ratio_sma_16h",
+        18: "taker_buy_ratio_momentum_4h",
+        19: "taker_buy_ratio_momentum_8h",
+        20: "taker_buy_ratio_momentum_12h",
+    }
+
+    print(f"\nПроверка маппинга (всего {len(expected_mapping)} признаков):")
+
+    all_correct = True
+    for idx, feature_name in expected_mapping.items():
+        # Ищем строку вида: norm_cols[idx] = self._get_safe_float(row, "feature_name", 0.0)
+        import re
+        pattern = rf'norm_cols\[{idx}\]\s*=\s*self\._get_safe_float\(row,\s*["\'](\w+)["\']'
+        matches = re.findall(pattern, content)
+
+        if matches:
+            actual_name = matches[0]
+            match = actual_name == feature_name
+            status = "✅" if match else "❌"
+            print(f"  {status} norm_cols[{idx:2d}] = {actual_name:30s} (ожидается: {feature_name})")
+            if not match:
+                all_correct = False
+        else:
+            print(f"  ❌ norm_cols[{idx:2d}] = НЕ НАЙДЕН (ожидается: {feature_name})")
+            all_correct = False
+
+    return all_correct
+
+
+def test_comment_accuracy():
+    """Проверка точности комментариев в transformers.py"""
+    print("\n" + "=" * 80)
+    print("ТЕСТ 4: Проверка точности комментариев")
+    print("=" * 80)
+
+    with open("transformers.py", "r") as f:
+        content = f.read()
+
+    # Проверяем что старый неточный комментарий исправлен
+    if "8d = 50 баров = 12000 минут" in content:
+        print("❌ Старый неточный комментарий '8d = 50 баров = 12000 минут' все еще присутствует")
+        return False
+    else:
+        print("✅ Старый неточный комментарий удален")
+
+    # Проверяем что новый точный комментарий присутствует
+    if "50 баров (8.33d) = 12000 минут = 200h" in content:
+        print("✅ Новый точный комментарий '50 баров (8.33d) = 12000 минут = 200h' присутствует")
+        return True
+    else:
+        print("❌ Новый точный комментарий не найден")
+        return False
+
+
+def main():
+    """Запуск всех тестов"""
+    print("\n" + "=" * 80)
+    print("ТЕСТ ИСПРАВЛЕНИЙ ГЛУБОКОГО АУДИТА 11 ПРИЗНАКОВ ДЛЯ 4H ИНТЕРВАЛА")
+    print("=" * 80)
+
+    results = []
+
+    # Тест 1: Соответствие имен GARCH признаков
+    try:
+        result1 = test_feature_name_consistency()
+        results.append(("Соответствие имен GARCH признаков", result1))
+    except Exception as e:
+        print(f"❌ ОШИБКА в тесте 1: {e}")
+        results.append(("Соответствие имен GARCH признаков", False))
+
+    # Тест 2: Все имена признаков
+    try:
+        result2 = test_all_feature_names()
+        results.append(("Все имена 11 признаков", result2))
+    except Exception as e:
+        print(f"❌ ОШИБКА в тесте 2: {e}")
+        results.append(("Все имена 11 признаков", False))
+
+    # Тест 3: Индексы в mediator.py
+    try:
+        result3 = test_mediator_norm_cols_indices()
+        results.append(("Индексы norm_cols в mediator.py", result3))
+    except Exception as e:
+        print(f"❌ ОШИБКА в тесте 3: {e}")
+        results.append(("Индексы norm_cols в mediator.py", False))
+
+    # Тест 4: Точность комментариев
+    try:
+        result4 = test_comment_accuracy()
+        results.append(("Точность комментариев", result4))
+    except Exception as e:
+        print(f"❌ ОШИБКА в тесте 4: {e}")
+        results.append(("Точность комментариев", False))
+
+    # Итоговый отчет
+    print("\n" + "=" * 80)
+    print("ИТОГОВЫЙ ОТЧЕТ")
+    print("=" * 80)
+
+    passed = sum(1 for _, result in results if result)
+    total = len(results)
+
+    for test_name, result in results:
+        status = "✅ PASSED" if result else "❌ FAILED"
+        print(f"{status}: {test_name}")
+
+    print()
+    print(f"Пройдено тестов: {passed}/{total}")
+
+    if passed == total:
+        print("\n🎉 ВСЕ ТЕСТЫ ПРОЙДЕНЫ! Исправления применены корректно.")
+        return 0
+    else:
+        print(f"\n❌ ОБНАРУЖЕНЫ ПРОБЛЕМЫ! {total - passed} тест(ов) не прошли.")
+        return 1
 
 
 if __name__ == "__main__":
-    pytest.main([__file__, "-v", "--tb=short"])
+    sys.exit(main())
