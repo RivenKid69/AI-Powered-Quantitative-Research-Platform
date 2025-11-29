@@ -57,6 +57,12 @@
 | Conformal prediction | `core_conformal.py`, `impl_conformal.py`, `service_conformal.py` | `pytest tests/test_conformal_prediction.py` |
 | Uncertainty bounds | `service_conformal.py` | `pytest tests/test_conformal_prediction.py::TestUncertaintyTracker` |
 | CVaR bounds | `impl_conformal.py` | `pytest tests/test_conformal_prediction.py::TestConformalCVaREstimator` |
+| Stock features (VIX, RS) | `stock_features.py` | `pytest tests/test_stock_features.py` |
+| Stock risk guards | `services/stock_risk_guards.py` | `pytest tests/test_stock_risk_guards.py` |
+| Stock universe mgmt | `services/universe_stocks.py` | `pytest tests/test_universe_stocks.py` |
+| US market structure | `lob/us_market_structure.py` | `pytest tests/test_us_market_structure.py` |
+| Verification tools | `tools/check_*.py`, `tools/verify_*.py` | Run directly with `python tools/<script>.py` |
+| Feature parity check | `tools/check_feature_parity.py` | `python tools/check_feature_parity.py` |
 
 ### 🔍 Quick File Reference
 
@@ -67,6 +73,37 @@
 | `service_*` | Сервисы | `core_`, `impl_` | `service_backtest.py`, `service_train.py`, `service_eval.py` |
 | `strategies/*` | Стратегии | Все предыдущие | `strategies/base.py`, `strategies/momentum.py` |
 | `script_*` | CLI точки входа | Все | `script_backtest.py`, `script_live.py`, `script_eval.py` |
+
+### 📁 Project Organization (Updated 2025-11-29)
+
+**ВАЖНО**: Проект реорганизован (commit db9655a). Файлы перемещены:
+
+```
+TradingBot2/
+├── tests/              # 262 test files (moved from root)
+│   ├── test_*.py       # All test files
+│   └── conftest.py     # Pytest fixtures
+├── tools/              # 34 utility scripts (moved from root)
+│   ├── check_*.py      # Validation scripts
+│   ├── verify_*.py     # Verification scripts
+│   └── analyze_*.py    # Analysis scripts
+├── scripts/            # Data fetching scripts
+│   ├── download_stock_data.py
+│   ├── fetch_binance_filters.py
+│   └── fetch_alpaca_universe.py
+├── lob/                # L3 LOB simulation modules
+├── adapters/           # Exchange adapters (Binance, Alpaca, etc.)
+├── services/           # Business logic services
+├── strategies/         # Trading strategies
+├── configs/            # YAML configuration files
+├── docs/               # Documentation and archives
+└── *.py                # Core modules (core_, impl_, script_, etc.)
+```
+
+**Key directories**:
+- `tools/` — Scripts for verification, debugging, analysis (run directly)
+- `tests/` — All pytest tests (use `pytest tests/`)
+- `scripts/` — Data management scripts
 
 ### ⚡ Критические команды
 
@@ -947,6 +984,147 @@ pytest tests/test_equity_parametric_tca.py::TestL2Integration -v
 
 ---
 
+## 📊 Stock Features & Risk Management (Phase 5)
+
+### Обзор
+
+Phase 5 добавляет stock-специфичные features и risk guards, параллельно crypto Fear & Greed индексу.
+
+**Файлы**:
+- `stock_features.py` — VIX integration, market regime, relative strength
+- `services/stock_risk_guards.py` — Margin, short sale, corporate actions guards
+- `services/universe_stocks.py` — Stock universe management with TTL caching
+
+### Stock Features (`stock_features.py`)
+
+| Feature | Описание | Источник |
+|---------|----------|----------|
+| **VIX Value** | Market volatility (fear gauge) | Yahoo `^VIX` |
+| **VIX Regime** | LOW (<12), NORMAL (12-20), ELEVATED (20-30), EXTREME (>30) | CBOE thresholds |
+| **Market Regime** | BULL/SIDEWAYS/BEAR based on SPY + VIX | SMA crossover + VIX |
+| **RS vs SPY (20d)** | 20-day relative strength vs S&P 500 | Levy (1967) |
+| **RS vs SPY (50d)** | 50-day relative strength vs S&P 500 | Moskowitz et al. (2012) |
+| **RS vs QQQ (20d)** | 20-day relative strength vs Nasdaq 100 | Momentum proxy |
+| **Sector Momentum** | Sector rotation signal | XLK, XLF, XLV ETF returns |
+
+**Использование**:
+```python
+from stock_features import (
+    StockFeatures,
+    BenchmarkData,
+    calculate_vix_regime,
+    calculate_market_regime,
+    calculate_relative_strength,
+    VIXRegime,
+    MarketRegime,
+)
+
+# Calculate VIX regime
+vix_normalized, regime = calculate_vix_regime(vix_value=25.0)
+# regime = VIXRegime.ELEVATED
+
+# Calculate market regime
+market_regime = calculate_market_regime(
+    spy_prices=spy_close_list,
+    vix_value=25.0,
+)
+# market_regime = MarketRegime.SIDEWAYS
+
+# Calculate relative strength
+rs_20d = calculate_relative_strength(
+    stock_prices=stock_close_list,
+    benchmark_prices=spy_close_list,
+    window=20,
+)
+```
+
+### Stock Risk Guards (`services/stock_risk_guards.py`)
+
+| Guard | Правило | Описание |
+|-------|---------|----------|
+| **MarginGuard** | Reg T | 50% initial, 25% maintenance margin |
+| **ShortSaleGuard** | Rule 201 | Uptick rule при -10% drop |
+| **CorporateActionsHandler** | SEC | Dividends, splits, ex-dates |
+
+**Margin Call Types**:
+- `FEDERAL` — Below Reg T initial margin (new positions)
+- `MAINTENANCE` — Below 25% maintenance margin
+- `HOUSE` — Broker's stricter requirements
+
+**Short Sale Restrictions**:
+- `UPTICK_RULE` — Rule 201 (short only on uptick)
+- `HTB` — Hard-to-borrow (may not be available)
+- `RESTRICTED` — Exchange restricted
+- `NOT_SHORTABLE` — Cannot be shorted
+
+**Использование**:
+```python
+from services.stock_risk_guards import (
+    MarginGuard,
+    ShortSaleGuard,
+    MarginCallType,
+    ShortSaleRestriction,
+)
+
+# Margin check
+margin_guard = MarginGuard()
+result = margin_guard.check_margin_requirement(
+    position_value=100000,
+    account_equity=60000,
+    is_new_position=True,
+)
+# result.margin_call_type = MarginCallType.NONE if OK
+
+# Short sale check
+short_guard = ShortSaleGuard()
+restriction = short_guard.check_short_restriction(
+    symbol="GME",
+    price_change_pct=-0.12,  # -12% drop
+)
+# restriction = ShortSaleRestriction.UPTICK_RULE
+```
+
+### Benchmark Temporal Alignment (Fix 2025-11-29)
+
+**Проблема**: VIX/SPY/QQQ данные использовали positional index вместо timestamp merge → look-ahead bias.
+
+**Решение**: `pd.merge_asof(direction="backward")` для корректного temporal alignment.
+
+```python
+# stock_features.py:_align_benchmark_by_timestamp()
+aligned = pd.merge_asof(
+    stock_df,
+    benchmark_df,
+    on="timestamp",
+    direction="backward",  # Use last available benchmark value
+    suffixes=("", "_benchmark"),
+)
+```
+
+### Тестирование
+
+```bash
+# Stock features tests
+pytest tests/test_stock_features.py -v
+
+# Stock risk guards tests
+pytest tests/test_stock_risk_guards.py -v
+
+# Benchmark alignment tests
+pytest tests/test_benchmark_temporal_alignment.py -v
+```
+
+### Референсы
+
+- CBOE VIX White Paper (2003): VIX as fear gauge
+- Lo, A.W. (2004): "The Adaptive Markets Hypothesis"
+- Moskowitz, T.J. et al. (2012): "Time series momentum"
+- Levy, R. (1967): "Relative Strength as a Criterion for Investment Selection"
+- Reg T (Federal Reserve): Initial/maintenance margin requirements
+- SEC Rule 201: Short sale circuit breaker
+
+---
+
 ## 🔴 Live Trading Improvements (Phase 9)
 
 ### Обзор
@@ -1294,6 +1472,7 @@ lob/
 ├── config.py                # Pydantic config models for L3 subsystems (Stage 7)
 ├── data_adapters.py         # LOBSTER, ITCH, Binance, Alpaca adapters (Stage 8)
 ├── calibration_pipeline.py  # Unified L3 calibration pipeline (Stage 8)
+├── us_market_structure.py   # SEC Reg NMS rules (tick size, odd lots, NBBO)
 └── __init__.py              # Public API exports
 
 execution_providers_l3.py    # L3ExecutionProvider combining all LOB components (Stage 7)
@@ -1351,6 +1530,9 @@ docs/l3_simulator/           # Stage 10 Documentation
 | `L3CalibrationPipeline` | Unified calibration for L3 (Stage 8) |
 | `LatencyCalibrator` | Latency distribution calibration (Stage 8) |
 | `QueueDynamicsCalibrator` | Queue dynamics calibration (Stage 8) |
+| `TickSizeValidator` | SEC Reg NMS Rule 612 tick size validation |
+| `OddLotHandler` | Odd lot (<100 shares) handling per SEC Rule 600 |
+| `NBBOProtector` | Reg NMS Rule 611 trade-through prevention |
 
 ### Self-Trade Prevention (STP)
 
@@ -1669,6 +1851,56 @@ for venue_id, prob in probs.items():
 
 # 8. Multi-venue routing
 fills = dark_pool.attempt_fill_with_routing(order, lit_mid_price=100.0, max_attempts=3)
+```
+
+### US Market Structure (`lob/us_market_structure.py`)
+
+SEC Reg NMS rules implementation for realistic equity simulation:
+
+| Rule | Component | Description |
+|------|-----------|-------------|
+| **Rule 612** | `TickSizeValidator` | Sub-penny rule: $0.01 for ≥$1.00, $0.0001 for <$1.00 |
+| **Rule 600** | `OddLotHandler` | Odd lot (<100 shares), round lot, mixed lot handling |
+| **Rule 611** | `NBBOProtector` | Order Protection Rule (trade-through prevention) |
+
+**Lot Types**:
+- `ODD_LOT` — < 100 shares (different execution properties)
+- `ROUND_LOT` — Exactly 100 shares or multiples
+- `MIXED_LOT` — Round lots + odd lot remainder
+
+**Trade-Through Protection**:
+- `BID_THROUGH` — Sell below protected bid (violation)
+- `ASK_THROUGH` — Buy above protected ask (violation)
+
+```python
+from lob.us_market_structure import (
+    TickSizeValidator,
+    OddLotHandler,
+    NBBOProtector,
+    LotType,
+    TradeThrough,
+    TICK_SIZE_PENNY,
+    ROUND_LOT_SIZE,
+)
+
+# Tick size validation
+validator = TickSizeValidator()
+valid = validator.validate_price(150.015, stock_price=150.0)  # False (sub-penny!)
+rounded = validator.round_to_tick(150.015)  # 150.01
+
+# Lot type classification
+handler = OddLotHandler()
+lot_type = handler.classify_lot(75)  # LotType.ODD_LOT
+
+# NBBO protection check
+protector = NBBOProtector()
+violation = protector.check_trade_through(
+    trade_price=149.99,
+    side="SELL",
+    nbbo_bid=150.00,
+    nbbo_ask=150.02,
+)
+# violation = TradeThrough.BID_THROUGH
 ```
 
 ### Тестирование
@@ -3394,15 +3626,39 @@ core_ → impl_ → service_ → strategies → script_
 
 ## Конфигурации
 
+### Основные конфиги
+
 | Файл | Назначение |
 |------|------------|
-| `config_train.yaml` | Обучение (standard) |
+| `config_train.yaml` | Обучение crypto (standard) |
+| `config_train_stocks.yaml` | Обучение stocks (Alpaca) |
+| `config_train_signal_only_stocks.yaml` | Signal-only обучение stocks |
 | `config_pbt_adversarial.yaml` | PBT + SA-PPO |
-| `config_sim.yaml` | Бэктест |
-| `config_live.yaml` | Live trading |
+| `config_sim.yaml` | Бэктест crypto |
+| `config_backtest_stocks.yaml` | Бэктест stocks |
+| `config_live.yaml` | Live trading crypto (Binance) |
+| `config_live_alpaca.yaml` | Live trading stocks (Alpaca) |
 | `config_eval.yaml` | Оценка модели |
 
-**Модульные**: `execution.yaml`, `fees.yaml`, `slippage.yaml`, `risk.yaml`, `no_trade.yaml`
+### Asset Class конфигурация
+
+| Файл | Назначение |
+|------|------------|
+| `asset_class_defaults.yaml` | Defaults для crypto/equity/futures |
+| `exchange.yaml` | Exchange adapter configuration |
+
+### Модульные конфиги
+
+| Файл | Назначение |
+|------|------------|
+| `execution.yaml` | Execution simulation parameters |
+| `execution_l3.yaml` | L3 LOB execution configuration |
+| `fees.yaml` | Fee structures (maker/taker, regulatory) |
+| `slippage.yaml` | Slippage profiles (crypto, equity) |
+| `risk.yaml` | Risk limits and guards |
+| `no_trade.yaml` | No-trade windows |
+| `conformal.yaml` | Conformal prediction settings |
+| `signal_quality.yaml` | Signal quality metrics |
 
 ---
 
@@ -3453,6 +3709,9 @@ pytest tests/test_pbt*.py -v           # PBT
 | LSTM | `test_lstm_episode_boundary_reset.py` |
 | Reset Observation | `test_trading_env_reset_observation_fixes.py` (9 тестов) |
 | Phase 9 Live Trading | `test_phase9_live_trading.py` (46 тестов) |
+| Stock Features | `test_stock_features.py`, `test_benchmark_temporal_alignment.py` |
+| Stock Risk Guards | `test_stock_risk_guards.py` |
+| US Market Structure | `test_us_market_structure.py` |
 
 ---
 
@@ -3508,8 +3767,8 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 
 ### Тестирование
 - [ ] `pytest tests/` — все тесты проходят
-- [ ] `check_feature_parity.py` — паритет OK
-- [ ] `sim_reality_check.py` — симуляция реалистична
+- [ ] `python tools/check_feature_parity.py` — паритет OK
+- [ ] `python tools/verify_fixes.py` — все фиксы работают
 
 ### Live Trading
 - [ ] API ключи настроены
@@ -3539,5 +3798,13 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-11-29
-**Версия документации**: 10.3 (Phase 10 + Benchmark Temporal Alignment Fix)
-**Статус**: ✅ Production Ready (все критические исправления применены, 56 задокументированных "НЕ БАГИ")
+**Версия документации**: 10.4 (Phase 10 + Stock Features + Project Reorganization)
+**Статус**: ✅ Production Ready (все критические исправления применены, 59 задокументированных "НЕ БАГИ")
+
+### Изменения в 10.4:
+- Добавлена секция Stock Features & Risk Management (Phase 5)
+- Добавлена документация US Market Structure (SEC Reg NMS)
+- Добавлена секция Project Organization (tests/, tools/ reorganization)
+- Обновлена таблица Quick Reference с новыми модулями
+- Обновлена таблица конфигурационных файлов
+- Добавлены stock-specific конфиги и asset_class_defaults.yaml
