@@ -9,11 +9,17 @@
 - **OTC Dealer Simulation** — отдельный модуль в `services/`, НЕ в `lob/`
 - Концепция "L3" неприменима напрямую к OTC рынкам
 
-**Статус**: 📋 Plan v2.0 (Reviewed & Corrected)
+**Ключевой принцип тестирования**: Zero Regression Policy
+- **Mandatory regression gates** после каждой фазы
+- **Isolation tests** для предотвращения cross-contamination
+- **Backward compatibility tests** для сохранения API контрактов
+- **CI/CD pipeline** с автоматическими проверками
+
+**Статус**: 📋 Plan v2.1 (Testing & Regression Hardened)
 **Дата**: 2025-11-29
-**Estimated LOC**: 9,500-11,500
-**Estimated Tests**: 500+
-**Timeline**: 14-16 недель (1 инженер)
+**Estimated LOC**: 6,000
+**Estimated Tests**: 735 (включая 110 regression/isolation/backward compat)
+**Timeline**: 17 недель (1 инженер)
 
 ---
 
@@ -2285,11 +2291,13 @@ rate_limits:
 
 ---
 
-### Phase 10: Testing & Validation (Week 16)
+### Phase 10: Testing & Validation (Weeks 16-17)
 
-**Цель**: Comprehensive testing + property-based + stress tests
+**Цель**: Comprehensive testing + property-based + stress tests + **REGRESSION PREVENTION**
 
-#### 10.1 Unit Tests
+> **КРИТИЧЕСКИ ВАЖНО**: Forex интеграция НЕ ДОЛЖНА нарушить существующий функционал crypto и equity. Каждая фаза включает обязательные регрессионные проверки.
+
+#### 10.1 Unit Tests (Forex-specific)
 
 ```
 tests/
@@ -2301,11 +2309,570 @@ tests/
 ├── test_forex_position_sync.py         # 40 tests
 ├── test_forex_session_router.py        # 30 tests
 ├── test_forex_integration.py           # 50 tests
-├── test_forex_properties.py            # 40 tests (NEW)
-└── test_forex_stress.py                # 20 tests (NEW)
+├── test_forex_properties.py            # 40 tests (Property-based)
+├── test_forex_stress.py                # 20 tests (Stress scenarios)
+├── test_forex_regression.py            # 45 tests (NEW: Regression suite)
+├── test_forex_isolation.py             # 35 tests (NEW: Isolation verification)
+└── test_forex_backward_compat.py       # 30 tests (NEW: Backward compatibility)
 ```
 
-#### 10.2 Property-Based Tests (Hypothesis) — NEW!
+#### 10.2 Regression Testing Suite (КРИТИЧЕСКИ ВАЖНО!)
+
+```python
+# tests/test_forex_regression.py
+"""
+Regression Test Suite for Forex Integration.
+
+PURPOSE: Verify that adding Forex does NOT break existing crypto/equity functionality.
+RUN: After EVERY phase completion and before merge to main.
+
+Test Categories:
+1. Crypto execution providers unchanged
+2. Equity execution providers unchanged
+3. Adapter registry backward compatible
+4. Feature pipeline produces identical outputs
+5. Risk guards behavior unchanged
+6. Training pipeline produces consistent results
+"""
+import pytest
+import numpy as np
+from typing import Dict, Any
+
+# =============================================================================
+# BASELINE SNAPSHOTS (captured before Forex integration)
+# =============================================================================
+
+CRYPTO_SLIPPAGE_BASELINE = {
+    # Snapshot of CryptoParametricSlippageProvider outputs
+    # Captured with fixed seed for reproducibility
+    "BTCUSDT_participation_0.001": 2.45,  # pips
+    "ETHUSDT_participation_0.005": 5.12,
+    "BTCUSDT_high_vol": 8.73,
+}
+
+EQUITY_FEE_BASELINE = {
+    # Snapshot of equity fee calculations (if EquityParametric exists)
+    "AAPL_100_shares_sell": 0.0278,  # SEC fee
+    "SPY_1000_shares_sell": 0.278,
+}
+
+FEATURE_PIPELINE_BASELINE = {
+    # Hash of feature vector for known input
+    "crypto_btc_features_hash": "a1b2c3d4...",
+    "equity_aapl_features_hash": "e5f6g7h8...",
+}
+
+
+class TestCryptoRegressionSuite:
+    """Ensure crypto functionality unchanged after Forex integration."""
+
+    @pytest.fixture(autouse=True)
+    def setup(self):
+        """Setup crypto test environment."""
+        from execution_providers import (
+            CryptoParametricSlippageProvider,
+            CryptoParametricConfig,
+            AssetClass,
+        )
+        self.provider = CryptoParametricSlippageProvider()
+
+    def test_crypto_slippage_unchanged(self):
+        """Crypto slippage calculations must match baseline."""
+        # Test with fixed parameters
+        slippage = self.provider.compute_slippage_bps(
+            order=self._create_btc_order(),
+            market=self._create_btc_market(),
+            participation_ratio=0.001,
+        )
+        assert abs(slippage - CRYPTO_SLIPPAGE_BASELINE["BTCUSDT_participation_0.001"]) < 0.01
+
+    def test_crypto_profiles_exist(self):
+        """All crypto profiles must still exist."""
+        profiles = ["default", "conservative", "aggressive", "altcoin", "stablecoin"]
+        for profile in profiles:
+            provider = CryptoParametricSlippageProvider.from_profile(profile)
+            assert provider is not None
+
+    def test_crypto_asset_class_unchanged(self):
+        """AssetClass.CRYPTO must still work identically."""
+        from execution_providers import AssetClass, create_execution_provider
+        provider = create_execution_provider(AssetClass.CRYPTO)
+        assert provider is not None
+
+    def test_crypto_config_defaults_unchanged(self):
+        """CryptoParametricConfig defaults must not change."""
+        from execution_providers import CryptoParametricConfig
+        config = CryptoParametricConfig()
+        assert config.impact_coef_base == 0.10
+        assert config.spread_bps == 5.0
+        assert config.whale_threshold == 0.01
+
+    def test_binance_adapter_unchanged(self):
+        """Binance adapter must work identically."""
+        from adapters.registry import create_market_data_adapter
+        adapter = create_market_data_adapter("binance")
+        assert adapter is not None
+
+
+class TestEquityRegressionSuite:
+    """Ensure equity functionality unchanged after Forex integration."""
+
+    def test_equity_asset_class_unchanged(self):
+        """AssetClass.EQUITY must still work identically."""
+        from execution_providers import AssetClass, create_execution_provider
+        provider = create_execution_provider(AssetClass.EQUITY)
+        assert provider is not None
+
+    def test_alpaca_adapter_unchanged(self):
+        """Alpaca adapter must work identically."""
+        from adapters.registry import create_market_data_adapter
+        adapter = create_market_data_adapter("alpaca")
+        assert adapter is not None
+
+    def test_equity_fee_provider_unchanged(self):
+        """Equity fee calculations must match baseline."""
+        from execution_providers import EquityFeeProvider
+        provider = EquityFeeProvider()
+        # SEC fee calculation unchanged
+        fee = provider.compute_fee(
+            price=150.0,
+            qty=100,
+            side="SELL",
+            liquidity_role="taker",
+        )
+        assert abs(fee - EQUITY_FEE_BASELINE["AAPL_100_shares_sell"]) < 0.001
+
+
+class TestAdapterRegistryRegression:
+    """Ensure adapter registry backward compatible."""
+
+    def test_existing_vendors_unchanged(self):
+        """All existing vendors must still be registered."""
+        from adapters.models import ExchangeVendor
+        existing = ["binance", "binance_us", "alpaca", "polygon", "yahoo"]
+        for vendor in existing:
+            assert hasattr(ExchangeVendor, vendor.upper())
+
+    def test_lazy_loading_unchanged(self):
+        """Lazy loading for existing adapters must work."""
+        from adapters.registry import AdapterRegistry
+        registry = AdapterRegistry()
+        # These should not raise
+        registry.get_market_data_adapter("binance")
+        registry.get_market_data_adapter("alpaca")
+
+    def test_forex_addition_isolated(self):
+        """Adding OANDA must not affect other vendors."""
+        from adapters.models import ExchangeVendor
+        # OANDA added
+        assert hasattr(ExchangeVendor, "OANDA")
+        # Others unchanged
+        assert ExchangeVendor.BINANCE.value == "binance"
+        assert ExchangeVendor.ALPACA.value == "alpaca"
+
+
+class TestFeaturePipelineRegression:
+    """Ensure feature pipeline produces identical outputs."""
+
+    def test_crypto_features_unchanged(self):
+        """Crypto feature vector must be identical."""
+        from features_pipeline import compute_features
+        # Test with known input data
+        features = compute_features(self._load_btc_test_data(), asset_class="crypto")
+        # Compare hash or specific values
+        assert len(features.columns) >= 63  # Original feature count
+
+    def test_equity_features_unchanged(self):
+        """Equity feature vector must be identical."""
+        from features_pipeline import compute_features
+        features = compute_features(self._load_aapl_test_data(), asset_class="equity")
+        assert "vix_regime" in features.columns or "rs_vs_spy_20d" in features.columns
+
+    def test_forex_features_isolated(self):
+        """Forex features must not affect crypto/equity."""
+        from features_pipeline import compute_features
+        # Forex-specific features only appear for forex asset class
+        crypto_features = compute_features(self._load_btc_test_data(), asset_class="crypto")
+        assert "carry_diff" not in crypto_features.columns
+        assert "session_liquidity" not in crypto_features.columns
+
+
+class TestRiskGuardsRegression:
+    """Ensure risk guards behavior unchanged."""
+
+    def test_crypto_risk_limits_unchanged(self):
+        """Crypto risk limits must be identical."""
+        from risk_guard import RiskGuard
+        guard = RiskGuard.from_config("configs/risk.yaml")
+        # Verify limits unchanged
+
+    def test_equity_risk_guards_unchanged(self):
+        """Equity risk guards (margin, short) must work identically."""
+        from services.stock_risk_guards import MarginGuard, ShortSaleGuard
+        margin = MarginGuard()
+        short = ShortSaleGuard()
+        # Verify behavior unchanged
+
+
+# =============================================================================
+# PHASE-SPECIFIC REGRESSION GATES
+# =============================================================================
+
+class TestPhaseRegressionGates:
+    """
+    Regression gates to run after each phase.
+
+    Usage:
+        pytest tests/test_forex_regression.py::TestPhaseRegressionGates -v
+    """
+
+    @pytest.mark.phase1
+    def test_phase1_gate(self):
+        """Phase 1 (Enums): No regression in existing enums."""
+        from adapters.models import MarketType, ExchangeVendor
+        from execution_providers import AssetClass
+
+        # MarketType unchanged
+        assert MarketType.CRYPTO_SPOT.value == "CRYPTO_SPOT"
+        assert MarketType.EQUITY.value == "EQUITY"
+        # FOREX added but others unchanged
+        assert MarketType.FOREX.value == "FOREX"
+
+    @pytest.mark.phase2
+    def test_phase2_gate(self):
+        """Phase 2 (OANDA): Existing adapters unaffected."""
+        from adapters.registry import AdapterRegistry
+        registry = AdapterRegistry()
+        # All existing adapters must work
+        assert registry.get_market_data_adapter("binance") is not None
+        assert registry.get_market_data_adapter("alpaca") is not None
+
+    @pytest.mark.phase3
+    def test_phase3_gate(self):
+        """Phase 3 (L2+): Existing slippage providers unchanged."""
+        from execution_providers import (
+            CryptoParametricSlippageProvider,
+            create_slippage_provider,
+            AssetClass,
+        )
+        # Crypto provider still works
+        crypto = create_slippage_provider("L2+", AssetClass.CRYPTO)
+        assert isinstance(crypto, CryptoParametricSlippageProvider)
+
+    @pytest.mark.phase4
+    def test_phase4_gate(self):
+        """Phase 4 (Features): Pipeline backward compatible."""
+        # Feature count for crypto/equity unchanged
+        pass
+
+    @pytest.mark.phase5
+    def test_phase5_gate(self):
+        """Phase 5 (OTC Sim): services/ folder structure intact."""
+        import importlib
+        # Existing services must import
+        importlib.import_module("services.position_sync")
+        importlib.import_module("services.session_router")
+        importlib.import_module("services.stock_risk_guards")
+
+    @pytest.mark.phase6
+    def test_phase6_gate(self):
+        """Phase 6 (Risk): Existing risk guards unchanged."""
+        from services.stock_risk_guards import MarginGuard
+        guard = MarginGuard()
+        # Verify default behavior
+
+    @pytest.mark.full
+    def test_full_regression_suite(self):
+        """Run complete regression suite."""
+        # This is a meta-test that ensures all above pass
+        pass
+```
+
+#### 10.3 Isolation Tests (NEW!)
+
+```python
+# tests/test_forex_isolation.py
+"""
+Isolation Tests for Forex Integration.
+
+PURPOSE: Verify that Forex code is properly isolated and does not
+         introduce unwanted dependencies or side effects.
+
+Key Isolation Properties:
+1. Forex imports do not pull in crypto/equity code unnecessarily
+2. Forex configuration does not affect other asset classes
+3. Forex errors do not propagate to other pipelines
+4. Forex can be disabled without affecting crypto/equity
+"""
+import pytest
+import sys
+from unittest.mock import patch, MagicMock
+
+
+class TestImportIsolation:
+    """Verify import isolation between asset classes."""
+
+    def test_forex_adapter_no_binance_import(self):
+        """Importing OANDA adapter must not import Binance."""
+        # Clear any cached imports
+        modules_before = set(sys.modules.keys())
+
+        # Import OANDA
+        from adapters.oanda import OandaMarketDataAdapter
+
+        modules_after = set(sys.modules.keys())
+        new_modules = modules_after - modules_before
+
+        # Binance should not be imported
+        assert not any("binance" in m.lower() for m in new_modules)
+
+    def test_forex_adapter_no_alpaca_import(self):
+        """Importing OANDA adapter must not import Alpaca."""
+        modules_before = set(sys.modules.keys())
+        from adapters.oanda import OandaMarketDataAdapter
+        modules_after = set(sys.modules.keys())
+        new_modules = modules_after - modules_before
+        assert not any("alpaca" in m.lower() for m in new_modules)
+
+    def test_crypto_adapter_no_forex_import(self):
+        """Importing Binance adapter must not import Forex."""
+        modules_before = set(sys.modules.keys())
+        from adapters.binance import BinanceMarketDataAdapter
+        modules_after = set(sys.modules.keys())
+        new_modules = modules_after - modules_before
+        assert not any("oanda" in m.lower() for m in new_modules)
+        assert not any("forex" in m.lower() for m in new_modules)
+
+
+class TestConfigurationIsolation:
+    """Verify configuration isolation between asset classes."""
+
+    def test_forex_config_no_crypto_pollution(self):
+        """Forex config must not affect crypto defaults."""
+        from execution_providers import CryptoParametricConfig, ForexParametricConfig
+
+        # Create forex config with custom values
+        forex_cfg = ForexParametricConfig(impact_coef_base=0.03)
+
+        # Crypto config must still have its defaults
+        crypto_cfg = CryptoParametricConfig()
+        assert crypto_cfg.impact_coef_base == 0.10  # Unchanged
+
+    def test_asset_class_defaults_independent(self):
+        """Each asset class must have independent defaults."""
+        from execution_providers import create_execution_provider, AssetClass
+
+        crypto = create_execution_provider(AssetClass.CRYPTO)
+        equity = create_execution_provider(AssetClass.EQUITY)
+        forex = create_execution_provider(AssetClass.FOREX)
+
+        # All must be different instances/types
+        assert type(crypto) != type(forex)
+        assert type(equity) != type(forex)
+
+
+class TestErrorIsolation:
+    """Verify error isolation - Forex errors don't break crypto/equity."""
+
+    def test_forex_adapter_failure_isolated(self):
+        """Forex adapter failure must not affect crypto trading."""
+        from adapters.registry import AdapterRegistry
+
+        registry = AdapterRegistry()
+
+        # Simulate OANDA failure
+        with patch("adapters.oanda.OandaMarketDataAdapter") as mock:
+            mock.side_effect = ConnectionError("OANDA unavailable")
+
+            # Crypto must still work
+            crypto_adapter = registry.get_market_data_adapter("binance")
+            assert crypto_adapter is not None
+
+    def test_forex_slippage_error_isolated(self):
+        """Forex slippage error must not affect crypto slippage."""
+        from execution_providers import (
+            CryptoParametricSlippageProvider,
+            ForexParametricSlippageProvider,
+        )
+
+        # Even if forex provider raises
+        forex = ForexParametricSlippageProvider()
+        crypto = CryptoParametricSlippageProvider()
+
+        # Crypto must work independently
+        result = crypto.compute_slippage_bps(
+            order=self._create_order(),
+            market=self._create_market(),
+            participation_ratio=0.001,
+        )
+        assert result > 0
+
+
+class TestDisableIsolation:
+    """Verify Forex can be disabled without side effects."""
+
+    def test_forex_disabled_crypto_works(self):
+        """With Forex disabled, crypto pipeline must work normally."""
+        # Simulate forex disabled via config
+        with patch.dict("os.environ", {"FOREX_ENABLED": "false"}):
+            from execution_providers import create_execution_provider, AssetClass
+
+            # Crypto still works
+            crypto = create_execution_provider(AssetClass.CRYPTO)
+            assert crypto is not None
+
+    def test_forex_disabled_no_import_errors(self):
+        """With Forex disabled, no import errors must occur."""
+        # Remove OANDA from available adapters
+        with patch("adapters.registry.AdapterRegistry._lazy_modules",
+                   {"binance": "adapters.binance", "alpaca": "adapters.alpaca"}):
+            from adapters.registry import AdapterRegistry
+            registry = AdapterRegistry()
+
+            # Crypto and equity still work
+            assert registry.get_market_data_adapter("binance") is not None
+```
+
+#### 10.4 Backward Compatibility Tests (NEW!)
+
+```python
+# tests/test_forex_backward_compat.py
+"""
+Backward Compatibility Tests.
+
+PURPOSE: Ensure existing code that uses crypto/equity APIs continues to work
+         without any changes after Forex integration.
+
+Scenarios:
+1. Existing scripts run unchanged
+2. Existing configs load correctly
+3. Existing trained models can be loaded
+4. Existing API contracts preserved
+"""
+import pytest
+import yaml
+
+
+class TestAPIContractPreservation:
+    """Verify public API contracts are preserved."""
+
+    def test_execution_providers_api_unchanged(self):
+        """Public API of execution_providers must be unchanged."""
+        import execution_providers as ep
+
+        # All existing exports must exist
+        required_exports = [
+            "AssetClass",
+            "Order",
+            "MarketState",
+            "Fill",
+            "BarData",
+            "SlippageProvider",
+            "FeeProvider",
+            "FillProvider",
+            "CryptoParametricSlippageProvider",
+            "CryptoFeeProvider",
+            "EquityFeeProvider",
+            "StatisticalSlippageProvider",
+            "OHLCVFillProvider",
+            "L2ExecutionProvider",
+            "create_execution_provider",
+            "create_slippage_provider",
+            "create_fee_provider",
+        ]
+
+        for name in required_exports:
+            assert hasattr(ep, name), f"Missing export: {name}"
+
+    def test_adapter_models_api_unchanged(self):
+        """Public API of adapters.models must be unchanged."""
+        from adapters import models
+
+        required = [
+            "MarketType",
+            "ExchangeVendor",
+            "FeeStructure",
+            "SessionType",
+            "ExchangeRule",
+        ]
+
+        for name in required:
+            assert hasattr(models, name), f"Missing: {name}"
+
+
+class TestExistingConfigsLoad:
+    """Verify existing config files still load correctly."""
+
+    @pytest.mark.parametrize("config_path", [
+        "configs/config_train.yaml",
+        "configs/config_sim.yaml",
+        "configs/config_live.yaml",
+        "configs/config_eval.yaml",
+        "configs/config_train_stocks.yaml",
+        "configs/config_backtest_stocks.yaml",
+        "configs/config_live_alpaca.yaml",
+    ])
+    def test_existing_config_loads(self, config_path):
+        """Existing config must load without errors."""
+        import os
+        if not os.path.exists(config_path):
+            pytest.skip(f"Config not found: {config_path}")
+
+        with open(config_path, "r") as f:
+            config = yaml.safe_load(f)
+
+        assert config is not None
+
+    def test_asset_class_detection_backward_compat(self):
+        """Asset class detection must work for existing configs."""
+        # Config without explicit asset_class (legacy)
+        legacy_config = {"vendor": "binance"}
+
+        from script_live import detect_asset_class
+        result = detect_asset_class(legacy_config)
+        assert result == "crypto"  # Default behavior preserved
+
+        # Config with alpaca vendor
+        alpaca_config = {"vendor": "alpaca"}
+        result = detect_asset_class(alpaca_config)
+        assert result == "equity"
+
+
+class TestExistingScriptsUnchanged:
+    """Verify existing scripts work without modification."""
+
+    def test_script_backtest_syntax_valid(self):
+        """script_backtest.py must be syntactically valid."""
+        import py_compile
+        py_compile.compile("script_backtest.py", doraise=True)
+
+    def test_script_live_syntax_valid(self):
+        """script_live.py must be syntactically valid."""
+        import py_compile
+        py_compile.compile("script_live.py", doraise=True)
+
+    def test_train_model_syntax_valid(self):
+        """train_model_multi_patch.py must be syntactically valid."""
+        import py_compile
+        py_compile.compile("train_model_multi_patch.py", doraise=True)
+
+
+class TestModelCompatibility:
+    """Verify trained model compatibility."""
+
+    def test_crypto_model_loads_after_forex(self):
+        """Crypto models trained before Forex must still load."""
+        # This tests that adding ForexParametric doesn't break
+        # torch.load() for existing models
+        pass
+
+    def test_observation_space_unchanged(self):
+        """Observation space dimensions must be unchanged for crypto/equity."""
+        # Forex features must not increase crypto observation space
+        pass
+```
+
+#### 10.5 Property-Based Tests (Hypothesis)
 
 ```python
 # tests/test_forex_properties.py
@@ -2367,7 +2934,7 @@ def test_session_detection_complete(hour, minute):
     # ... verify session is not None and is valid enum
 ```
 
-#### 10.3 Stress Tests — NEW!
+#### 10.6 Stress Tests
 
 ```python
 # tests/test_forex_stress.py
@@ -2438,7 +3005,7 @@ class TestForexStressScenarios:
         # ... simulate adverse price move and verify rejection handling
 ```
 
-#### 10.4 Validation Metrics
+#### 10.7 Validation Metrics
 
 | Metric | Target | Validation Method |
 |--------|--------|-------------------|
@@ -2449,48 +3016,157 @@ class TestForexStressScenarios:
 | Last-look reject rate | 5-12% | Industry benchmarks |
 | Slippage estimate | ±2 pips (majors) | Paper trading |
 | Position sync accuracy | 100% | Unit tests |
-| Backward compatibility | 100% crypto/equity | Regression tests |
+| **Backward compatibility** | **100% crypto/equity** | **Regression suite (mandatory)** |
+| **Isolation verification** | **100%** | **Isolation tests** |
+| **API contract preservation** | **100%** | **Backward compat tests** |
+
+#### 10.8 Continuous Regression Protocol (ОБЯЗАТЕЛЬНО!)
+
+**Каждая фаза ДОЛЖНА пройти регрессионный гейт перед merge:**
+
+```bash
+# Phase Gate Protocol - выполнять после КАЖДОЙ фазы
+
+# 1. Run existing test suite (MUST PASS 100%)
+pytest tests/ --ignore=tests/test_forex*.py -v --tb=short
+# Expected: All existing tests pass
+
+# 2. Run phase-specific regression gate
+pytest tests/test_forex_regression.py::TestPhaseRegressionGates -v -m phaseN
+# Replace N with current phase number
+
+# 3. Run isolation tests (after Phase 2+)
+pytest tests/test_forex_isolation.py -v
+
+# 4. Run backward compatibility tests (after Phase 3+)
+pytest tests/test_forex_backward_compat.py -v
+
+# 5. Run full forex test suite
+pytest tests/test_forex*.py -v
+
+# MERGE CRITERIA:
+# - Steps 1-4 MUST pass with 0 failures
+# - Step 5 coverage must be >=90% for new code
+```
+
+**CI/CD Integration (GitHub Actions):**
+
+```yaml
+# .github/workflows/forex-regression.yml
+name: Forex Regression Gate
+
+on:
+  pull_request:
+    branches: [main, feature/forex-integration]
+    paths:
+      - 'adapters/**'
+      - 'execution_providers.py'
+      - 'services/forex_*.py'
+      - 'forex_features.py'
+
+jobs:
+  regression-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run existing tests (regression check)
+        run: |
+          pytest tests/ --ignore=tests/test_forex*.py \
+            -v --tb=short --junitxml=regression.xml
+          # This MUST pass 100%
+
+      - name: Run isolation tests
+        run: pytest tests/test_forex_isolation.py -v
+
+      - name: Run backward compatibility tests
+        run: pytest tests/test_forex_backward_compat.py -v
+
+      - name: Run forex-specific tests
+        run: pytest tests/test_forex*.py -v --cov=. --cov-report=xml
+
+      - name: Check coverage threshold
+        run: |
+          coverage report --fail-under=90 \
+            --include="adapters/oanda/*,execution_providers.py,forex_features.py"
+```
 
 **Deliverables**:
-- 620+ tests total
-- Property-based test suite
-- Stress test scenarios
-- Backward compatibility verification
+- **735+ tests total** (увеличено на 115 для regression/isolation/backward compat)
+- Property-based test suite (40 tests)
+- Stress test scenarios (20 tests)
+- **Regression test suite (45 tests) — NEW**
+- **Isolation test suite (35 tests) — NEW**
+- **Backward compatibility tests (30 tests) — NEW**
 - Validation report
+- CI/CD pipeline configuration
 
 ---
 
 ## 📊 Summary
 
-### Phase Overview (Updated)
+### Phase Overview (Updated v2.1)
 
-| Phase | Description | Duration | LOC | Tests |
-|-------|-------------|----------|-----|-------|
-| 0 | Foundation & Research | 1 week | 100 | 25 |
-| 1 | Core Enums & Models | 1 week | 250 | 35 |
-| 2 | OANDA Adapter | 2 weeks | 1,500 | 130 |
-| 3 | ForexParametricSlippage (L2+) | 2 weeks | 600 | 100 |
-| 4 | Forex Features | 2 weeks | 500 | 80 |
-| 5 | OTC Dealer Simulation | 2 weeks | 600 | 85 |
-| 6 | Risk Management + Services | 2 weeks | 900 | 100 |
-| 7 | Data Pipeline | 1 week | 450 | 50 |
-| 8 | Configuration | 1 week | 350 | 35 |
-| 9 | Training Integration | 1 week | 350 | 45 |
-| 10 | Testing & Validation | 2 weeks | 200 | 620 (total) |
-| **TOTAL** | | **16 weeks** | **5,800** | **620** |
+| Phase | Description | Duration | LOC | Tests | Regression Gate |
+|-------|-------------|----------|-----|-------|-----------------|
+| 0 | Foundation & Research | 1 week | 100 | 25 | N/A |
+| 1 | Core Enums & Models | 1 week | 250 | 35 | `pytest -m phase1` |
+| 2 | OANDA Adapter | 2 weeks | 1,500 | 130 | `pytest -m phase2` |
+| 3 | ForexParametricSlippage (L2+) | 2 weeks | 600 | 100 | `pytest -m phase3` |
+| 4 | Forex Features | 2 weeks | 500 | 80 | `pytest -m phase4` |
+| 5 | OTC Dealer Simulation | 2 weeks | 600 | 85 | `pytest -m phase5` |
+| 6 | Risk Management + Services | 2 weeks | 900 | 100 | `pytest -m phase6` |
+| 7 | Data Pipeline | 1 week | 450 | 50 | `pytest -m phase7` |
+| 8 | Configuration | 1 week | 350 | 35 | `pytest -m phase8` |
+| 9 | Training Integration | 1 week | 350 | 45 | `pytest -m phase9` |
+| 10 | Testing & Validation | **2 weeks** | 400 | **735 (total)** | `pytest -m full` |
+| **TOTAL** | | **17 weeks** | **6,000** | **735** | |
 
-### Risk Assessment (Updated)
+### Test Distribution Summary
+
+| Category | Test Count | Purpose |
+|----------|------------|---------|
+| Forex Unit Tests | 625 | Forex-specific functionality |
+| **Regression Tests** | **45** | Crypto/equity unchanged |
+| **Isolation Tests** | **35** | No cross-contamination |
+| **Backward Compat Tests** | **30** | API contracts preserved |
+| **TOTAL** | **735** | |
+
+### Risk Assessment (Updated v2.1)
 
 | Risk | Probability | Impact | Mitigation |
 |------|-------------|--------|------------|
 | OANDA API changes | Low | Medium | Abstract API layer, version pinning |
-| OANDA rate limits (120/s) | Medium | Low | Rate limiter implementation, caching |
+| OANDA rate limits (120/s) | Medium | Low | Rate limiter with exponential backoff |
 | Forex data quality | Medium | High | Multiple data sources, validation |
 | DST handling bugs | Medium | Medium | Extensive timezone tests, ZoneInfo |
 | Session detection bugs | Medium | Medium | Property-based testing |
-| Backward compatibility | Low | High | Comprehensive regression tests |
+| **Crypto regression** | **Low** | **Critical** | **Mandatory regression gate per phase** |
+| **Equity regression** | **Low** | **Critical** | **Mandatory regression gate per phase** |
+| **Import pollution** | **Low** | **High** | **Isolation tests, lazy loading** |
+| **API contract break** | **Low** | **Critical** | **Backward compat tests** |
 | OTC simulation accuracy | Medium | Medium | Validate vs paper trading |
 | Last-look calibration | Medium | Medium | Adjustable parameters, A/B testing |
+
+### Regression Prevention Checklist (Per Phase)
+
+```
+□ All existing tests pass (pytest tests/ --ignore=test_forex*)
+□ Phase regression gate passes (pytest -m phaseN)
+□ Isolation tests pass (after Phase 2)
+□ Backward compat tests pass (after Phase 3)
+□ No new imports in crypto/equity code paths
+□ No changes to existing API signatures
+□ Code review confirms isolation
+```
 
 ### Success Criteria
 
@@ -2503,15 +3179,23 @@ class TestForexStressScenarios:
 2. **Performance**
    - [ ] Slippage estimate accuracy ±15%
    - [ ] Fill rate >98% for major pairs
-   - [ ] No regressions in crypto/equity pipelines
    - [ ] API rate limit compliance
 
 3. **Quality**
-   - [ ] 620+ tests passing
+   - [ ] **735+ tests passing**
    - [ ] Property-based tests coverage
    - [ ] Stress scenarios handled
-   - [ ] Code coverage >90%
+   - [ ] Code coverage >90% for new code
    - [ ] Documentation complete
+
+4. **Regression Prevention (КРИТИЧНО!)**
+   - [ ] **100% existing crypto tests pass** (no regressions)
+   - [ ] **100% existing equity tests pass** (no regressions)
+   - [ ] **All isolation tests pass** (no cross-contamination)
+   - [ ] **All backward compat tests pass** (API unchanged)
+   - [ ] **Phase gates passed** for all 10 phases
+   - [ ] **CI/CD regression pipeline operational**
+   - [ ] Code review confirms no changes to crypto/equity code paths
 
 ---
 
@@ -2547,9 +3231,24 @@ class TestForexStressScenarios:
 ---
 
 **Author**: Claude AI
-**Version**: 2.0 (Reviewed & Corrected)
+**Version**: 2.1 (Testing & Regression Hardened)
 **Last Updated**: 2025-11-29
 **Reviewer Notes**:
+
+**v2.1 Changes (Regression & Testing Focus):**
+- Added comprehensive regression test suite (45 tests)
+- Added isolation test suite (35 tests)
+- Added backward compatibility tests (30 tests)
+- Added phase-specific regression gates
+- Added CI/CD pipeline configuration (GitHub Actions)
+- Added continuous regression protocol
+- Updated test count: 620 → 735
+- Updated timeline: 16 → 17 weeks
+- Added regression prevention checklist
+- Added regression-specific risks to risk assessment
+- Added Section 4 to Success Criteria (Regression Prevention)
+
+**v2.0 Changes:**
 - Fixed L3 terminology (OTC ≠ LOB)
 - Added missing services (position_sync, session_router)
 - Fixed file locations (execution_providers.py, services/)
