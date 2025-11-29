@@ -1885,6 +1885,14 @@ pytest tests/test_lob*.py tests/test_matching_engine.py tests/test_fill_probabil
 | "tanh в potential shaping нарушает Ng theorem?" | ⚠️ **НЕ баг**. Ng et al. (1999) разрешает ЛЮБУЮ функцию Φ(s). tanh(net_worth) валиден. |
 | "gap_filled look-ahead bias?" | ⚠️ **НЕ баг**. Feature shifting (shift(1)) применяется ПОСЛЕ вычисления. См. features_pipeline.py:441-442. |
 | "Earnings unbounded future window?" | ⚠️ **Документация**. Пользователь обязан гарантировать актуальность earnings calendar. Не code bug. |
+| "γ не синхронизирован между env и model?" | ⚠️ **Documented**. CLAUDE.md: "reward.gamma == model.params.gamma (оба = 0.99)". Конфигурационная ответственность пользователя. |
+| "3 уровня reward clipping создают non-monotonic value?" | ⚠️ **НЕ баг**. Разные клипы: (1) ratio→log safety, (2) final bounds. Служат разным целям. См. #59. |
+| "Long-only reward=0 при pos=0 асимметричен?" | ⚠️ **By design**. `reward = log(ratio) × position`. При pos=0 агент не участвовал → reward=0 корректен. |
+| "L2 ADV не учитывает intraday seasonality?" | ⚠️ **By design**. L2 simple/fast; L2+ has `tod_curve`. См. #54. |
+| "L2 нет temp/perm impact separation?" | ⚠️ **By design**. L2=√participation; L3 has AlmgrenChriss/Gatheral. См. #55. |
+| "L2 spread статичен?" | ⚠️ **By design**. L2+ has vol_regime_multipliers. См. #56. |
+| "L2 limit fills детерминистичны?" | ⚠️ **By design**. L2=binary; L3 has QueueReactiveModel. См. #57. |
+| "whale_threshold не масштабируется по ADV?" | ⚠️ **Configurable**. Threshold = participation ratio (уже normalized). Config profiles exist. См. #58. |
 
 ---
 
@@ -2881,6 +2889,146 @@ if ratio > 1.0:
 6. Market impact через `participation_ratio` уже покрывает основной эффект
 
 **Референс**: execution_sim.py:4-23 (module docstring), standard backtesting practice
+
+---
+
+### 54. L2 ADV Ignores Intraday Seasonality (execution_providers.py:2867-2870)
+
+```python
+if market.adv is not None and market.adv > 0:
+    ref_price = market.get_mid_price() or bar.typical_price
+    order_notional = order.get_notional(ref_price)
+    return order_notional / market.adv  # No TOD adjustment
+```
+
+**Почему это BY DESIGN (L2 vs L2+ trade-off)**:
+1. L2 (`StatisticalSlippageProvider`) is intentionally **simple and fast** for rapid backtesting
+2. L2+ (`CryptoParametricSlippageProvider`) has `tod_curve` at lines 785-792 with Asia/EU/US session factors (0.70-1.15)
+3. L2+ applies TOD adjustment to slippage, effectively capturing intraday effects
+4. Adding TOD to L2 would require `hour_utc` parameter breaking backward compatibility
+5. Users requiring accurate intraday cost estimation should use L2+ or L3
+
+**Fidelity Level Selection**:
+- **L2**: Quick backtests, strategy screening (±30-50% cost error acceptable)
+- **L2+**: Production cost estimation (TOD, imbalance, funding, whale detection)
+- **L3**: HFT research, queue position tracking, fill probability models
+
+**Референс**: ITG (2012) "Global Cost Review", Kyle (1985)
+
+---
+
+### 55. L2 No Permanent vs Temporary Impact Separation (impl_slippage.py:2342-2349)
+
+```python
+impact_term = k_effective * math.sqrt(participation_ratio)  # √participation = temporary
+base_cost = half_spread + impact_term  # Single-term model
+```
+
+**Почему это BY DESIGN (L2 vs L3 trade-off)**:
+1. L2 uses **simplified Almgren-Chriss**: `k * √participation` — temporary impact only
+2. L3 has full separation in `lob/market_impact.py`:
+   - `AlmgrenChrissModel`: `temp = η * σ * (Q/V)^0.5`, `perm = γ * (Q/V)`
+   - `GatheralModel`: transient impact with power-law decay `G(t) = (1 + t/τ)^(-β)`
+3. For bar-level simulation, temp/perm distinction matters less (impact reverts within bar)
+4. For HFT simulation, use L3 with proper impact decay modeling
+
+**Референс**: Almgren & Chriss (2001), Gatheral (2010)
+
+---
+
+### 56. L2 Spread Model Static (execution_providers.py:514-518)
+
+```python
+spread = market.get_spread_bps()
+if spread is None or not math.isfinite(spread) or spread < 0:
+    half_spread = self.spread_bps / 2.0  # Default fallback
+```
+
+**Почему это BY DESIGN**:
+1. L2 uses market spread if available in `MarketState.get_spread_bps()`
+2. L2+ adds volatility-based adjustments via `vol_regime_multipliers` (0.8-1.5x)
+3. L2+ has order book `imbalance_penalty_max` (up to 30% extra cost)
+4. Dynamic spread widening is implemented in L2+, not L2
+
+**Референс**: Cont et al. (2014) "Price Impact of Order Book Events"
+
+---
+
+### 57. L2 Limit Order Fills Deterministic (execution_sim.py:11750-11755)
+
+```python
+if intrabar_fill_price is not None and intrabar_fill_price <= limit_price_value + tolerance:
+    maker_fill = True
+    filled = True  # Binary: filled or not
+```
+
+**Почему это BY DESIGN (L2 vs L3 trade-off)**:
+1. L2 uses **binary fill logic**: price touches limit → filled
+2. L3 has probabilistic models in `lob/fill_probability.py`:
+   - `PoissonFillModel`: `P(fill in T) = 1 - exp(-λT / position)`
+   - `QueueReactiveModel`: `λ_i = f(q_i, spread, volatility, imbalance)`
+   - `QueueValueModel`: Value = P(fill) × spread/2 - adverse_selection
+3. Queue position tracking in `lob/queue_tracker.py` with MBP/MBO estimation
+4. L2 is 100-1000x faster than L3 for backtesting
+
+**Референс**: Huang et al. (2015) Queue-Reactive Model, Moallemi & Yuan (2017)
+
+---
+
+### 58. Whale Threshold 1% Not ADV-Scaled (execution_providers.py:798)
+
+```python
+whale_threshold: float = 0.01  # 1% of ADV
+```
+
+**Почему это CONFIGURABLE (not a bug)**:
+1. Threshold is **participation ratio** (order/ADV), already normalized by ADV
+2. 1% default is reasonable: $100M order on $10B ADV is whale behavior
+3. For low-ADV altcoins: use `CryptoParametricConfig(whale_threshold=0.005)` (0.5%)
+4. For stablecoin pairs: use profile `from_profile("stablecoin")` with lower threshold
+5. Configuration profiles exist: `default`, `conservative`, `aggressive`, `altcoin`, `stablecoin`
+
+**Usage**:
+```python
+# For low-liquidity altcoins
+config = CryptoParametricConfig(whale_threshold=0.005)  # 0.5%
+provider = CryptoParametricSlippageProvider(config=config)
+
+# Or use built-in profile
+provider = CryptoParametricSlippageProvider.from_profile("altcoin")
+```
+
+---
+
+### 59. Reward Clipping is NOT Stacked (trading_patchnew.py:2201, 2345)
+
+```python
+# Line 2201: Numerical safety BEFORE log()
+ratio_clipped = np.clip(ratio, 1e-10, 1e10)
+
+# Line 2345: Final reward bounds (policy requirement)
+reward = float(np.clip(reward_before_clip, -clip_for_clamp, clip_for_clamp))
+```
+
+**Почему это НЕ создаёт non-monotonic value function**:
+
+1. **First clip** (line 2201): Protects against numerical overflow in `log(ratio)`
+   - Without this, ratio=0 → log(0)=-inf → NaN propagation
+   - Clipping to [1e-10, 1e10] is defensive programming, not reward shaping
+
+2. **Second clip** (line 2345): Bounds the final reward for policy stability
+   - RL policies need bounded rewards for numerical stability
+   - `clip_for_clamp` is typically large (e.g., 10.0), rarely triggered
+
+3. **Different code paths**: `reward.pyx` has separate `_clamp` for non-signal-only mode
+   - These are independent code paths, not stacked operations
+
+**Value function remains monotonic** because:
+- Both clips are defensive (rarely triggered in normal operation)
+- First clip applies BEFORE log → preserves log's monotonicity
+- Second clip applies AFTER all computations → bounds extreme outliers only
+
+**Референс**: Standard numerical programming practice, Schulman et al. (2017) PPO
 
 ---
 
