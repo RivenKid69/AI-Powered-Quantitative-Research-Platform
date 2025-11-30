@@ -319,8 +319,9 @@ class ADVStore:
         return float(value)
 
     def get_bar_capacity_quote(self, symbol: str) -> Optional[float]:
-        # For now this mirrors ``get_adv_quote``. Kept separate to allow
-        # future extensions (e.g. per-bar aggregation) without changing call sites.
+        # Wrapper around ``get_adv_quote`` that also applies default/floor
+        # fallbacks for missing or unusually small quotes. Kept separate to
+        # allow future per-bar extensions without changing call sites.
         quote = self.get_adv_quote(symbol)
         if quote is None:
             default_quote = self.default_quote
