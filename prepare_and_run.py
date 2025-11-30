@@ -91,7 +91,9 @@ def _to_seconds_any(x: pd.Series) -> pd.Series:
             raise ValueError("NaNs after numeric conversion")
         return s_series.astype("int64")
     except Exception:
-        # Convert to datetime (infer_datetime_format deprecated, now default behavior)
+        # Fallback: let pandas parse datetimes with its default heuristics.
+        # ``infer_datetime_format`` is deprecated, so we rely on the standard
+        # parser and then convert to integer seconds since epoch.
         dt = pd.to_datetime(x, errors="coerce", utc=True)
         # Convert to int64 nanoseconds then to seconds
         return (dt.astype("int64") // 1_000_000_000).astype("int64")
