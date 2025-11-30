@@ -982,6 +982,43 @@ def create_forex_slippage_provider(
     """
     Create a forex slippage provider from configuration.
 
+    Maps SlippageConfig (YAML-friendly) to ForexParametricConfig (execution model).
+
+    Parameter Mapping (SlippageConfig -> ForexParametricConfig):
+    ============================================================
+
+    Direct mappings:
+        - impact_coef_base -> impact_coef_base
+        - impact_coef_range -> impact_coef_range
+        - min_slippage_pips -> min_slippage_pips
+        - max_slippage_pips -> max_slippage_pips
+
+    Spread mapping:
+        - spread_pips (single float) -> default_spreads_pips (dict by pair type)
+        - profile ("retail"/"institutional"/"conservative") -> spread_profiles selection
+
+    Boolean flags -> Dict multipliers:
+        - session_adjustment (bool) -> session_liquidity (dict)
+          If False: all values set to 1.0 (no adjustment)
+        - volatility_adjustment (bool) -> vol_regime_multipliers (dict)
+          If False: all values set to 1.0 (no adjustment)
+        - carry_stress_adjustment (bool) -> carry_sensitivity (float)
+          If False: set to 0.0 (no adjustment)
+        - dxy_correlation_adjustment (bool) -> dxy_correlation_decay (float)
+          If False: set to 0.0 (no adjustment)
+        - news_event_adjustment (bool) -> news_event_multipliers (dict)
+          If False: all values set to 1.0 (no adjustment)
+
+    Not directly mapped (use ForexParametricConfig defaults):
+        - asymmetric_impact -> Not in ForexParametricConfig (handled internally)
+        - whale_threshold -> Not in ForexParametricConfig (handled in dealer sim)
+        - whale_twap_adjustment -> Not in ForexParametricConfig (handled in dealer sim)
+
+    References:
+        - King, Osler, Rime (2012): Session liquidity patterns
+        - BIS (2022): Spread profiles by client type
+        - Lyons (2001): Carry trade impact on spreads
+
     Args:
         config: ForexConfig instance
 
@@ -990,23 +1027,124 @@ def create_forex_slippage_provider(
     """
     from execution_providers import ForexParametricSlippageProvider, ForexParametricConfig
 
+    # Build spread dict from single spread_pips value and profile
+    # The spread_pips from config is the base for major pairs
+    base_spread = config.slippage.spread_pips
+    profile = config.slippage.profile
+
+    # Standard spread ratios by pair type (based on BIS 2022 data)
+    # Major = 1.0x, Minor = 1.67x, Cross = 2.5x, Exotic = 20.8x
+    default_spreads_pips = {
+        "major": base_spread,
+        "minor": base_spread * 1.67,
+        "cross": base_spread * 2.5,
+        "exotic": base_spread * 20.8,
+    }
+
+    # Build spread profiles based on selected profile
+    # Ratio multipliers: institutional=0.25x, retail=1.0x, conservative=1.5x
+    spread_profiles = {
+        "institutional": {k: v * 0.25 for k, v in default_spreads_pips.items()},
+        "retail": default_spreads_pips.copy(),
+        "conservative": {k: v * 1.5 for k, v in default_spreads_pips.items()},
+    }
+
+    # Session liquidity: apply adjustment or use neutral values
+    if config.slippage.session_adjustment:
+        session_liquidity = {
+            "sydney": 0.65,
+            "tokyo": 0.75,
+            "london": 1.10,
+            "new_york": 1.05,
+            "london_ny_overlap": 1.35,
+            "tokyo_london_overlap": 0.90,
+            "off_hours": 0.50,
+            "weekend": 0.0,
+        }
+    else:
+        # Neutral: no session adjustment
+        session_liquidity = {
+            "sydney": 1.0,
+            "tokyo": 1.0,
+            "london": 1.0,
+            "new_york": 1.0,
+            "london_ny_overlap": 1.0,
+            "tokyo_london_overlap": 1.0,
+            "off_hours": 1.0,
+            "weekend": 0.0,  # Still closed on weekends
+        }
+
+    # Volatility regime multipliers
+    if config.slippage.volatility_adjustment:
+        vol_regime_multipliers = {
+            "low": 0.80,
+            "normal": 1.00,
+            "high": 1.50,
+            "extreme": 2.50,
+        }
+    else:
+        vol_regime_multipliers = {
+            "low": 1.0,
+            "normal": 1.0,
+            "high": 1.0,
+            "extreme": 1.0,
+        }
+
+    # Carry sensitivity (interest rate differential impact)
+    carry_sensitivity = 0.03 if config.slippage.carry_stress_adjustment else 0.0
+
+    # DXY correlation decay
+    dxy_correlation_decay = 0.25 if config.slippage.dxy_correlation_adjustment else 0.0
+
+    # News event multipliers
+    if config.slippage.news_event_adjustment:
+        news_event_multipliers = {
+            "nfp": 3.0,
+            "fomc": 2.5,
+            "ecb": 2.0,
+            "boe": 1.8,
+            "boj": 1.8,
+            "rba": 1.5,
+            "cpi": 1.8,
+            "gdp": 1.5,
+            "pmi": 1.3,
+            "retail_sales": 1.2,
+            "employment": 1.5,
+            "trade_balance": 1.2,
+            "other": 1.1,
+        }
+    else:
+        news_event_multipliers = {
+            "nfp": 1.0,
+            "fomc": 1.0,
+            "ecb": 1.0,
+            "boe": 1.0,
+            "boj": 1.0,
+            "rba": 1.0,
+            "cpi": 1.0,
+            "gdp": 1.0,
+            "pmi": 1.0,
+            "retail_sales": 1.0,
+            "employment": 1.0,
+            "trade_balance": 1.0,
+            "other": 1.0,
+        }
+
     provider_config = ForexParametricConfig(
         impact_coef_base=config.slippage.impact_coef_base,
         impact_coef_range=config.slippage.impact_coef_range,
-        spread_pips=config.slippage.spread_pips,
-        session_adjustment=config.slippage.session_adjustment,
-        volatility_adjustment=config.slippage.volatility_adjustment,
-        carry_stress_adjustment=config.slippage.carry_stress_adjustment,
-        dxy_correlation_adjustment=config.slippage.dxy_correlation_adjustment,
-        news_event_adjustment=config.slippage.news_event_adjustment,
-        asymmetric_impact=config.slippage.asymmetric_impact,
+        default_spreads_pips=default_spreads_pips,
+        spread_profiles=spread_profiles,
+        session_liquidity=session_liquidity,
+        carry_sensitivity=carry_sensitivity,
+        dxy_correlation_decay=dxy_correlation_decay,
+        news_event_multipliers=news_event_multipliers,
+        vol_regime_multipliers=vol_regime_multipliers,
         min_slippage_pips=config.slippage.min_slippage_pips,
         max_slippage_pips=config.slippage.max_slippage_pips,
-        whale_threshold=config.slippage.whale_threshold,
-        whale_twap_adjustment=config.slippage.whale_twap_adjustment,
     )
 
-    return ForexParametricSlippageProvider(config=provider_config)
+    return ForexParametricSlippageProvider(config=provider_config, spread_profile=profile)
 
 
 def create_forex_dealer_simulator(
@@ -1041,6 +1179,11 @@ def create_forex_fee_provider(config: ForexConfig) -> Any:
     """
     Create a forex fee provider from configuration.
 
+    Maps FeeConfig to ForexFeeProvider parameters:
+    - ECN structure: uses commission_per_lot converted to bps
+    - Spread-only structure: zero commission (cost is embedded in spread)
+    - Swap enabled: maps to include_swap for overnight cost estimation
+
     Args:
         config: ForexConfig instance
 
@@ -1049,9 +1192,20 @@ def create_forex_fee_provider(config: ForexConfig) -> Any:
     """
     from execution_providers import ForexFeeProvider
 
+    # Determine commission based on fee structure
+    commission_bps = 0.0
+    if config.fees.structure == ForexFeeStructure.ECN:
+        # Convert commission per lot to bps
+        # Assuming 1 lot = $100,000 notional, commission per lot -> bps
+        if hasattr(config.fees, 'commission_per_lot') and config.fees.commission_per_lot:
+            # commission_per_lot is per $100k, convert to bps
+            commission_bps = config.fees.commission_per_lot / 10.0
+        else:
+            commission_bps = config.fees.taker_bps  # Fallback to taker_bps
+
     return ForexFeeProvider(
-        swap_enabled=config.fees.swap_enabled,
-        swap_data_source=config.fees.swap_data_source,
+        commission_bps=commission_bps,
+        include_swap=config.fees.swap_enabled,
     )
 
 
@@ -1112,3 +1266,222 @@ def price_to_pips(price: float, pair: str, config: Optional[ForexConfig] = None)
     if pip_size == 0:
         return 0.0
     return price / pip_size
+
+
+# =============================================================================
+# CLI Interface
+# =============================================================================
+
+
+def validate_config_cli(path: str, verbose: bool = False) -> int:
+    """
+    Validate a forex configuration file from command line.
+
+    Args:
+        path: Path to YAML configuration file
+        verbose: Print detailed validation results
+
+    Returns:
+        Exit code (0 = success, 1 = errors, 2 = warnings only)
+    """
+    import sys
+
+    print(f"Validating forex configuration: {path}")
+    print("=" * 60)
+
+    # Load configuration
+    try:
+        config = load_forex_config(path)
+        print("[OK] Configuration loaded successfully")
+    except FileNotFoundError:
+        print(f"[ERROR] File not found: {path}")
+        return 1
+    except Exception as e:
+        print(f"[ERROR] Failed to load configuration: {e}")
+        return 1
+
+    # Run validation
+    validator = ForexConfigValidator()
+    results = validator.validate(config)
+
+    # Count errors and warnings
+    errors = [r for r in results if r.severity == ConfigValidationSeverity.ERROR]
+    warnings = [r for r in results if r.severity == ConfigValidationSeverity.WARNING]
+
+    if verbose or errors or warnings:
+        print()
+        print("Validation Results:")
+        print("-" * 60)
+
+    for result in results:
+        if result.severity == ConfigValidationSeverity.ERROR:
+            print(f"  [ERROR] {result.message}")
+            if result.field:
+                print(f"          Field: {result.field}")
+        elif result.severity == ConfigValidationSeverity.WARNING:
+            print(f"  [WARN]  {result.message}")
+            if result.field:
+                print(f"          Field: {result.field}")
+        elif verbose:
+            print(f"  [INFO]  {result.message}")
+
+    # Summary
+    print()
+    print("-" * 60)
+    if errors:
+        print(f"[FAILED] {len(errors)} error(s), {len(warnings)} warning(s)")
+        return 1
+    elif warnings:
+        print(f"[OK] Configuration valid with {len(warnings)} warning(s)")
+        return 2
+    else:
+        print("[OK] Configuration valid (no errors or warnings)")
+        return 0
+
+
+def test_factory_functions_cli(path: str) -> int:
+    """
+    Test factory functions with a configuration file.
+
+    Args:
+        path: Path to YAML configuration file
+
+    Returns:
+        Exit code (0 = success, 1 = failure)
+    """
+    print(f"Testing factory functions with: {path}")
+    print("=" * 60)
+
+    # Load configuration
+    try:
+        config = load_forex_config(path)
+        print("[OK] Configuration loaded")
+    except Exception as e:
+        print(f"[ERROR] Failed to load: {e}")
+        return 1
+
+    # Test slippage provider
+    try:
+        provider = create_forex_slippage_provider(config)
+        print(f"[OK] Slippage provider created: {type(provider).__name__}")
+        print(f"     Impact coefficient: {provider.config.impact_coef_base}")
+        print(f"     Spread profile: {provider.spread_profile}")
+    except Exception as e:
+        print(f"[ERROR] Slippage provider: {e}")
+        return 1
+
+    # Test dealer simulator
+    try:
+        dealer = create_forex_dealer_simulator(config)
+        print(f"[OK] Dealer simulator created: {type(dealer).__name__}")
+    except Exception as e:
+        print(f"[ERROR] Dealer simulator: {e}")
+        return 1
+
+    # Test fee provider
+    try:
+        fees = create_forex_fee_provider(config)
+        print(f"[OK] Fee provider created: {type(fees).__name__}")
+        print(f"     Commission: {fees.commission_bps} bps")
+    except Exception as e:
+        print(f"[ERROR] Fee provider: {e}")
+        return 1
+
+    print()
+    print("-" * 60)
+    print("[OK] All factory functions working correctly")
+    return 0
+
+
+def main() -> int:
+    """
+    CLI entry point for forex configuration management.
+
+    Usage:
+        python -m services.forex_config validate <path> [--verbose]
+        python -m services.forex_config test <path>
+        python -m services.forex_config show <path>
+
+    Commands:
+        validate  - Validate a forex configuration file
+        test      - Test factory functions with configuration
+        show      - Display parsed configuration
+
+    Returns:
+        Exit code
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="python -m services.forex_config",
+        description="Forex configuration management CLI (Phase 8)",
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # Validate command
+    validate_parser = subparsers.add_parser(
+        "validate",
+        help="Validate a forex configuration file",
+    )
+    validate_parser.add_argument(
+        "path",
+        help="Path to YAML configuration file",
+    )
+    validate_parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Show all validation messages",
+    )
+
+    # Test command
+    test_parser = subparsers.add_parser(
+        "test",
+        help="Test factory functions with configuration",
+    )
+    test_parser.add_argument(
+        "path",
+        help="Path to YAML configuration file",
+    )
+
+    # Show command
+    show_parser = subparsers.add_parser(
+        "show",
+        help="Display parsed configuration",
+    )
+    show_parser.add_argument(
+        "path",
+        help="Path to YAML configuration file",
+    )
+    show_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output as JSON instead of YAML",
+    )
+
+    args = parser.parse_args()
+
+    if args.command == "validate":
+        return validate_config_cli(args.path, args.verbose)
+    elif args.command == "test":
+        return test_factory_functions_cli(args.path)
+    elif args.command == "show":
+        try:
+            config = load_forex_config(args.path)
+            if args.json:
+                import json
+                print(json.dumps(config.to_dict(), indent=2, default=str))
+            else:
+                import yaml
+                print(yaml.dump(config.to_dict(), default_flow_style=False))
+            return 0
+        except Exception as e:
+            print(f"Error: {e}")
+            return 1
+    else:
+        parser.print_help()
+        return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())
