@@ -64,7 +64,8 @@ class LatencyModel:
       total_ms = base_ms + U[0, jitter_ms]
       с вероятностью spike_p → total_ms *= spike_mult
       timeout = (total_ms > timeout_ms)
-      если timeout и retries > 0 → повторить выбор ещё до retries раз, суммируя total_ms
+      если timeout и retries > 0 → повторить выбор ещё до retries раз
+      (максимум retries + 1 попытка всего), суммируя total_ms
 
     Возвращаемый словарь:
       {
@@ -116,7 +117,7 @@ class LatencyModel:
             spike_on_success = spike_on_success or bool(d["spike"])
             if not last_timeout:
                 break
-            if attempts > int(self.retries) + 1:
+            if attempts >= int(self.retries) + 1:
                 break
 
         result = {
