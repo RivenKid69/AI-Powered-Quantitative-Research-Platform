@@ -30,12 +30,20 @@ import json
 
 class MarketType(str, Enum):
     """Type of market/asset class."""
+    # Crypto
     CRYPTO_SPOT = "CRYPTO_SPOT"
     CRYPTO_FUTURES = "CRYPTO_FUTURES"
     CRYPTO_PERP = "CRYPTO_PERP"
+    # Equity
     EQUITY = "EQUITY"
     EQUITY_OPTIONS = "EQUITY_OPTIONS"
+    # Forex
     FOREX = "FOREX"
+    # Traditional Futures (CME, CBOT, NYMEX, COMEX)
+    INDEX_FUTURES = "INDEX_FUTURES"          # ES, NQ, YM, RTY
+    COMMODITY_FUTURES = "COMMODITY_FUTURES"  # GC, SI, CL, NG, ZC, ZS, ZW
+    CURRENCY_FUTURES = "CURRENCY_FUTURES"    # 6E, 6J, 6B, 6A, 6C, 6S
+    BOND_FUTURES = "BOND_FUTURES"            # ZN, ZB, ZT, ZF, UB
 
     @property
     def is_crypto(self) -> bool:
@@ -46,16 +54,62 @@ class MarketType(str, Enum):
         return self in (MarketType.EQUITY, MarketType.EQUITY_OPTIONS)
 
     @property
+    def is_futures(self) -> bool:
+        """Returns True if this is any type of futures contract."""
+        return self in (
+            MarketType.CRYPTO_FUTURES,
+            MarketType.CRYPTO_PERP,
+            MarketType.INDEX_FUTURES,
+            MarketType.COMMODITY_FUTURES,
+            MarketType.CURRENCY_FUTURES,
+            MarketType.BOND_FUTURES,
+        )
+
+    @property
+    def is_traditional_futures(self) -> bool:
+        """Returns True if this is a traditional (non-crypto) futures contract."""
+        return self in (
+            MarketType.INDEX_FUTURES,
+            MarketType.COMMODITY_FUTURES,
+            MarketType.CURRENCY_FUTURES,
+            MarketType.BOND_FUTURES,
+        )
+
+    @property
+    def has_expiry(self) -> bool:
+        """Returns True if contracts have expiry dates (not perpetuals)."""
+        return self in (
+            MarketType.CRYPTO_FUTURES,
+            MarketType.INDEX_FUTURES,
+            MarketType.COMMODITY_FUTURES,
+            MarketType.CURRENCY_FUTURES,
+            MarketType.BOND_FUTURES,
+            MarketType.EQUITY_OPTIONS,
+        )
+
+    @property
+    def has_funding_rate(self) -> bool:
+        """Returns True if this market type has funding rate mechanism."""
+        return self == MarketType.CRYPTO_PERP
+
+    @property
     def has_trading_hours(self) -> bool:
         """Returns True if this market type has trading hours (not 24/7)."""
-        return self.is_equity or self == MarketType.FOREX
+        return (
+            self.is_equity
+            or self == MarketType.FOREX
+            or self.is_traditional_futures
+        )
 
 
 class ExchangeVendor(str, Enum):
     """Supported exchange vendors."""
-    # Crypto
+    # Crypto Spot
     BINANCE = "binance"
     BINANCE_US = "binance_us"
+    # Crypto Futures
+    BINANCE_FUTURES = "binance_futures"        # Binance USDT-M Futures
+    BINANCE_COIN_FUTURES = "binance_coin_futures"  # Binance COIN-M Futures
     # Equity
     ALPACA = "alpaca"
     POLYGON = "polygon"  # Data provider
@@ -64,6 +118,12 @@ class ExchangeVendor(str, Enum):
     OANDA = "oanda"          # Primary forex broker (OANDA v20 API)
     IG = "ig"                # IG Markets (alternative)
     DUKASCOPY = "dukascopy"  # Dukascopy (historical tick data)
+    # Traditional Futures (via Interactive Brokers)
+    IB = "ib"                    # Interactive Brokers (CME, CBOT, NYMEX, COMEX)
+    IB_CME = "ib_cme"            # IB → CME (ES, NQ, 6E, 6J)
+    IB_CBOT = "ib_cbot"          # IB → CBOT (ZN, ZB, ZC, ZS, ZW)
+    IB_NYMEX = "ib_nymex"        # IB → NYMEX (CL, NG)
+    IB_COMEX = "ib_comex"        # IB → COMEX (GC, SI)
     # Unknown
     UNKNOWN = "unknown"
 
@@ -72,16 +132,42 @@ class ExchangeVendor(str, Enum):
         """Default market type for vendor."""
         if self in (ExchangeVendor.BINANCE, ExchangeVendor.BINANCE_US):
             return MarketType.CRYPTO_SPOT
+        elif self in (ExchangeVendor.BINANCE_FUTURES, ExchangeVendor.BINANCE_COIN_FUTURES):
+            return MarketType.CRYPTO_PERP
         elif self == ExchangeVendor.ALPACA:
             return MarketType.EQUITY
         elif self in (ExchangeVendor.OANDA, ExchangeVendor.IG, ExchangeVendor.DUKASCOPY):
             return MarketType.FOREX
+        elif self in (ExchangeVendor.IB, ExchangeVendor.IB_CME):
+            return MarketType.INDEX_FUTURES
+        elif self == ExchangeVendor.IB_CBOT:
+            return MarketType.BOND_FUTURES
+        elif self == ExchangeVendor.IB_NYMEX:
+            return MarketType.COMMODITY_FUTURES
+        elif self == ExchangeVendor.IB_COMEX:
+            return MarketType.COMMODITY_FUTURES
         return MarketType.CRYPTO_SPOT
 
     @property
     def is_forex(self) -> bool:
         """Returns True if this vendor is a forex broker/data provider."""
         return self in (ExchangeVendor.OANDA, ExchangeVendor.IG, ExchangeVendor.DUKASCOPY)
+
+    @property
+    def is_crypto_futures(self) -> bool:
+        """Returns True if this vendor supports crypto futures."""
+        return self in (ExchangeVendor.BINANCE_FUTURES, ExchangeVendor.BINANCE_COIN_FUTURES)
+
+    @property
+    def is_traditional_futures(self) -> bool:
+        """Returns True if this vendor supports traditional futures."""
+        return self in (
+            ExchangeVendor.IB,
+            ExchangeVendor.IB_CME,
+            ExchangeVendor.IB_CBOT,
+            ExchangeVendor.IB_NYMEX,
+            ExchangeVendor.IB_COMEX,
+        )
 
 
 class FeeStructure(str, Enum):

@@ -12,11 +12,19 @@ Usage:
         BinanceFeeAdapter,
         BinanceTradingHoursAdapter,
         BinanceExchangeInfoAdapter,
+        # Futures adapters
+        BinanceFuturesMarketDataAdapter,
+        BinanceFuturesExchangeInfoAdapter,
+        BinanceFuturesOrderExecutionAdapter,
     )
 
     # Or use the registry
     from adapters.registry import create_market_data_adapter
     adapter = create_market_data_adapter("binance", config)
+
+    # For futures
+    from adapters.registry import create_futures_market_data_adapter
+    futures_adapter = create_futures_market_data_adapter("binance_futures", config)
 """
 
 from __future__ import annotations
@@ -33,6 +41,11 @@ from .market_data import BinanceMarketDataAdapter
 from .fees import BinanceFeeAdapter
 from .trading_hours import BinanceTradingHoursAdapter
 from .exchange_info import BinanceExchangeInfoAdapter
+
+# Import futures adapter implementations
+from .futures_market_data import BinanceFuturesMarketDataAdapter
+from .futures_exchange_info import BinanceFuturesExchangeInfoAdapter
+from .futures_order_execution import BinanceFuturesOrderExecutionAdapter
 
 
 # Register adapters with the global registry
@@ -102,7 +115,56 @@ def _register_adapters() -> None:
         description="Binance US exchange info adapter",
     )
 
-    logger.debug("Registered Binance adapters")
+    # ===========================
+    # Futures Adapters
+    # ===========================
+
+    # Binance USDT-M Futures
+    register(
+        vendor=ExchangeVendor.BINANCE_FUTURES,
+        adapter_type=AdapterType.FUTURES_MARKET_DATA,
+        adapter_class=BinanceFuturesMarketDataAdapter,
+        description="Binance Futures market data (mark price, funding, OI)",
+    )
+
+    register(
+        vendor=ExchangeVendor.BINANCE_FUTURES,
+        adapter_type=AdapterType.FUTURES_EXCHANGE_INFO,
+        adapter_class=BinanceFuturesExchangeInfoAdapter,
+        description="Binance Futures exchange info (contracts, leverage)",
+    )
+
+    register(
+        vendor=ExchangeVendor.BINANCE_FUTURES,
+        adapter_type=AdapterType.FUTURES_ORDER_EXECUTION,
+        adapter_class=BinanceFuturesOrderExecutionAdapter,
+        description="Binance Futures order execution (margin, leverage)",
+    )
+
+    # Also register futures adapters for standard BINANCE vendor
+    # (allows using "binance" with futures adapter types)
+    register(
+        vendor=ExchangeVendor.BINANCE,
+        adapter_type=AdapterType.FUTURES_MARKET_DATA,
+        adapter_class=BinanceFuturesMarketDataAdapter,
+        description="Binance Futures market data (via BINANCE vendor)",
+    )
+
+    register(
+        vendor=ExchangeVendor.BINANCE,
+        adapter_type=AdapterType.FUTURES_EXCHANGE_INFO,
+        adapter_class=BinanceFuturesExchangeInfoAdapter,
+        description="Binance Futures exchange info (via BINANCE vendor)",
+    )
+
+    register(
+        vendor=ExchangeVendor.BINANCE,
+        adapter_type=AdapterType.FUTURES_ORDER_EXECUTION,
+        adapter_class=BinanceFuturesOrderExecutionAdapter,
+        description="Binance Futures order execution (via BINANCE vendor)",
+    )
+
+    logger.debug("Registered Binance adapters (including futures)")
 
 
 # Auto-register on import
@@ -110,8 +172,13 @@ _register_adapters()
 
 
 __all__ = [
+    # Spot adapters
     "BinanceMarketDataAdapter",
     "BinanceFeeAdapter",
     "BinanceTradingHoursAdapter",
     "BinanceExchangeInfoAdapter",
+    # Futures adapters
+    "BinanceFuturesMarketDataAdapter",
+    "BinanceFuturesExchangeInfoAdapter",
+    "BinanceFuturesOrderExecutionAdapter",
 ]

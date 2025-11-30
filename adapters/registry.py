@@ -76,6 +76,7 @@ A = TypeVar("A", bound=BaseAdapter)
 
 class AdapterType(str, Enum):
     """Types of adapters that can be registered."""
+    # Standard adapters
     MARKET_DATA = "market_data"
     FEE = "fee"
     TRADING_HOURS = "trading_hours"
@@ -84,6 +85,10 @@ class AdapterType(str, Enum):
     CORPORATE_ACTIONS = "corporate_actions"  # Dividends, splits, mergers (Phase 7)
     EARNINGS = "earnings"  # Earnings calendar and estimates (Phase 7)
     COMBINED = "combined"  # ExchangeAdapter implementing all interfaces
+    # Futures-specific adapters
+    FUTURES_MARKET_DATA = "futures_market_data"      # Mark price, funding, OI
+    FUTURES_EXCHANGE_INFO = "futures_exchange_info"  # Contract specs, leverage
+    FUTURES_ORDER_EXECUTION = "futures_order_execution"  # Margin, leverage control
 
 
 # Mapping from AdapterType to base class
@@ -96,6 +101,10 @@ ADAPTER_BASE_CLASSES: Dict[AdapterType, Type[BaseAdapter]] = {
     AdapterType.CORPORATE_ACTIONS: CorporateActionsAdapter,
     AdapterType.EARNINGS: EarningsAdapter,
     AdapterType.COMBINED: ExchangeAdapter,
+    # Futures adapters use the same base classes for now
+    AdapterType.FUTURES_MARKET_DATA: MarketDataAdapter,
+    AdapterType.FUTURES_EXCHANGE_INFO: ExchangeInfoAdapter,
+    AdapterType.FUTURES_ORDER_EXECUTION: OrderExecutionAdapter,
 }
 
 
@@ -171,6 +180,15 @@ class AdapterRegistry:
             ExchangeVendor.OANDA: "adapters.oanda",
             ExchangeVendor.IG: "adapters.ig",
             ExchangeVendor.DUKASCOPY: "adapters.dukascopy",
+            # Crypto Futures vendors
+            ExchangeVendor.BINANCE_FUTURES: "adapters.binance",
+            ExchangeVendor.BINANCE_COIN_FUTURES: "adapters.binance",
+            # Traditional Futures (Interactive Brokers)
+            ExchangeVendor.IB: "adapters.ib",
+            ExchangeVendor.IB_CME: "adapters.ib",
+            ExchangeVendor.IB_CBOT: "adapters.ib",
+            ExchangeVendor.IB_NYMEX: "adapters.ib",
+            ExchangeVendor.IB_COMEX: "adapters.ib",
         }
 
         # Track which vendors have been loaded
@@ -558,6 +576,79 @@ def create_earnings_adapter(
     if not isinstance(adapter, EarningsAdapter):
         raise TypeError(f"Expected EarningsAdapter, got {type(adapter)}")
     return adapter
+
+
+# =========================
+# Futures Adapter Factory Functions
+# =========================
+
+def create_futures_market_data_adapter(
+    vendor: Union[ExchangeVendor, str],
+    config: Optional[Mapping[str, Any]] = None,
+) -> BaseAdapter:
+    """
+    Create futures market data adapter.
+
+    Provides access to:
+    - Mark price and index price
+    - Funding rates (perpetuals)
+    - Open interest
+    - Liquidation data
+
+    Args:
+        vendor: Exchange vendor (e.g., 'binance_futures', 'ib_cme')
+        config: Adapter configuration
+
+    Returns:
+        Futures market data adapter instance
+    """
+    return get_registry().create_adapter(vendor, AdapterType.FUTURES_MARKET_DATA, config)
+
+
+def create_futures_exchange_info_adapter(
+    vendor: Union[ExchangeVendor, str],
+    config: Optional[Mapping[str, Any]] = None,
+) -> BaseAdapter:
+    """
+    Create futures exchange info adapter.
+
+    Provides access to:
+    - Contract specifications
+    - Leverage brackets
+    - Margin requirements
+    - Symbol lists (perpetuals, quarterlies)
+
+    Args:
+        vendor: Exchange vendor (e.g., 'binance_futures', 'ib_cme')
+        config: Adapter configuration
+
+    Returns:
+        Futures exchange info adapter instance
+    """
+    return get_registry().create_adapter(vendor, AdapterType.FUTURES_EXCHANGE_INFO, config)
+
+
+def create_futures_order_execution_adapter(
+    vendor: Union[ExchangeVendor, str],
+    config: Optional[Mapping[str, Any]] = None,
+) -> BaseAdapter:
+    """
+    Create futures order execution adapter.
+
+    Provides access to:
+    - Order submission with leverage
+    - Position management
+    - Margin mode control (cross/isolated)
+    - Position mode control (one-way/hedge)
+
+    Args:
+        vendor: Exchange vendor (e.g., 'binance_futures', 'ib_cme')
+        config: Adapter configuration
+
+    Returns:
+        Futures order execution adapter instance
+    """
+    return get_registry().create_adapter(vendor, AdapterType.FUTURES_ORDER_EXECUTION, config)
 
 
 # =========================
