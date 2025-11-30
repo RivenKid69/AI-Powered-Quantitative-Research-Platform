@@ -1023,18 +1023,18 @@ def create_forex_dealer_simulator(
     Returns:
         ForexDealerSimulator instance
     """
-    from services.forex_dealer import ForexDealerSimulator, DealerSimulatorConfig
+    from services.forex_dealer import ForexDealerSimulator, ForexDealerConfig
 
-    dealer_config = DealerSimulatorConfig(
+    dealer_config = ForexDealerConfig(
         num_dealers=config.dealer_simulation.num_dealers,
         last_look_enabled=config.dealer_simulation.last_look_enabled,
-        adverse_threshold_pips=config.dealer_simulation.adverse_selection_threshold_pips,
-        quote_validity_ms=config.dealer_simulation.quote_validity_ms,
-        rfq_threshold_usd=config.dealer_simulation.rfq_threshold_usd,
-        seed=seed,
+        max_slippage_pips=config.slippage.max_slippage_pips,
+        quote_refresh_interval_ms=config.dealer_simulation.quote_validity_ms,
+        size_impact_threshold_usd=config.dealer_simulation.rfq_threshold_usd,
+        max_history_size=config.dealer_simulation.stats_window_trades,
     )
 
-    return ForexDealerSimulator(config=dealer_config)
+    return ForexDealerSimulator(config=dealer_config, seed=seed)
 
 
 def create_forex_fee_provider(config: ForexConfig) -> Any:
