@@ -14,7 +14,7 @@ This document describes the integration of UPGD (Utility-based Perturbed Gradien
 
 ## Recent Fixes (2025-11-27)
 
-- **Learning Rate Multiplier**: Fixed a bug in `AdaptiveUPGD.step` where the perturbed update was scaled by `-2.0 * lr` instead of `-1.0 * lr`. The implementation now correctly uses `-1.0 * lr`, matching the standard UPGD algorithm. **Status: Verified.**
+- **Learning Rate Multiplier**: Fixed a bug in `AdaptiveUPGD.step` where the perturbed update was scaled by `-2.0 * lr` instead of `-1.0 * lr`. The implementation now correctly uses `-1.0 * lr`, matching the standard UPGD algorithm. **Status: Verified (2025-11-30).**
 
 
 ## Available Optimizers

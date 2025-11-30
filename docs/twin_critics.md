@@ -116,7 +116,8 @@ Twin Critics works with both:
 - Both critics share the same input features (LSTM/MLP backbone)
 - Each critic has independent parameters (separate linear heads)
 - Both critics are trained with the same targets
-- **Minimum of both estimates is used for advantage calculation** (Verified implementation in `custom_policy_patch1.py:predict_values`)
+- **Minimum of both estimates is used for advantage calculation** (Verified implementation in `custom_policy_patch1.py:predict_values` and `distributional_ppo.py:collect_rollouts`)
+  - **Status**: Verified (2025-11-30). `min(Q1, Q2)` logic is correctly implemented and used for GAE.
 - **Enabled by default** for improved performance (can be disabled if needed)
 
 ## Usage Examples

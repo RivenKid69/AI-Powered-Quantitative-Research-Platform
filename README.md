@@ -4,11 +4,11 @@
 
 ---
 
-## 🎯 Статус Проекта (2025-11-27)
+## 🎯 Статус Проекта (2025-12-01)
 
-**Версия**: 4.0 (Multi-Asset Support)
+**Версия**: 4.1 (Stable)
 **Статус**: ✅ **Production Ready**
-**Последнее обновление**: 2025-11-27
+**Последнее обновление**: 2025-12-01
 
 ### Поддерживаемые рынки
 
@@ -20,34 +20,37 @@
 
 ### ✅ Последние Критические Исправления
 
-- 🔴 **UPGD Learning Rate Multiplier** (2025-11-27) - **FIXED** ✅
-  - `AdaptiveUPGD.step` used `-2.0 * lr` instead of `-1.0 * lr`
-  - **VERIFIED**: Fixed to use standard `-1.0 * lr` multiplier
+- 🔴 **UPGD Learning Rate Multiplier** (2025-11-30) - **VERIFIED** ✅
+  - `AdaptiveUPGD.step` confirmed to use correct `-1.0 * lr` multiplier.
+  - **VERIFIED**: Code review confirmed fix at line 292 of `optimizers/adaptive_upgd.py`.
 
-- 🔴 **Twin Critics Implementation** (2025-11-27) - **VERIFIED** ✅
-  - Confirmed `min(V1, V2)` logic is correctly implemented in `custom_policy_patch1.py`
-  - False positive report about missing mechanism resolved
+- 🔴 **Twin Critics Implementation** (2025-11-30) - **VERIFIED** ✅
+  - `min(Q1, Q2)` logic confirmed in `distributional_ppo.py` and `custom_policy_patch1.py`.
+  - Independent VF clipping for each critic verified.
+  - **VERIFIED**: Comprehensive code audit confirmed implementation.
 
-- 🔴 **VGS v3.2** (2025-11-27) - **FIXED** ✅
-  - `min_scaling_factor=0.1` и `variance_cap=50.0` предотвращают блокировку обучения
-  - Исправлена проблема EV≈0, Twin Critics loss +327%, grad norm -82%
+- 🔴 **VGS v3.2** (2025-11-30) - **VERIFIED** ✅
+  - `min_scaling_factor` and `variance_cap` confirmed in `variance_gradient_scaler.py`.
+  - Stochastic variance calculation `E[g^2]` confirmed fixed.
+
+- 🔴 **PBT Optimizer State** (2025-11-30) - **VERIFIED** ✅
+  - Optimizer state preservation during PBT exploit confirmed "HANDLED / BY DESIGN".
 
 - 🔴 **Twin Critics Categorical VF Clipping** (2025-11-26) - **FIXED** ✅
-  - `_project_distribution` был identity stub → proper C51 projection
+  - `_project_distribution` was identity stub → proper C51 projection
   - Yang-Zhang RS denominator: used (n-1) instead of n → +11% inflation removed
-  - **VERIFIED**: Twin Critics `min(V1, V2)` logic confirmed in `custom_policy_patch1.py` and `distributional_ppo.py` ✅
 
 - 🔴 **UPGDW Min-Max Normalization** (2025-11-26) - **FIXED** ✅
   - Negative utilities no longer invert weight protection
 
 - 🔴 **Signal Position in Observation** (2025-11-26) - **FIXED** ✅
-  - Temporal mismatch: market data t+1, position t → теперь оба t+1
+  - Temporal mismatch: market data t+1, position t → now both t+1
 
 - 🔴 **LongOnlyActionWrapper** (2025-11-25) - **FIXED** ✅
-  - Минимальная позиция была 50% вместо 0% → policy теперь использует tanh
+  - Minimum position was 50% instead of 0% → policy now uses tanh
 
 - 🔴 **Step Observation Timing** (2025-11-25) - **FIXED** ✅
-  - Obs из той же row что reset() → теперь Gymnasium-compliant
+  - Obs from same row as reset() → now Gymnasium-compliant
 
 - 🔴 **Data Leakage** (2025-11-23) - **FIXED** ⚠️ **REQUIRES RETRAINING**
   - ALL technical indicators were NOT shifted → look-ahead bias removed
@@ -92,6 +95,7 @@
 
 ### Главная Документация
 - **[CLAUDE.md](CLAUDE.md)** - **Полная документация проекта** (Russian) ⭐ **Начните здесь!**
+- **[docs/AI_GUIDE.md](docs/AI_GUIDE.md)** - **Guide for AI Agents** (English) 🤖 **For AI Assistants**
 - **[DOCS_INDEX.md](DOCS_INDEX.md)** - Навигация по всей документации
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** - Архитектура системы
 - **[QUICK_START_REFERENCE.md](QUICK_START_REFERENCE.md)** - Быстрый старт

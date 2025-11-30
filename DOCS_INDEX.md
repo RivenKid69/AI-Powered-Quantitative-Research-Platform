@@ -4,7 +4,7 @@
 
 ---
 
-## 📊 Статус проекта (2025-11-27)
+## 📊 Статус проекта (2025-12-01)
 
 **Production Ready** - Все критические исправления применены и протестированы.
 
@@ -31,6 +31,7 @@
 | Файл | Описание |
 |------|----------|
 | [CLAUDE.md](CLAUDE.md) | ⭐ **Master reference** - полная документация (RU) |
+| [docs/AI_GUIDE.md](docs/AI_GUIDE.md) | 🤖 **AI Agent Guide** - context & instructions (EN) |
 | [README.md](README.md) | Обзор проекта и quick start |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Архитектура системы |
 | [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md) | Инструкции по сборке |
@@ -185,6 +186,6 @@ pytest tests/test_data_leakage*.py -v  # Data Leakage
 
 ---
 
-**Last Updated**: 2025-11-27 (Verified Fixes)
+**Last Updated**: 2025-12-01 (Verified Fixes)
 **Status**: ✅ Production Ready
-**Version**: 4.0 (Multi-Asset Support + VGS v3.2 + Verified UPGD/Twin Critics)
+**Version**: 4.1 (Stable + Verified UPGD/Twin Critics/VGS)
