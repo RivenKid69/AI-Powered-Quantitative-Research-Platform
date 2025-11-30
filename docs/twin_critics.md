@@ -116,7 +116,7 @@ Twin Critics works with both:
 - Both critics share the same input features (LSTM/MLP backbone)
 - Each critic has independent parameters (separate linear heads)
 - Both critics are trained with the same targets
-- Minimum of both estimates is used for advantage calculation
+- **Minimum of both estimates is used for advantage calculation** (Verified implementation in `custom_policy_patch1.py:predict_values`)
 - **Enabled by default** for improved performance (can be disabled if needed)
 
 ## Usage Examples

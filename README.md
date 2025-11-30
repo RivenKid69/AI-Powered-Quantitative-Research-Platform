@@ -20,6 +20,14 @@
 
 ### ✅ Последние Критические Исправления
 
+- 🔴 **UPGD Learning Rate Multiplier** (2025-11-27) - **FIXED** ✅
+  - `AdaptiveUPGD.step` used `-2.0 * lr` instead of `-1.0 * lr`
+  - **VERIFIED**: Fixed to use standard `-1.0 * lr` multiplier
+
+- 🔴 **Twin Critics Implementation** (2025-11-27) - **VERIFIED** ✅
+  - Confirmed `min(V1, V2)` logic is correctly implemented in `custom_policy_patch1.py`
+  - False positive report about missing mechanism resolved
+
 - 🔴 **VGS v3.2** (2025-11-27) - **FIXED** ✅
   - `min_scaling_factor=0.1` и `variance_cap=50.0` предотвращают блокировку обучения
   - Исправлена проблема EV≈0, Twin Critics loss +327%, grad norm -82%
