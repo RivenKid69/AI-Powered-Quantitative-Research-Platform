@@ -48,9 +48,11 @@ def _blocked_durations(
 
     When a blocked streak runs through the last available timestamp, the
     function extends the end of that interval by the provided ``tf_ms`` (or by
-    the median positive timestep inferred from the data). This mirrors the
+    the median positive timestep inferred from the data). If neither a
+    timeframe nor a positive timestep can be inferred, the interval stops at
+    the last observed timestamp instead of being extended. This mirrors the
     expectation that the final bar would have closed one timeframe after its
-    last observed tick instead of treating the last tick as an immediate end.
+    last observed tick when cadence information is available.
     """
     ts = np.asarray(pd.to_numeric(ts_ms, errors="coerce"), dtype=np.int64)
     m = np.asarray(mask, dtype=bool)
