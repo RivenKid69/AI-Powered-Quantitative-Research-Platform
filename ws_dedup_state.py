@@ -50,7 +50,7 @@ def init(
     out_csv: str | None = None,
     flush_interval_s: float = 60.0,
 ) -> None:
-    """Configure signal bus runtime parameters."""
+    """Configure websocket deduplication state and persistence settings."""
     global ENABLED, TTL_SECONDS, PERSIST_PATH, OUT_CSV, FLUSH_INTERVAL_SECONDS, _flush_thread
 
     shutdown()
