@@ -4,6 +4,10 @@ incremental_klines.py
 --------------------------------------------------------------
 Incrementally *synchronise* CLOSED 4h Binance candles per symbol.
 
+Despite the generic ``data/candles`` path, this script intentionally works
+with 4-hour bars; the location is kept for backward compatibility with
+downstream tooling that expects files in that directory.
+
 The previous implementation only appended the latest closed bar. In case the
 script was run a handful of times before the training pipeline, the resulting
 dataset contained only a couple of candles. This module now backfills every
@@ -30,7 +34,7 @@ BASE = "https://api.binance.com/api/v3/klines"
 OUT_DIR = os.path.join("data", "candles")
 os.makedirs(OUT_DIR, exist_ok=True)
 
-INTERVAL_MS = 14_400_000  # 4h (changed from 3_600_000 = 1h)
+INTERVAL_MS = 14_400_000  # 4h bars
 MAX_BATCH = 1000
 
 HEADER = [
@@ -130,7 +134,7 @@ def _read_first_ts(path: str) -> Optional[int]:
 def _fetch_earliest_open_time(symbol: str) -> Optional[int]:
     params = {
         "symbol": symbol.upper(),
-        "interval": "4h",  # Changed from 1h to 4h for 4-hour timeframe
+        "interval": "4h",  # Explicitly request 4-hour candles
         "startTime": 0,
         "limit": 1,
     }
@@ -216,7 +220,7 @@ def sync_symbol(symbol: str, close_lag_ms: int, *, out_dir: Optional[str] = None
         limit = min(MAX_BATCH, steps)
         params = {
             "symbol": symbol.upper(),
-            "interval": "4h",  # Changed from 1h to 4h for 4-hour timeframe
+            "interval": "4h",  # Explicitly request 4-hour candles
             "startTime": cursor,
             "limit": max(limit, 1),
         }
