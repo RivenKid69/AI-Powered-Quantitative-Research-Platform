@@ -2,7 +2,7 @@
 # Exchange Configuration for Multi-Exchange Support
 #
 # This configuration file defines exchange-specific settings.
-# Select vendor to switch between Binance (crypto) and Alpaca (stocks).
+# Select vendor to switch between Binance (crypto), Alpaca (stocks), or OANDA (forex).
 #
 # Usage:
 #   from adapters.config import ExchangeConfig
@@ -13,10 +13,10 @@
 # MAIN EXCHANGE SELECTION
 # =============================================================================
 
-# Exchange vendor: "binance", "binance_us", or "alpaca"
+# Exchange vendor: "binance", "binance_us", "alpaca", "oanda", "ig", "dukascopy"
 vendor: "binance"
 
-# Market type: CRYPTO_SPOT, CRYPTO_FUTURES, CRYPTO_PERP, EQUITY, EQUITY_OPTIONS
+# Market type: CRYPTO_SPOT, CRYPTO_FUTURES, CRYPTO_PERP, EQUITY, EQUITY_OPTIONS, FOREX_SPOT
 market_type: "CRYPTO_SPOT"
 
 
@@ -131,3 +131,159 @@ trading_hours:
 #   paper: false
 #   feed: "sip"
 #   extended_hours: true
+
+# --- OANDA Forex (Paper Trading) ---
+# vendor: "oanda"
+# market_type: "FOREX_SPOT"
+# oanda:
+#   environment: practice
+#   account_id: "${OANDA_ACCOUNT_ID}"
+
+# --- OANDA Forex (Live Trading) ---
+# vendor: "oanda"
+# market_type: "FOREX_SPOT"
+# oanda:
+#   environment: live
+#   account_id: "${OANDA_ACCOUNT_ID}"
+
+
+# =============================================================================
+# OANDA CONFIGURATION (Forex)
+# =============================================================================
+
+oanda:
+  # API credentials (use environment variables for security)
+  api_key: "${OANDA_API_KEY}"
+  account_id: "${OANDA_ACCOUNT_ID}"
+
+  # Environment: "practice" (paper trading) or "live"
+  environment: "practice"
+
+  # API endpoints (auto-selected based on environment)
+  endpoints:
+    practice:
+      rest: "https://api-fxpractice.oanda.com"
+      streaming: "https://stream-fxpractice.oanda.com"
+    live:
+      rest: "https://api-fxtrade.oanda.com"
+      streaming: "https://stream-fxtrade.oanda.com"
+
+  # Request timeout (seconds)
+  timeout: 30
+
+  # Rate limiting
+  rate_limit:
+    requests_per_second: 120
+    burst: 200
+
+  # Streaming configuration
+  streaming:
+    enabled: true
+    heartbeat_interval: 5
+    reconnect_delay: 1
+    max_reconnect_attempts: 10
+
+  # Default trading parameters
+  trading:
+    default_units: 100000        # 1 standard lot
+    max_units_per_trade: 10000000
+    allow_pending_orders: true
+
+  # Session configuration
+  session:
+    rollover_time_et: 17          # 5pm ET
+    weekend_filter: true
+    dst_aware: true
+
+  # Swap/rollover settings
+  swap:
+    enabled: true
+    cache_path: "data/forex/oanda_swap_rates.json"
+    cache_ttl_hours: 24
+
+
+# =============================================================================
+# IG CONFIGURATION (Forex)
+# =============================================================================
+
+ig:
+  # API credentials
+  api_key: "${IG_API_KEY}"
+  username: "${IG_USERNAME}"
+  password: "${IG_PASSWORD}"
+
+  # Account type: "demo" or "live"
+  account_type: "demo"
+
+  # API endpoints
+  endpoints:
+    demo: "https://demo-api.ig.com"
+    live: "https://api.ig.com"
+
+  # Request timeout
+  timeout: 30
+
+  # Rate limiting (IG has stricter limits)
+  rate_limit:
+    requests_per_second: 30
+    burst: 50
+
+
+# =============================================================================
+# DUKASCOPY CONFIGURATION (Historical Forex Data)
+# =============================================================================
+
+dukascopy:
+  # API key (for historical data access)
+  api_key: "${DUKASCOPY_API_KEY}"
+
+  # Data configuration
+  data:
+    base_url: "https://datafeed.dukascopy.com"
+    tick_data_enabled: true
+    bar_data_enabled: true
+
+  # Note: Dukascopy is primarily for historical data, not live trading
+
+
+# =============================================================================
+# FOREX-SPECIFIC SETTINGS
+# =============================================================================
+
+forex:
+  # Default pair for testing
+  default_pair: "EUR_USD"
+
+  # Pip sizes
+  pip_sizes:
+    default: 0.0001
+    jpy_pairs: 0.01
+
+  # Lot sizes
+  lot_sizes:
+    standard: 100000
+    mini: 10000
+    micro: 1000
+    nano: 100
+
+  # Leverage (jurisdiction-dependent)
+  leverage:
+    retail_us: 50         # CFTC limit
+    retail_eu: 30         # ESMA limit
+    professional: 100
+    institutional: 500
+
+  # Session times (UTC)
+  sessions:
+    sydney:
+      open: "21:00"
+      close: "06:00"
+    tokyo:
+      open: "00:00"
+      close: "09:00"
+    london:
+      open: "07:00"
+      close: "16:00"
+    new_york:
+      open: "12:00"
+      close: "21:00"

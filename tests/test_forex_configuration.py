@@ -1,0 +1,742 @@
+# -*- coding: utf-8 -*-
+"""
+tests/test_forex_configuration.py
+Comprehensive tests for Forex Configuration System (Phase 8).
+
+Test coverage:
+- YAML file loading
+- Configuration parsing
+- Validation rules
+- Factory functions
+- Pip size calculations
+- Environment variable overrides
+- Default value handling
+- Edge cases and error handling
+
+Target: ~35 tests for Phase 8 Configuration System
+"""
+
+import os
+import tempfile
+from pathlib import Path
+from typing import Any, Dict
+
+import pytest
+import yaml
+
+from services.forex_config import (
+    # Main config classes
+    ForexConfig,
+    ForexConfigLoader,
+    ForexConfigValidator,
+    # Sub-config classes
+    TradingSessionConfig,
+    SessionConfig,
+    FeeConfig,
+    SpreadProfile,
+    SlippageConfig,
+    DealerSimulationConfig,
+    DealerTierConfig,
+    LeverageConfig,
+    PositionSyncConfig,
+    DataSourcesConfig,
+    RateLimitConfig,
+    # Enums
+    ForexVendor,
+    ForexMarketType,
+    ForexFeeStructure,
+    ForexSlippageLevel,
+    ForexJurisdiction,
+    ConfigValidationSeverity,
+    # Factory functions
+    load_forex_config,
+    get_pip_size,
+    pips_to_price,
+    price_to_pips,
+    # Constants
+    SUPPORTED_VENDORS,
+    VALID_SESSIONS,
+    VALID_PAIR_CATEGORIES,
+)
+
+
+# =============================================================================
+# Test Fixtures
+# =============================================================================
+
+
+@pytest.fixture
+def sample_forex_config_dict() -> Dict[str, Any]:
+    """Create a sample forex configuration dictionary."""
+    return {
+        "forex": {
+            "asset_class": "forex",
+            "data_vendor": "oanda",
+            "market": "spot",
+            "session": {
+                "calendar": "forex_24x5",
+                "weekend_filter": True,
+                "rollover_time_et": 17,
+                "rollover_keepout_minutes": 30,
+                "dst_aware": True,
+            },
+            "fees": {
+                "structure": "spread_only",
+                "maker_bps": 0.0,
+                "taker_bps": 0.0,
+                "swap_enabled": True,
+            },
+            "slippage": {
+                "level": "L2+",
+                "profile": "retail",
+                "impact_coef_base": 0.03,
+                "spread_pips": 1.2,
+            },
+            "dealer_simulation": {
+                "enabled": True,
+                "num_dealers": 5,
+            },
+            "leverage": {
+                "max_leverage": 50.0,
+                "default_leverage": 30.0,
+                "margin_warning": 1.20,
+                "margin_call": 1.00,
+                "stop_out": 0.50,
+            },
+        },
+        "rate_limits": {
+            "oanda": {
+                "requests_per_second": 120,
+                "burst": 200,
+            }
+        },
+    }
+
+
+@pytest.fixture
+def temp_config_file(sample_forex_config_dict) -> str:
+    """Create a temporary config file."""
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        suffix=".yaml",
+        delete=False,
+        encoding="utf-8",
+    ) as f:
+        yaml.dump(sample_forex_config_dict, f)
+        return f.name
+
+
+@pytest.fixture
+def default_config() -> ForexConfig:
+    """Create a default ForexConfig."""
+    return ForexConfig()
+
+
+# =============================================================================
+# Test: ForexConfig Creation
+# =============================================================================
+
+
+class TestForexConfigCreation:
+    """Tests for ForexConfig creation and initialization."""
+
+    def test_default_creation(self):
+        """Test creating ForexConfig with default values."""
+        config = ForexConfig()
+        assert config.asset_class == "forex"
+        assert config.data_vendor == ForexVendor.OANDA
+        assert config.market == ForexMarketType.SPOT
+
+    def test_from_dict(self, sample_forex_config_dict):
+        """Test creating ForexConfig from dictionary."""
+        config = ForexConfig.from_dict(sample_forex_config_dict)
+        assert config.asset_class == "forex"
+        assert config.data_vendor == ForexVendor.OANDA
+        assert config.slippage.impact_coef_base == 0.03
+
+    def test_from_dict_with_different_vendor(self):
+        """Test creating config with different vendor."""
+        data = {"forex": {"data_vendor": "ig"}}
+        config = ForexConfig.from_dict(data)
+        assert config.data_vendor == ForexVendor.IG
+
+    def test_from_dict_with_dukascopy(self):
+        """Test creating config with Dukascopy vendor."""
+        data = {"forex": {"data_vendor": "dukascopy"}}
+        config = ForexConfig.from_dict(data)
+        assert config.data_vendor == ForexVendor.DUKASCOPY
+
+    def test_from_yaml(self, temp_config_file):
+        """Test loading ForexConfig from YAML file."""
+        config = ForexConfig.from_yaml(temp_config_file)
+        assert config.asset_class == "forex"
+        os.unlink(temp_config_file)
+
+    def test_from_yaml_file_not_found(self):
+        """Test error handling for missing YAML file."""
+        with pytest.raises(FileNotFoundError):
+            ForexConfig.from_yaml("nonexistent_file.yaml")
+
+    def test_to_dict(self, default_config):
+        """Test converting ForexConfig to dictionary."""
+        result = default_config.to_dict()
+        assert "forex" in result
+        assert result["forex"]["asset_class"] == "forex"
+        assert result["forex"]["data_vendor"] == "oanda"
+
+
+# =============================================================================
+# Test: Session Configuration
+# =============================================================================
+
+
+class TestSessionConfig:
+    """Tests for session configuration."""
+
+    def test_session_config_creation(self):
+        """Test creating SessionConfig."""
+        session = SessionConfig(
+            start_utc=7,
+            end_utc=16,
+            liquidity_factor=1.1,
+            spread_multiplier=1.0,
+        )
+        assert session.start_utc == 7
+        assert session.end_utc == 16
+
+    def test_session_config_invalid_start(self):
+        """Test error for invalid start_utc."""
+        with pytest.raises(ValueError, match="start_utc"):
+            SessionConfig(start_utc=25, end_utc=16)
+
+    def test_session_config_invalid_end(self):
+        """Test error for invalid end_utc."""
+        with pytest.raises(ValueError, match="end_utc"):
+            SessionConfig(start_utc=7, end_utc=30)
+
+    def test_session_config_negative_liquidity(self):
+        """Test error for negative liquidity factor."""
+        with pytest.raises(ValueError, match="liquidity_factor"):
+            SessionConfig(start_utc=7, end_utc=16, liquidity_factor=-0.5)
+
+    def test_session_config_zero_spread_mult(self):
+        """Test error for zero spread multiplier."""
+        with pytest.raises(ValueError, match="spread_multiplier"):
+            SessionConfig(start_utc=7, end_utc=16, spread_multiplier=0.0)
+
+    def test_trading_session_config_from_dict(self):
+        """Test creating TradingSessionConfig from dict."""
+        data = {
+            "calendar": "forex_24x5",
+            "weekend_filter": True,
+            "rollover_time_et": 17,
+            "sessions": {
+                "london": {
+                    "start_utc": 7,
+                    "end_utc": 16,
+                    "liquidity_factor": 1.1,
+                    "spread_multiplier": 1.0,
+                }
+            },
+        }
+        config = TradingSessionConfig.from_dict(data)
+        assert config.calendar == "forex_24x5"
+        assert "london" in config.sessions
+
+
+# =============================================================================
+# Test: Fee Configuration
+# =============================================================================
+
+
+class TestFeeConfig:
+    """Tests for fee configuration."""
+
+    def test_fee_config_defaults(self):
+        """Test FeeConfig default values."""
+        config = FeeConfig()
+        assert config.structure == ForexFeeStructure.SPREAD_ONLY
+        assert config.maker_bps == 0.0
+        assert config.swap_enabled is True
+
+    def test_fee_config_from_dict(self):
+        """Test creating FeeConfig from dict."""
+        data = {
+            "structure": "ecn",
+            "maker_bps": 1.0,
+            "taker_bps": 2.0,
+            "swap_enabled": False,
+        }
+        config = FeeConfig.from_dict(data)
+        assert config.structure == ForexFeeStructure.ECN
+        assert config.maker_bps == 1.0
+        assert config.swap_enabled is False
+
+    def test_spread_profile_creation(self):
+        """Test SpreadProfile creation."""
+        profile = SpreadProfile(
+            major=0.3,
+            minor=0.8,
+            cross=1.5,
+            exotic=10.0,
+        )
+        assert profile.major == 0.3
+        assert profile.exotic == 10.0
+
+
+# =============================================================================
+# Test: Slippage Configuration
+# =============================================================================
+
+
+class TestSlippageConfig:
+    """Tests for slippage configuration."""
+
+    def test_slippage_config_defaults(self):
+        """Test SlippageConfig default values."""
+        config = SlippageConfig()
+        assert config.level == ForexSlippageLevel.L2_PLUS
+        assert config.impact_coef_base == 0.03
+        assert config.spread_pips == 1.2
+
+    def test_slippage_config_from_dict(self):
+        """Test creating SlippageConfig from dict."""
+        data = {
+            "level": "L2+",
+            "profile": "institutional",
+            "impact_coef_base": 0.02,
+            "impact_coef_range": [0.01, 0.03],
+            "spread_pips": 0.5,
+        }
+        config = SlippageConfig.from_dict(data)
+        assert config.level == ForexSlippageLevel.L2_PLUS
+        assert config.profile == "institutional"
+        assert config.impact_coef_base == 0.02
+        assert config.impact_coef_range == (0.01, 0.03)
+
+
+# =============================================================================
+# Test: Dealer Simulation Configuration
+# =============================================================================
+
+
+class TestDealerSimulationConfig:
+    """Tests for dealer simulation configuration."""
+
+    def test_dealer_config_defaults(self):
+        """Test DealerSimulationConfig default values."""
+        config = DealerSimulationConfig()
+        assert config.enabled is True
+        assert config.num_dealers == 5
+        assert config.last_look_enabled is True
+
+    def test_dealer_tier_config(self):
+        """Test DealerTierConfig creation."""
+        tier = DealerTierConfig(
+            count=2,
+            spread_factor=0.8,
+            max_size_usd=10_000_000,
+            base_reject_prob=0.02,
+        )
+        assert tier.count == 2
+        assert tier.spread_factor == 0.8
+
+
+# =============================================================================
+# Test: Leverage Configuration
+# =============================================================================
+
+
+class TestLeverageConfig:
+    """Tests for leverage configuration."""
+
+    def test_leverage_config_defaults(self):
+        """Test LeverageConfig default values."""
+        config = LeverageConfig()
+        assert config.max_leverage == 50.0
+        assert config.default_leverage == 30.0
+        assert config.stop_out == 0.50
+
+    def test_leverage_config_validation(self):
+        """Test leverage validation."""
+        with pytest.raises(ValueError, match="max_leverage"):
+            LeverageConfig(max_leverage=1000.0)
+
+    def test_leverage_config_default_exceeds_max(self):
+        """Test error when default exceeds max."""
+        with pytest.raises(ValueError, match="default_leverage"):
+            LeverageConfig(max_leverage=50.0, default_leverage=100.0)
+
+    def test_leverage_config_margin_order(self):
+        """Test margin level ordering validation."""
+        with pytest.raises(ValueError, match="stop_out"):
+            LeverageConfig(
+                margin_warning=0.50,  # Warning below call
+                margin_call=1.00,
+                stop_out=0.50,
+            )
+
+
+# =============================================================================
+# Test: Configuration Validator
+# =============================================================================
+
+
+class TestForexConfigValidator:
+    """Tests for configuration validation."""
+
+    def test_valid_config(self, default_config):
+        """Test validation of a valid config."""
+        validator = ForexConfigValidator()
+        messages = validator.validate(default_config)
+        assert validator.is_valid()
+        assert len(validator.get_errors()) == 0
+
+    def test_high_leverage_warning(self):
+        """Test warning for high leverage."""
+        config = ForexConfig(
+            leverage=LeverageConfig(max_leverage=100.0, default_leverage=50.0)
+        )
+        validator = ForexConfigValidator()
+        validator.validate(config)
+        warnings = validator.get_warnings()
+        assert any("CFTC" in w.message for w in warnings)
+
+    def test_weekend_filter_warning(self):
+        """Test warning for disabled weekend filter."""
+        config = ForexConfig(
+            session=TradingSessionConfig(weekend_filter=False)
+        )
+        validator = ForexConfigValidator()
+        validator.validate(config)
+        warnings = validator.get_warnings()
+        assert any("weekend" in w.message.lower() for w in warnings)
+
+    def test_dealer_disabled_warning(self):
+        """Test warning for disabled dealer simulation."""
+        config = ForexConfig(
+            dealer_simulation=DealerSimulationConfig(enabled=False)
+        )
+        validator = ForexConfigValidator()
+        validator.validate(config)
+        warnings = validator.get_warnings()
+        assert any("dealer" in w.message.lower() for w in warnings)
+
+    def test_swap_disabled_warning(self):
+        """Test warning for disabled swap."""
+        config = ForexConfig(
+            fees=FeeConfig(swap_enabled=False)
+        )
+        validator = ForexConfigValidator()
+        validator.validate(config)
+        warnings = validator.get_warnings()
+        assert any("swap" in w.message.lower() for w in warnings)
+
+    def test_invalid_num_dealers_error(self):
+        """Test error for invalid num_dealers."""
+        config = ForexConfig(
+            dealer_simulation=DealerSimulationConfig(num_dealers=0)
+        )
+        validator = ForexConfigValidator()
+        validator.validate(config)
+        assert not validator.is_valid()
+        errors = validator.get_errors()
+        assert any("num_dealers" in e.field for e in errors)
+
+
+# =============================================================================
+# Test: Configuration Loader
+# =============================================================================
+
+
+class TestForexConfigLoader:
+    """Tests for configuration loading."""
+
+    def test_load_from_file(self, temp_config_file):
+        """Test loading config from file."""
+        loader = ForexConfigLoader(validate=True)
+        config = loader.load(user_config_path=temp_config_file)
+        assert config.asset_class == "forex"
+        os.unlink(temp_config_file)
+
+    def test_load_with_overrides(self, temp_config_file):
+        """Test loading with overrides."""
+        loader = ForexConfigLoader(validate=True)
+        overrides = {
+            "forex": {
+                "leverage": {
+                    "max_leverage": 30.0,
+                    "default_leverage": 20.0,
+                }
+            }
+        }
+        config = loader.load(user_config_path=temp_config_file, overrides=overrides)
+        assert config.leverage.max_leverage == 30.0
+        os.unlink(temp_config_file)
+
+    def test_load_with_env_override(self, temp_config_file, monkeypatch):
+        """Test loading with environment variable override."""
+        monkeypatch.setenv("FOREX_MAX_LEVERAGE", "40.0")
+        loader = ForexConfigLoader(validate=True)
+        config = loader.load(user_config_path=temp_config_file)
+        assert config.leverage.max_leverage == 40.0
+        os.unlink(temp_config_file)
+
+
+# =============================================================================
+# Test: Pip Size Calculations
+# =============================================================================
+
+
+class TestPipSizeCalculations:
+    """Tests for pip size calculations."""
+
+    def test_get_pip_size_standard(self):
+        """Test pip size for standard pairs."""
+        assert get_pip_size("EUR_USD") == 0.0001
+        assert get_pip_size("GBP_USD") == 0.0001
+        assert get_pip_size("EUR/GBP") == 0.0001
+
+    def test_get_pip_size_jpy(self):
+        """Test pip size for JPY pairs."""
+        assert get_pip_size("USD_JPY") == 0.01
+        assert get_pip_size("EUR_JPY") == 0.01
+        assert get_pip_size("GBP/JPY") == 0.01
+
+    def test_pips_to_price_standard(self):
+        """Test converting pips to price for standard pairs."""
+        assert pips_to_price(10.0, "EUR_USD") == 0.001
+        assert pips_to_price(1.0, "GBP_USD") == 0.0001
+
+    def test_pips_to_price_jpy(self):
+        """Test converting pips to price for JPY pairs."""
+        assert pips_to_price(10.0, "USD_JPY") == 0.1
+        assert pips_to_price(1.0, "EUR_JPY") == 0.01
+
+    def test_price_to_pips_standard(self):
+        """Test converting price to pips for standard pairs."""
+        assert price_to_pips(0.001, "EUR_USD") == 10.0
+        assert price_to_pips(0.0001, "GBP_USD") == 1.0
+
+    def test_price_to_pips_jpy(self):
+        """Test converting price to pips for JPY pairs."""
+        assert price_to_pips(0.1, "USD_JPY") == 10.0
+        assert price_to_pips(0.01, "EUR_JPY") == 1.0
+
+
+# =============================================================================
+# Test: Factory Functions
+# =============================================================================
+
+
+class TestFactoryFunctions:
+    """Tests for factory functions."""
+
+    def test_load_forex_config_default(self):
+        """Test load_forex_config with default path."""
+        # This test may fail if default config doesn't exist
+        # Use a temp file to ensure it works
+        config_data = {
+            "forex": {
+                "asset_class": "forex",
+                "data_vendor": "oanda",
+            }
+        }
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False, encoding="utf-8"
+        ) as f:
+            yaml.dump(config_data, f)
+            temp_path = f.name
+
+        config = load_forex_config(path=temp_path, validate=False)
+        assert config.asset_class == "forex"
+        os.unlink(temp_path)
+
+    def test_load_forex_config_with_overrides(self):
+        """Test load_forex_config with overrides."""
+        config_data = {"forex": {"data_vendor": "oanda"}}
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".yaml", delete=False, encoding="utf-8"
+        ) as f:
+            yaml.dump(config_data, f)
+            temp_path = f.name
+
+        overrides = {"forex": {"data_vendor": "ig"}}
+        config = load_forex_config(path=temp_path, overrides=overrides, validate=False)
+        assert config.data_vendor == ForexVendor.IG
+        os.unlink(temp_path)
+
+
+# =============================================================================
+# Test: Edge Cases
+# =============================================================================
+
+
+class TestEdgeCases:
+    """Tests for edge cases."""
+
+    def test_empty_dict(self):
+        """Test creating config from empty dict."""
+        config = ForexConfig.from_dict({})
+        assert config.asset_class == "forex"
+
+    def test_partial_config(self):
+        """Test creating config with partial data."""
+        data = {
+            "forex": {
+                "data_vendor": "oanda",
+            }
+        }
+        config = ForexConfig.from_dict(data)
+        assert config.data_vendor == ForexVendor.OANDA
+        # Defaults should be applied
+        assert config.leverage.max_leverage == 50.0
+
+    def test_nested_forex_key(self):
+        """Test config with nested forex key."""
+        data = {
+            "forex": {
+                "forex": {
+                    "data_vendor": "ig",
+                }
+            }
+        }
+        # Should handle nested key gracefully
+        config = ForexConfig.from_dict(data)
+        # May pick up nested or outer depending on implementation
+
+    def test_case_insensitive_vendor(self):
+        """Test vendor parsing is case-insensitive."""
+        data = {"forex": {"data_vendor": "OANDA"}}
+        config = ForexConfig.from_dict(data)
+        assert config.data_vendor == ForexVendor.OANDA
+
+
+# =============================================================================
+# Test: YAML File Validity
+# =============================================================================
+
+
+class TestYAMLFileValidity:
+    """Tests to verify YAML configuration files are valid."""
+
+    def test_forex_defaults_yaml_exists(self):
+        """Test that forex_defaults.yaml exists."""
+        path = Path("configs/forex_defaults.yaml")
+        assert path.exists(), "configs/forex_defaults.yaml should exist"
+
+    def test_forex_defaults_yaml_valid(self):
+        """Test that forex_defaults.yaml is valid YAML."""
+        path = Path("configs/forex_defaults.yaml")
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            assert data is not None
+            assert "forex" in data
+
+    def test_asset_class_defaults_has_forex(self):
+        """Test that asset_class_defaults.yaml has forex section."""
+        path = Path("configs/asset_class_defaults.yaml")
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            assert "forex" in data, "forex section should exist in asset_class_defaults.yaml"
+
+    def test_exchange_yaml_has_oanda(self):
+        """Test that exchange.yaml has OANDA section."""
+        path = Path("configs/exchange.yaml")
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            assert "oanda" in data, "oanda section should exist in exchange.yaml"
+
+    def test_slippage_yaml_has_forex_profile(self):
+        """Test that slippage.yaml has forex profile."""
+        path = Path("configs/slippage.yaml")
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+            profiles = data.get("slippage", {}).get("profiles", {})
+            assert "forex" in profiles, "forex profile should exist in slippage.yaml"
+
+
+# =============================================================================
+# Test: Integration with Existing Systems
+# =============================================================================
+
+
+class TestIntegration:
+    """Integration tests with existing systems."""
+
+    def test_config_compatible_with_execution_providers(self):
+        """Test config is compatible with execution providers."""
+        config = ForexConfig()
+        # Config should have all required fields
+        assert config.slippage.impact_coef_base is not None
+        assert config.slippage.spread_pips is not None
+
+    def test_config_compatible_with_forex_dealer(self):
+        """Test config is compatible with forex dealer simulator."""
+        config = ForexConfig()
+        # Config should have dealer simulation settings
+        assert config.dealer_simulation.enabled is not None
+        assert config.dealer_simulation.num_dealers >= 1
+
+    def test_config_compatible_with_risk_guards(self):
+        """Test config is compatible with risk guards."""
+        config = ForexConfig()
+        # Config should have leverage and margin settings
+        assert config.leverage.max_leverage is not None
+        assert config.leverage.margin_call is not None
+        assert config.leverage.stop_out is not None
+
+
+# =============================================================================
+# Test: Constants and Enums
+# =============================================================================
+
+
+class TestConstantsAndEnums:
+    """Tests for constants and enumerations."""
+
+    def test_supported_vendors(self):
+        """Test supported vendors constant."""
+        assert "oanda" in SUPPORTED_VENDORS
+        assert "ig" in SUPPORTED_VENDORS
+        assert "dukascopy" in SUPPORTED_VENDORS
+
+    def test_valid_sessions(self):
+        """Test valid sessions constant."""
+        assert "london" in VALID_SESSIONS
+        assert "new_york" in VALID_SESSIONS
+        assert "tokyo" in VALID_SESSIONS
+        assert "sydney" in VALID_SESSIONS
+
+    def test_valid_pair_categories(self):
+        """Test valid pair categories constant."""
+        assert "major" in VALID_PAIR_CATEGORIES
+        assert "minor" in VALID_PAIR_CATEGORIES
+        assert "cross" in VALID_PAIR_CATEGORIES
+        assert "exotic" in VALID_PAIR_CATEGORIES
+
+    def test_forex_vendor_enum(self):
+        """Test ForexVendor enum values."""
+        assert ForexVendor.OANDA.value == "oanda"
+        assert ForexVendor.IG.value == "ig"
+        assert ForexVendor.DUKASCOPY.value == "dukascopy"
+
+    def test_forex_market_type_enum(self):
+        """Test ForexMarketType enum values."""
+        assert ForexMarketType.SPOT.value == "spot"
+        assert ForexMarketType.FORWARD.value == "forward"
+        assert ForexMarketType.SWAP.value == "swap"
+
+    def test_forex_fee_structure_enum(self):
+        """Test ForexFeeStructure enum values."""
+        assert ForexFeeStructure.SPREAD_ONLY.value == "spread_only"
+        assert ForexFeeStructure.ECN.value == "ecn"
+
+    def test_forex_slippage_level_enum(self):
+        """Test ForexSlippageLevel enum values."""
+        assert ForexSlippageLevel.L2.value == "L2"
+        assert ForexSlippageLevel.L2_PLUS.value == "L2+"

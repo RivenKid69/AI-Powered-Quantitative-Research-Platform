@@ -195,6 +195,76 @@ slippage:
       max_slippage_bps: 500.0
 
     # ─────────────────────────────────────────────────────────────────────────
+    # Forex Profile (OANDA, IG, Dukascopy, etc.)
+    # ─────────────────────────────────────────────────────────────────────────
+    # Characteristics:
+    #   - OTC dealer market (not exchange LOB)
+    #   - Session-dependent liquidity (Sydney < Tokyo < London/NY overlap)
+    #   - Spread-based execution costs (no maker/taker)
+    #   - Lower impact coefficient than crypto (more liquid)
+    #   - Units: pips (not bps), converted internally
+    #
+    # Calibration basis:
+    #   - Major pairs (EUR/USD, GBP/USD): ~1.0-1.5 pip retail spread
+    #   - Minors: ~2-3 pip spread
+    #   - Crosses: ~3-5 pip spread
+    #   - Exotics: ~20-80 pip spread
+    #   - Impact coefficient from BIS FX market studies
+    #
+    # References:
+    #   - BIS Triennial Survey (2022): FX Market Volume
+    #   - King, Osler, Rime (2012): "Foreign Exchange Market Structure"
+    #   - Menkhoff et al. (2016): "The Cross-Section of Currency Risk Premia"
+    # ─────────────────────────────────────────────────────────────────────────
+    forex:
+      spread_pips: 1.2               # Default retail spread for majors (in pips)
+      spread_bps: 1.2                # ~1.2 bps for EUR/USD (1 pip ≈ 1 bps)
+      impact_coef: 0.03              # Lower than crypto (more liquid)
+      volatility_scale: 1.0
+      min_slippage_pips: 0.1
+      max_slippage_pips: 50.0
+      min_slippage_bps: 0.1
+      max_slippage_bps: 50.0
+
+      # Session adjustments (multipliers on base spread)
+      session_multipliers:
+        sydney: 1.50                 # Low liquidity
+        tokyo: 1.30
+        london: 1.00                 # Best liquidity
+        new_york: 1.00
+        london_ny_overlap: 0.80      # Tightest spreads
+        tokyo_london_overlap: 1.10
+        off_hours: 2.00
+        weekend: null                # Market closed
+
+      # Per-category adjustments
+      tiers:
+        major:                       # EUR/USD, GBP/USD, USD/JPY, etc.
+          spread_pips: 1.0
+          impact_coef: 0.02
+        minor:                       # EUR/GBP, EUR/CHF, etc.
+          spread_pips: 2.0
+          impact_coef: 0.03
+        cross:                       # EUR/JPY, GBP/JPY, etc.
+          spread_pips: 4.0
+          impact_coef: 0.04
+        exotic:                      # USD/TRY, USD/ZAR, etc.
+          spread_pips: 30.0
+          impact_coef: 0.08
+
+      # Retail vs Institutional
+      profiles:
+        retail:
+          spread_mult: 1.0           # Base spreads
+          impact_coef: 0.03
+        institutional:
+          spread_mult: 0.3           # Much tighter
+          impact_coef: 0.02
+        conservative:
+          spread_mult: 1.5           # Wider for safety
+          impact_coef: 0.04
+
+    # ─────────────────────────────────────────────────────────────────────────
     # Default fallback profile
     # ─────────────────────────────────────────────────────────────────────────
     default:
