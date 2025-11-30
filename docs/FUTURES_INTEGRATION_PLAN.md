@@ -2025,6 +2025,180 @@ class LiquidationEngine:
         elif score >= Decimal("0.2"):
             return 2
         return 1
+
+
+@dataclass
+class ADLQueuePosition:
+    """
+    Position in Auto-Deleveraging (ADL) queue.
+
+    ADL is triggered when insurance fund is insufficient to cover
+    liquidation losses. Profitable traders on the opposite side
+    are forced to close at bankruptcy price.
+
+    Ranking based on: PnL percentile × Leverage percentile
+
+    Attributes:
+        symbol: Contract symbol
+        side: Position side (LONG/SHORT)
+        rank: ADL rank 1-5 (5 = highest priority for ADL)
+        percentile: Position's percentile in ADL queue (0-100)
+        margin_ratio: Current margin ratio
+        pnl_ratio: PnL as percentage of margin
+        estimated_adl_qty: Estimated qty to be ADL'd if triggered
+
+    Reference:
+        https://www.binance.com/en/support/faq/360033525711
+    """
+    symbol: str
+    side: Literal["LONG", "SHORT"]
+    rank: int  # 1-5, where 5 = highest risk of ADL
+    percentile: float  # 0-100, position's rank in ADL queue
+    margin_ratio: Decimal
+    pnl_ratio: Decimal  # PnL / margin
+    estimated_adl_qty: Optional[Decimal] = None
+
+    @property
+    def is_high_risk(self) -> bool:
+        """True if in top 20% (rank 4-5) - high ADL risk."""
+        return self.rank >= 4
+
+    @property
+    def risk_level(self) -> str:
+        """Human-readable risk level."""
+        if self.rank == 5:
+            return "CRITICAL"  # Will be ADL'd first
+        elif self.rank == 4:
+            return "HIGH"
+        elif self.rank == 3:
+            return "MEDIUM"
+        else:
+            return "LOW"
+
+
+class ADLSimulator:
+    """
+    Simulates Auto-Deleveraging events.
+
+    When liquidation cannot be filled at bankruptcy price and
+    insurance fund is depleted, profitable traders are ADL'd.
+    """
+
+    def __init__(self, all_positions: List[FuturesPosition]):
+        self._positions = all_positions
+        self._adl_queue: Dict[str, List[ADLQueuePosition]] = {}
+
+    def build_adl_queue(
+        self,
+        symbol: str,
+        side: Literal["LONG", "SHORT"],
+        mark_price: Decimal,
+    ) -> List[ADLQueuePosition]:
+        """
+        Build ADL queue for positions that could be ADL'd.
+
+        ADL targets the opposite side of the liquidated position.
+        If a LONG is liquidated, profitable SHORTs are ADL'd.
+        """
+        # Filter positions on opposite side
+        opposite_side = "SHORT" if side == "LONG" else "LONG"
+        candidates = [
+            p for p in self._positions
+            if p.symbol == symbol and (
+                (opposite_side == "LONG" and p.qty > 0) or
+                (opposite_side == "SHORT" and p.qty < 0)
+            )
+        ]
+
+        if not candidates:
+            return []
+
+        # Calculate PnL and leverage for each
+        scored = []
+        for pos in candidates:
+            pnl = (mark_price - pos.entry_price) * pos.qty
+            pnl_pct = float(pnl / pos.margin) if pos.margin > 0 else 0.0
+            leverage = float(abs(pos.qty) * mark_price / pos.margin) if pos.margin > 0 else 0.0
+            scored.append((pos, pnl_pct, leverage))
+
+        # Calculate percentiles
+        pnl_values = sorted([s[1] for s in scored])
+        lev_values = sorted([s[2] for s in scored])
+
+        def percentile_rank(value, sorted_list):
+            if not sorted_list:
+                return 0.0
+            idx = sorted_list.index(value)
+            return (idx + 1) / len(sorted_list)
+
+        queue = []
+        for pos, pnl_pct, leverage in scored:
+            pnl_percentile = percentile_rank(pnl_pct, pnl_values)
+            lev_percentile = percentile_rank(leverage, lev_values)
+            score = pnl_percentile * lev_percentile
+
+            # ADL rank 1-5
+            if score >= 0.8:
+                rank = 5
+            elif score >= 0.6:
+                rank = 4
+            elif score >= 0.4:
+                rank = 3
+            elif score >= 0.2:
+                rank = 2
+            else:
+                rank = 1
+
+            queue.append(ADLQueuePosition(
+                symbol=pos.symbol,
+                side=opposite_side,
+                rank=rank,
+                percentile=score * 100,
+                margin_ratio=pos.margin_ratio if hasattr(pos, 'margin_ratio') else Decimal("0"),
+                pnl_ratio=Decimal(str(pnl_pct)),
+            ))
+
+        # Sort by rank descending (highest risk first)
+        queue.sort(key=lambda x: -x.rank)
+        self._adl_queue[f"{symbol}_{opposite_side}"] = queue
+        return queue
+
+    def execute_adl(
+        self,
+        symbol: str,
+        side: Literal["LONG", "SHORT"],
+        qty_to_adl: Decimal,
+        bankruptcy_price: Decimal,
+    ) -> List[Tuple[ADLQueuePosition, Decimal]]:
+        """
+        Execute ADL on positions in queue order.
+
+        Returns:
+            List of (position, qty_adl'd) tuples
+        """
+        key = f"{symbol}_{side}"
+        queue = self._adl_queue.get(key, [])
+
+        results = []
+        remaining = qty_to_adl
+
+        for adl_pos in queue:
+            if remaining <= 0:
+                break
+
+            # Find actual position
+            pos = next(
+                (p for p in self._positions if p.symbol == symbol),
+                None
+            )
+            if not pos:
+                continue
+
+            adl_qty = min(remaining, abs(pos.qty))
+            results.append((adl_pos, adl_qty))
+            remaining -= adl_qty
+
+        return results
 ```
 
 ### 2.3 Leverage Brackets Data
@@ -2160,8 +2334,21 @@ If Funding Rate > 0:
 If Funding Rate < 0:
     Shorts pay Longs
 
+IMPORTANT: Funding Rate Conventions
+------------------------------------
+Binance API returns funding rate as a DECIMAL (e.g., 0.0003 = 0.03% = 3 bps).
+
+Conversion helpers:
+    rate_decimal = 0.0003           # Raw from API
+    rate_percentage = rate_decimal * 100  # 0.03%
+    rate_bps = rate_decimal * 10000       # 3 bps
+
+Typical range: -0.375% to +0.375% (clamped by exchange)
+Neutral rate: ~0.01% (1 bps) per 8 hours = ~0.03% daily
+
 References:
 - Binance funding: https://www.binance.com/en/support/faq/360033525031
+- Binance funding rate API: returns decimal, NOT percentage
 """
 
 from decimal import Decimal
@@ -2482,6 +2669,158 @@ from ib_insync import IB, Future, ContFuture, util
 from core_models import Bar, Tick
 from adapters.base import MarketDataAdapter
 from adapters.models import ExchangeVendor
+
+
+class IBRateLimiter:
+    """
+    Comprehensive IB TWS API rate limiter.
+
+    IB has multiple rate limits that MUST be respected to avoid:
+    - Temporary bans (automatic pacing violations)
+    - Connection drops
+    - "Max messages per second exceeded" errors
+
+    Rate Limits:
+    ─────────────────────────────────────────────────────────────────────────────
+    | Type                    | Limit                  | Window    | Action     |
+    |-------------------------|------------------------|-----------|------------|
+    | General messages        | 50 msg/sec             | 1 sec     | Block      |
+    | Historical data         | 60 requests            | 10 min    | Pacing     |
+    | Identical hist request  | 6 requests             | 10 min    | Cache      |
+    | Market data subscribe   | 1 subscription/sec     | 1 sec     | Block      |
+    | Market data lines       | 100 concurrent         | N/A       | Hard limit |
+    | Scanner subscriptions   | 10 concurrent          | N/A       | Hard limit |
+    | Account updates         | 1 request/sec          | 1 sec     | Block      |
+    ─────────────────────────────────────────────────────────────────────────────
+
+    Reference:
+    - https://interactivebrokers.github.io/tws-api/historical_limitations.html
+    - https://interactivebrokers.github.io/tws-api/market_data.html
+    """
+
+    # Rate limit constants
+    MSG_PER_SEC = 45                    # General: 50 limit, 45 for safety
+    HIST_PER_10MIN = 55                 # Historical: 60 limit, 55 for safety
+    HIST_IDENTICAL_PER_10MIN = 5        # Identical requests: 6 limit
+    SUBSCRIPTION_PER_SEC = 1            # Market data subscribe
+    MAX_MARKET_DATA_LINES = 100         # Concurrent market data subscriptions
+    MAX_SCANNER_SUBSCRIPTIONS = 10      # Concurrent scanner subscriptions
+
+    def __init__(self):
+        self._message_times: List[float] = []
+        self._historical_times: List[float] = []
+        self._historical_requests: Dict[str, List[float]] = {}  # For identical request tracking
+        self._subscription_times: List[float] = []
+        self._active_subscriptions: Set[str] = set()
+        self._active_scanners: Set[str] = set()
+        self._lock = threading.Lock()
+
+    def can_send_message(self) -> bool:
+        """Check if general message can be sent."""
+        with self._lock:
+            now = time.time()
+            self._message_times = [t for t in self._message_times if now - t < 1.0]
+            return len(self._message_times) < self.MSG_PER_SEC
+
+    def record_message(self) -> None:
+        """Record a message being sent."""
+        with self._lock:
+            self._message_times.append(time.time())
+
+    def wait_for_message_slot(self, timeout: float = 5.0) -> bool:
+        """Block until message can be sent or timeout."""
+        start = time.time()
+        while not self.can_send_message():
+            if time.time() - start > timeout:
+                return False
+            time.sleep(0.02)  # 20ms poll
+        self.record_message()
+        return True
+
+    def can_request_historical(self, request_key: Optional[str] = None) -> Tuple[bool, str]:
+        """
+        Check if historical data can be requested.
+
+        Args:
+            request_key: Unique key for this request (for identical request tracking)
+
+        Returns:
+            (can_request, reason_if_blocked)
+        """
+        now = time.time()
+        window_10min = now - 600  # 10 minutes
+
+        with self._lock:
+            # Clean old entries
+            self._historical_times = [t for t in self._historical_times if t > window_10min]
+
+            # Check general historical limit
+            if len(self._historical_times) >= self.HIST_PER_10MIN:
+                wait_time = self._historical_times[0] - window_10min
+                return False, f"Historical rate limit: wait {wait_time:.0f}s"
+
+            # Check identical request limit
+            if request_key:
+                identical = self._historical_requests.get(request_key, [])
+                identical = [t for t in identical if t > window_10min]
+                self._historical_requests[request_key] = identical
+
+                if len(identical) >= self.HIST_IDENTICAL_PER_10MIN:
+                    wait_time = identical[0] - window_10min
+                    return False, f"Identical request limit: wait {wait_time:.0f}s"
+
+            return True, ""
+
+    def record_historical_request(self, request_key: Optional[str] = None) -> None:
+        """Record historical data request."""
+        with self._lock:
+            now = time.time()
+            self._historical_times.append(now)
+            if request_key:
+                if request_key not in self._historical_requests:
+                    self._historical_requests[request_key] = []
+                self._historical_requests[request_key].append(now)
+
+    def can_subscribe_market_data(self, symbol: str) -> Tuple[bool, str]:
+        """Check if can subscribe to market data."""
+        with self._lock:
+            now = time.time()
+            self._subscription_times = [t for t in self._subscription_times if now - t < 1.0]
+
+            if len(self._subscription_times) >= self.SUBSCRIPTION_PER_SEC:
+                return False, "Subscription rate limit: 1 per second"
+
+            if len(self._active_subscriptions) >= self.MAX_MARKET_DATA_LINES:
+                return False, f"Max market data lines reached ({self.MAX_MARKET_DATA_LINES})"
+
+            return True, ""
+
+    def record_subscription(self, symbol: str) -> None:
+        """Record market data subscription."""
+        with self._lock:
+            self._subscription_times.append(time.time())
+            self._active_subscriptions.add(symbol)
+
+    def record_unsubscription(self, symbol: str) -> None:
+        """Record market data unsubscription."""
+        with self._lock:
+            self._active_subscriptions.discard(symbol)
+
+    def get_status(self) -> Dict[str, Any]:
+        """Get current rate limit status."""
+        with self._lock:
+            now = time.time()
+            return {
+                "messages_this_second": len([t for t in self._message_times if now - t < 1.0]),
+                "messages_per_sec_limit": self.MSG_PER_SEC,
+                "historical_last_10min": len([t for t in self._historical_times if now - t < 600]),
+                "historical_per_10min_limit": self.HIST_PER_10MIN,
+                "active_subscriptions": len(self._active_subscriptions),
+                "max_subscriptions": self.MAX_MARKET_DATA_LINES,
+                "active_scanners": len(self._active_scanners),
+                "max_scanners": self.MAX_SCANNER_SUBSCRIPTIONS,
+            }
+
 
 class IBConnectionManager:
     """
@@ -2933,8 +3272,15 @@ class IBOrderExecutionAdapter:
 """
 CME daily settlement and contract rollover.
 
-CME futures settle daily at 4:00pm ET.
+IMPORTANT: Settlement times vary by product!
+- Equity index futures (ES, NQ): 14:30 CT = 15:30 ET
+- Agricultural futures: various times
+- Currency futures: 14:00 CT = 15:00 ET
+
 Rollover occurs ~8 days before contract expiry.
+
+Reference:
+- https://www.cmegroup.com/trading/equity-index/us-index/e-mini-sandp500.html
 """
 
 from decimal import Decimal
@@ -2947,9 +3293,41 @@ class CMESettlementEngine:
 
     Unlike crypto (funding every 8h), CME settles once daily.
     Variation margin is credited/debited to account.
+
+    Settlement times (Central Time → Eastern Time):
+    - Equity index (ES, NQ, YM, RTY): 14:30 CT → 15:30 ET
+    - Currencies (6E, 6J, 6B): 14:00 CT → 15:00 ET
+    - Metals (GC, SI): 13:30 CT → 14:30 ET
+    - Energy (CL, NG): 14:30 CT → 15:30 ET
     """
 
-    SETTLEMENT_TIME_ET = 16  # 4:00pm ET
+    # Default settlement time (equity index futures)
+    # CME uses Central Time, convert to ET (+1 hour)
+    SETTLEMENT_TIME_CT = 14  # 2:30pm CT
+    SETTLEMENT_TIME_ET = 15  # 3:30pm ET (14:30 CT + 1 hour)
+    SETTLEMENT_MINUTE = 30   # :30
+
+    # Product-specific settlement times (hour in ET)
+    SETTLEMENT_TIMES_ET: Dict[str, Tuple[int, int]] = {
+        # Equity index: 14:30 CT = 15:30 ET
+        "ES": (15, 30), "NQ": (15, 30), "YM": (15, 30), "RTY": (15, 30),
+        "MES": (15, 30), "MNQ": (15, 30), "MYM": (15, 30), "M2K": (15, 30),
+        # Currencies: 14:00 CT = 15:00 ET
+        "6E": (15, 0), "6J": (15, 0), "6B": (15, 0), "6A": (15, 0),
+        # Metals: 13:30 CT = 14:30 ET
+        "GC": (14, 30), "SI": (14, 30), "HG": (14, 30),
+        # Energy: 14:30 CT = 15:30 ET
+        "CL": (15, 30), "NG": (15, 30),
+        # Bonds: 15:00 CT = 16:00 ET
+        "ZB": (16, 0), "ZN": (16, 0), "ZT": (16, 0),
+    }
+
+    def get_settlement_time_et(self, symbol: str) -> Tuple[int, int]:
+        """Get settlement time (hour, minute) in ET for symbol."""
+        return self.SETTLEMENT_TIMES_ET.get(
+            symbol.upper(),
+            (self.SETTLEMENT_TIME_ET, self.SETTLEMENT_MINUTE)
+        )
 
     def __init__(self):
         self._last_settlement_prices: Dict[str, Decimal] = {}
@@ -5138,6 +5516,266 @@ class FuturesMarginGuard:
             return MarginStatus.WARNING
         return MarginStatus.HEALTHY
 
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MARGIN CALL NOTIFICATION SYSTEM
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class MarginCallLevel(str, Enum):
+    """Margin call severity levels."""
+    WARNING = "warning"       # 150-200% margin ratio
+    DANGER = "danger"         # 120-150% margin ratio
+    CRITICAL = "critical"     # 100-120% margin ratio
+    LIQUIDATION = "liquidation"  # <100% margin ratio
+
+
+@dataclass
+class MarginCallEvent:
+    """
+    Margin call notification event.
+
+    Emitted when margin ratio crosses a threshold. Used for:
+    - User notifications (email, SMS, push)
+    - Automated position reduction
+    - Audit logging
+    - Dashboard alerts
+    """
+    timestamp_ms: int
+    symbol: str
+    level: MarginCallLevel
+    margin_ratio: Decimal          # Current ratio (e.g., 1.35 = 135%)
+    required_margin: Decimal       # Maintenance margin required
+    current_margin: Decimal        # Current margin balance
+    shortfall: Decimal             # How much to add to reach safe level
+    recommended_action: str        # Human-readable recommendation
+    position_qty: Decimal          # Current position quantity
+    mark_price: Decimal            # Current mark price
+    liquidation_price: Decimal     # Estimated liquidation price
+    time_to_liquidation_bars: Optional[int] = None  # Estimated bars until liquidation
+    auto_action_triggered: bool = False  # True if auto-reduce was triggered
+
+    def __post_init__(self):
+        """Calculate shortfall if not provided."""
+        if self.shortfall == Decimal("0") and self.required_margin > self.current_margin:
+            safe_margin = self.required_margin * Decimal("2.0")  # 200% target
+            self.shortfall = safe_margin - self.current_margin
+
+    @property
+    def severity_score(self) -> int:
+        """Numerical severity for sorting (4 = highest)."""
+        return {
+            MarginCallLevel.WARNING: 1,
+            MarginCallLevel.DANGER: 2,
+            MarginCallLevel.CRITICAL: 3,
+            MarginCallLevel.LIQUIDATION: 4,
+        }.get(self.level, 0)
+
+    @property
+    def is_urgent(self) -> bool:
+        """True if immediate action required."""
+        return self.level in (MarginCallLevel.CRITICAL, MarginCallLevel.LIQUIDATION)
+
+    def to_notification_dict(self) -> Dict[str, Any]:
+        """Format for notification systems (email, Telegram, etc.)."""
+        return {
+            "title": f"⚠️ MARGIN CALL: {self.symbol} - {self.level.value.upper()}",
+            "severity": self.level.value,
+            "message": self.recommended_action,
+            "details": {
+                "symbol": self.symbol,
+                "margin_ratio": f"{float(self.margin_ratio)*100:.1f}%",
+                "shortfall_usd": f"${float(self.shortfall):,.2f}",
+                "position_size": str(self.position_qty),
+                "mark_price": f"${float(self.mark_price):,.2f}",
+                "liquidation_price": f"${float(self.liquidation_price):,.2f}",
+            },
+            "timestamp": self.timestamp_ms,
+            "requires_ack": self.is_urgent,
+        }
+
+
+class MarginCallNotifier:
+    """
+    Margin call notification and escalation system.
+
+    Features:
+    - Multi-channel notifications (callback, log, queue)
+    - Escalation ladder (warning → danger → critical)
+    - Cooldown to prevent notification spam
+    - Audit trail for compliance
+    - Auto-acknowledge for resolved margin calls
+    """
+
+    def __init__(
+        self,
+        on_margin_call: Optional[Callable[[MarginCallEvent], None]] = None,
+        cooldown_seconds: float = 60.0,  # Min time between same-level notifications
+        escalation_speedup: float = 0.5,  # Reduce cooldown for escalating severity
+        enable_auto_reduce: bool = False,
+        auto_reduce_at_level: MarginCallLevel = MarginCallLevel.DANGER,
+        auto_reduce_percent: float = 0.25,  # Reduce position by 25%
+    ):
+        self._callback = on_margin_call
+        self._cooldown_sec = cooldown_seconds
+        self._escalation_speedup = escalation_speedup
+        self._enable_auto_reduce = enable_auto_reduce
+        self._auto_reduce_level = auto_reduce_at_level
+        self._auto_reduce_pct = auto_reduce_percent
+
+        # State tracking
+        self._last_notification: Dict[str, Tuple[int, MarginCallLevel]] = {}  # symbol -> (ts, level)
+        self._active_margin_calls: Dict[str, MarginCallEvent] = {}
+        self._notification_history: List[MarginCallEvent] = []
+        self._lock = threading.Lock()
+
+    def check_and_notify(
+        self,
+        position: FuturesPosition,
+        mark_price: Decimal,
+        wallet_balance: Decimal,
+        margin_calculator: 'MarginCalculator',
+        timestamp_ms: int,
+    ) -> Optional[MarginCallEvent]:
+        """
+        Check margin status and emit notification if needed.
+
+        Returns:
+            MarginCallEvent if notification was sent, None otherwise
+        """
+        ratio = margin_calculator.calculate_margin_ratio(
+            position, mark_price, wallet_balance
+        )
+
+        # Determine level
+        if ratio < Decimal("1.0"):
+            level = MarginCallLevel.LIQUIDATION
+        elif ratio < Decimal("1.2"):
+            level = MarginCallLevel.CRITICAL
+        elif ratio < Decimal("1.5"):
+            level = MarginCallLevel.DANGER
+        elif ratio < Decimal("2.0"):
+            level = MarginCallLevel.WARNING
+        else:
+            # Margin healthy - clear any active margin call
+            self._clear_margin_call(position.symbol)
+            return None
+
+        # Check cooldown
+        if not self._should_notify(position.symbol, level, timestamp_ms):
+            return None
+
+        # Calculate details
+        required_margin = margin_calculator.calculate_maintenance_margin(
+            mark_price * abs(position.qty)
+        )
+        liquidation_price = margin_calculator.calculate_liquidation_price(
+            position.entry_price,
+            position.qty,
+            position.leverage,
+            wallet_balance,
+            position.margin_mode,
+        )
+
+        # Build event
+        event = MarginCallEvent(
+            timestamp_ms=timestamp_ms,
+            symbol=position.symbol,
+            level=level,
+            margin_ratio=ratio,
+            required_margin=required_margin,
+            current_margin=wallet_balance,
+            shortfall=Decimal("0"),  # Calculated in __post_init__
+            recommended_action=self._get_recommendation(level, ratio),
+            position_qty=position.qty,
+            mark_price=mark_price,
+            liquidation_price=liquidation_price,
+            auto_action_triggered=False,
+        )
+
+        # Check if auto-reduce should trigger
+        if (
+            self._enable_auto_reduce
+            and level.value >= self._auto_reduce_level.value
+        ):
+            event.auto_action_triggered = True
+            event.recommended_action += f" [AUTO-REDUCE {self._auto_reduce_pct*100:.0f}% TRIGGERED]"
+
+        # Record and notify
+        with self._lock:
+            self._last_notification[position.symbol] = (timestamp_ms, level)
+            self._active_margin_calls[position.symbol] = event
+            self._notification_history.append(event)
+
+        # Invoke callback
+        if self._callback:
+            try:
+                self._callback(event)
+            except Exception as e:
+                logging.error(f"Margin call callback failed: {e}")
+
+        return event
+
+    def _should_notify(
+        self,
+        symbol: str,
+        level: MarginCallLevel,
+        timestamp_ms: int,
+    ) -> bool:
+        """Check if notification should be sent (respecting cooldown)."""
+        with self._lock:
+            if symbol not in self._last_notification:
+                return True
+
+            last_ts, last_level = self._last_notification[symbol]
+            elapsed_sec = (timestamp_ms - last_ts) / 1000.0
+
+            # Escalation = shorter cooldown
+            effective_cooldown = self._cooldown_sec
+            if level.value > last_level.value:
+                effective_cooldown *= self._escalation_speedup
+
+            return elapsed_sec >= effective_cooldown
+
+    def _get_recommendation(self, level: MarginCallLevel, ratio: Decimal) -> str:
+        """Generate human-readable recommendation."""
+        ratio_pct = float(ratio) * 100
+
+        if level == MarginCallLevel.LIQUIDATION:
+            return f"IMMEDIATE ACTION REQUIRED: Margin ratio {ratio_pct:.1f}% - add funds or reduce position NOW to avoid liquidation"
+        elif level == MarginCallLevel.CRITICAL:
+            return f"URGENT: Margin ratio {ratio_pct:.1f}% - liquidation imminent. Reduce position or add margin immediately"
+        elif level == MarginCallLevel.DANGER:
+            return f"WARNING: Margin ratio {ratio_pct:.1f}% - consider reducing position size or adding margin"
+        else:
+            return f"NOTICE: Margin ratio {ratio_pct:.1f}% - monitor closely"
+
+    def _clear_margin_call(self, symbol: str) -> None:
+        """Clear active margin call when margin is restored."""
+        with self._lock:
+            if symbol in self._active_margin_calls:
+                del self._active_margin_calls[symbol]
+
+    def get_active_margin_calls(self) -> List[MarginCallEvent]:
+        """Get all active margin calls, sorted by severity."""
+        with self._lock:
+            return sorted(
+                self._active_margin_calls.values(),
+                key=lambda e: -e.severity_score
+            )
+
+    def get_notification_history(
+        self,
+        symbol: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[MarginCallEvent]:
+        """Get notification history for audit/compliance."""
+        with self._lock:
+            history = self._notification_history
+            if symbol:
+                history = [e for e in history if e.symbol == symbol]
+            return history[-limit:]
+
+
 class FundingExposureGuard:
     """
     Manages funding rate exposure.
@@ -5968,6 +6606,19 @@ Features unique to futures:
 3. Basis features (spot-futures spread)
 4. Liquidation features (recent liquidations, cascade risk)
 5. Mark-index spread features
+
+CRITICAL: Look-Ahead Bias Prevention
+─────────────────────────────────────
+ALL features MUST be shifted by 1 period before use in training!
+
+At time t, we can only use data known at t-1. Features computed from
+data at time t have look-ahead bias if used to predict actions at t.
+
+Pattern:
+    raw_feature = compute_feature(data)
+    shifted_feature = raw_feature.shift(1)  # <-- REQUIRED!
+
+This follows the same pattern as features_pipeline.py:339-353.
 """
 
 from decimal import Decimal
@@ -5975,9 +6626,44 @@ import numpy as np
 import pandas as pd
 from typing import Optional, Tuple
 
+
+def shift_features_for_lookahead(
+    features: pd.DataFrame,
+    shift_periods: int = 1,
+    exclude_cols: Optional[List[str]] = None,
+) -> pd.DataFrame:
+    """
+    Shift all features by N periods to prevent look-ahead bias.
+
+    MUST be called after all features are computed, before training.
+
+    Args:
+        features: DataFrame with computed features
+        shift_periods: Number of periods to shift (default=1)
+        exclude_cols: Columns to NOT shift (e.g., timestamps)
+
+    Returns:
+        DataFrame with shifted features
+
+    Example:
+        >>> features = calculate_funding_features(funding_rates)
+        >>> features = shift_features_for_lookahead(features)
+        >>> # Now safe for training at time t
+    """
+    exclude_cols = exclude_cols or []
+    shifted = features.copy()
+
+    for col in shifted.columns:
+        if col not in exclude_cols:
+            shifted[col] = shifted[col].shift(shift_periods)
+
+    return shifted
+
+
 def calculate_funding_features(
     funding_rates: pd.Series,
     lookback_periods: int = 8,  # 8 fundings = ~2.67 days
+    apply_shift: bool = True,   # Auto-apply look-ahead prevention
 ) -> pd.DataFrame:
     """
     Calculate funding rate features.
@@ -5988,6 +6674,13 @@ def calculate_funding_features(
     - funding_rate_std: Volatility of funding
     - funding_cumulative_24h: Cumulative funding last 24h
     - funding_direction: Sign consistency (-1 to 1)
+
+    Args:
+        funding_rates: Series of funding rates (decimal, e.g., 0.0003 = 3 bps)
+        lookback_periods: Number of funding periods for rolling calculations
+        apply_shift: If True, auto-apply shift(1) for look-ahead prevention
+
+    IMPORTANT: If apply_shift=False, caller MUST apply shift manually!
     """
     features = pd.DataFrame(index=funding_rates.index)
 
@@ -6000,12 +6693,17 @@ def calculate_funding_features(
     signs = np.sign(funding_rates)
     features['funding_direction'] = signs.rolling(lookback_periods).mean()
 
+    # Apply look-ahead bias prevention shift
+    if apply_shift:
+        features = shift_features_for_lookahead(features, shift_periods=1)
+
     return features
 
 def calculate_open_interest_features(
     open_interest: pd.Series,
     price: pd.Series,
     lookback: int = 20,
+    apply_shift: bool = True,   # Auto-apply look-ahead prevention
 ) -> pd.DataFrame:
     """
     Calculate open interest features.
@@ -6014,6 +6712,12 @@ def calculate_open_interest_features(
     - oi_change_pct: OI change percentage
     - oi_price_divergence: OI vs price divergence
     - oi_concentration: OI concentration metric
+
+    Args:
+        open_interest: Series of open interest values
+        price: Series of prices
+        lookback: Rolling window for calculations
+        apply_shift: If True, auto-apply shift(1) for look-ahead prevention
     """
     features = pd.DataFrame(index=open_interest.index)
 
@@ -6024,12 +6728,18 @@ def calculate_open_interest_features(
     price_change = price.pct_change(lookback)
     features['oi_price_divergence'] = oi_change - price_change
 
+    # Apply look-ahead bias prevention shift
+    if apply_shift:
+        features = shift_features_for_lookahead(features, shift_periods=1)
+
     return features
+
 
 def calculate_basis_features(
     futures_price: pd.Series,
     spot_price: pd.Series,
     days_to_expiry: Optional[pd.Series] = None,
+    apply_shift: bool = True,   # Auto-apply look-ahead prevention
 ) -> pd.DataFrame:
     """
     Calculate basis features.
@@ -6038,6 +6748,12 @@ def calculate_basis_features(
     Annualized Basis = (Basis / Spot) * (365 / DTE) for quarterly contracts
 
     For perpetuals, basis approximates funding expectation.
+
+    Args:
+        futures_price: Series of futures prices
+        spot_price: Series of spot prices
+        days_to_expiry: Optional series of days to expiry (for quarterly)
+        apply_shift: If True, auto-apply shift(1) for look-ahead prevention
     """
     features = pd.DataFrame(index=futures_price.index)
 
@@ -6047,6 +6763,10 @@ def calculate_basis_features(
 
     if days_to_expiry is not None:
         features['basis_annualized'] = (basis / spot_price) * (365 / days_to_expiry) * 100
+
+    # Apply look-ahead bias prevention shift
+    if apply_shift:
+        features = shift_features_for_lookahead(features, shift_periods=1)
 
     return features
 
@@ -6657,7 +7377,11 @@ funding:
 # ─────────────────────────────────────────────────────────────────────────────
 settlement:
   enabled: false                  # Enable daily settlement (CME)
-  time_et: "16:00"                # Daily settlement time
+  # CME uses 14:30 CT (Central Time) = 15:30 ET for equity index futures
+  # Note: Some products have different settlement times (e.g., agricultural)
+  # Reference: https://www.cmegroup.com/trading/equity-index/us-index/e-mini-sandp500.html
+  time_et: "15:30"                # Daily settlement time (14:30 CT)
+  time_ct: "14:30"                # Central Time (CME native timezone)
   variation_margin: true          # Daily P&L settlement
   auto_roll:
     enabled: true                 # Auto-roll before expiry
@@ -7610,6 +8334,1224 @@ docs/futures/
 - [ ] `benchmarks/bench_futures_simulation.py`
 - [ ] Documentation suite in `docs/futures/`
 - [ ] `FUTURES_INTEGRATION_REPORT.md` - Final validation report
+
+---
+
+## 📝 CLAUDE.MD INTEGRATION
+
+### Раздел для добавления в CLAUDE.md
+
+При завершении интеграции добавить следующую секцию в `CLAUDE.md`:
+
+```markdown
+## 📈 Futures Integration (Phase 11)
+
+### Обзор
+
+Phase 11 добавляет полную поддержку фьючерсов:
+
+1. **Crypto Futures** (Binance USDT-M Perpetual & Quarterly)
+2. **Index Futures** (CME: ES, NQ via Interactive Brokers)
+3. **Commodity Futures** (COMEX: GC, CL, SI)
+4. **Currency Futures** (CME: 6E, 6J, 6B)
+
+### Quick Reference - Futures
+
+| Задача | Где искать | Тесты |
+|--------|------------|-------|
+| Futures core models | `core_futures.py` | `pytest tests/test_core_futures.py` |
+| Crypto margin calculation | `impl_futures_margin.py` | `pytest tests/test_futures_margin.py` |
+| CME SPAN margin | `impl_futures_margin.py::CMEMarginCalculator` | `pytest tests/test_futures_span_margin.py` |
+| Funding rate tracking | `impl_futures_funding.py` | `pytest tests/test_futures_funding.py` |
+| Liquidation simulation | `impl_futures_liquidation.py` | `pytest tests/test_futures_liquidation.py` |
+| ADL simulation | `impl_futures_liquidation.py::ADLSimulator` | `pytest tests/test_futures_adl.py` |
+| Futures risk guards | `services/futures_risk_guards.py` | `pytest tests/test_futures_risk_guards.py` |
+| IB TWS adapter | `adapters/ib/` | `pytest tests/test_ib_adapters.py` |
+| Futures features | `futures_features.py` | `pytest tests/test_futures_features.py` |
+| Contract rollover | `services/futures_calendar.py` | `pytest tests/test_futures_calendar.py` |
+| Margin call notifications | `services/futures_margin_notifications.py` | `pytest tests/test_margin_notifications.py` |
+
+### Ключевые файлы
+
+| Файл | Описание |
+|------|----------|
+| `core_futures.py` | Core models (FuturesContract, FuturesPosition, MarginRequirement) |
+| `impl_futures_margin.py` | Margin calculators (Crypto tiered, CME SPAN) |
+| `impl_futures_liquidation.py` | Liquidation engine + ADL simulator |
+| `impl_futures_funding.py` | Funding rate tracking and payments |
+| `services/futures_risk_guards.py` | Leverage, margin ratio, funding exposure guards |
+| `services/futures_position_manager.py` | Position tracking, rollover, P&L |
+| `services/futures_calendar.py` | Trading hours, expirations, roll dates |
+| `adapters/binance/futures/` | Binance Futures adapters |
+| `adapters/ib/` | Interactive Brokers TWS adapters |
+| `execution_providers_futures.py` | L2/L3 futures execution |
+| `futures_features.py` | Futures-specific features (funding, basis, term structure) |
+
+### CLI Usage
+
+\`\`\`bash
+# Download futures data
+python scripts/download_futures_data.py --exchange binance --symbols BTCUSDT ETHUSDT
+
+# Training with futures
+python train_model_multi_patch.py --config configs/config_train_futures.yaml
+
+# Backtest futures
+python script_backtest.py --config configs/config_backtest_futures.yaml
+
+# Live trading futures (paper)
+python script_futures_live.py --config configs/config_live_futures.yaml --paper
+\`\`\`
+
+### Feature Flags
+
+Futures features controlled via `configs/feature_flags_futures.yaml`:
+
+\`\`\`yaml
+perpetual_trading:
+  stage: production
+index_futures:
+  stage: shadow        # Testing mode
+\`\`\`
+
+### Конфигурации
+
+| Файл | Назначение |
+|------|------------|
+| `config_train_futures.yaml` | Training with futures |
+| `config_backtest_futures.yaml` | Backtest futures strategies |
+| `config_live_futures.yaml` | Live futures trading |
+| `feature_flags_futures.yaml` | Feature flag control |
+| `futures_contracts.yaml` | Contract specifications |
+
+### Тестирование
+
+\`\`\`bash
+# All futures tests
+pytest tests/test_futures*.py -v
+
+# Core models
+pytest tests/test_core_futures.py -v
+
+# Margin calculation
+pytest tests/test_futures_margin.py tests/test_futures_span_margin.py -v
+
+# Liquidation & ADL
+pytest tests/test_futures_liquidation.py tests/test_futures_adl.py -v
+
+# Risk guards
+pytest tests/test_futures_risk_guards.py -v
+
+# IB adapters
+pytest tests/test_ib_adapters.py -v
+\`\`\`
+
+**Покрытие**: 1,035+ тестов
+```
+
+### Обновление таблицы Quick Reference
+
+Добавить в существующую таблицу "📍 Быстрый поиск по задачам":
+
+```markdown
+| Futures core models | `core_futures.py` | `pytest tests/test_core_futures.py` |
+| Crypto margin calculation | `impl_futures_margin.py` | `pytest tests/test_futures_margin.py` |
+| CME SPAN margin | `impl_futures_margin.py::CMEMarginCalculator` | `pytest tests/test_futures_span_margin.py` |
+| Funding rate tracking | `impl_futures_funding.py` | `pytest tests/test_futures_funding.py` |
+| Liquidation simulation | `impl_futures_liquidation.py` | `pytest tests/test_futures_liquidation.py` |
+| ADL simulation | `impl_futures_liquidation.py::ADLSimulator` | `pytest tests/test_futures_adl.py` |
+| Futures risk guards | `services/futures_risk_guards.py` | `pytest tests/test_futures_risk_guards.py` |
+| IB TWS adapter | `adapters/ib/` | `pytest tests/test_ib_adapters.py` |
+| Margin call notifications | `services/futures_margin_notifications.py` | `pytest tests/test_margin_notifications.py` |
+```
+
+---
+
+## 🧪 INTEGRATION TESTS SPECIFICATION
+
+### Категории интеграционных тестов
+
+#### 1. Cross-Component Integration Tests
+
+```python
+# NEW FILE: tests/integration/test_futures_integration.py
+"""
+End-to-end integration tests for futures trading.
+
+Tests verify that all components work together correctly:
+- Data pipeline → Features → Model → Execution → Position management
+"""
+
+import pytest
+from datetime import datetime, timedelta
+from decimal import Decimal
+
+from core_futures import FuturesContract, FuturesPosition, MarginMode
+from impl_futures_margin import UnifiedMarginCalculator
+from impl_futures_liquidation import LiquidationEngine
+from impl_futures_funding import FundingManager
+from services.futures_risk_guards import FuturesRiskGuardChain
+from execution_providers_futures import FuturesL3ExecutionProvider
+
+
+class TestCryptoFuturesIntegration:
+    """End-to-end crypto futures integration tests."""
+
+    @pytest.fixture
+    def full_trading_stack(self):
+        """Create complete trading stack with all components."""
+        return {
+            "margin_calc": UnifiedMarginCalculator(exchange="binance"),
+            "liquidation": LiquidationEngine(exchange="binance"),
+            "funding": FundingManager(),
+            "risk_guards": FuturesRiskGuardChain.default_chain(),
+            "executor": FuturesL3ExecutionProvider(level="L3"),
+        }
+
+    def test_full_trading_cycle(self, full_trading_stack):
+        """
+        Complete trading cycle:
+        1. Open position
+        2. Check margin requirements
+        3. Apply funding payment
+        4. Close position
+        5. Verify P&L calculation
+        """
+        stack = full_trading_stack
+
+        # 1. Open position
+        position = FuturesPosition(
+            symbol="BTCUSDT",
+            qty=Decimal("1.0"),
+            entry_price=Decimal("50000"),
+            leverage=10,
+            margin_mode=MarginMode.ISOLATED,
+        )
+
+        # 2. Check margin - should pass
+        margin_req = stack["margin_calc"].calculate_margin(position)
+        assert margin_req.is_sufficient(wallet_balance=Decimal("10000"))
+
+        # 3. Apply funding
+        funding_amount = stack["funding"].calculate_funding(
+            position=position,
+            funding_rate=Decimal("0.0003"),  # 3 bps
+            mark_price=Decimal("50100"),
+        )
+        assert funding_amount == Decimal("-15.03")  # Paid (long position, positive rate)
+
+        # 4. Mark-to-market
+        unrealized_pnl = position.calculate_unrealized_pnl(
+            mark_price=Decimal("51000"),
+        )
+        assert unrealized_pnl == Decimal("1000")  # +$1000 on 1 BTC × $1000 move
+
+        # 5. Close position
+        fill = stack["executor"].execute(
+            order=Order(symbol="BTCUSDT", side="SELL", qty=Decimal("1.0")),
+            market=MarketState(bid=Decimal("50990"), ask=Decimal("51010")),
+        )
+        realized_pnl = fill.price * fill.qty - position.entry_price * position.qty
+        assert realized_pnl > Decimal("0")
+
+    def test_liquidation_cascade_integration(self, full_trading_stack):
+        """
+        Test liquidation triggers correctly:
+        1. Position approaches liquidation price
+        2. Liquidation engine detects
+        3. Risk guards fire
+        4. Position force-closed
+        """
+        stack = full_trading_stack
+
+        position = FuturesPosition(
+            symbol="BTCUSDT",
+            qty=Decimal("1.0"),
+            entry_price=Decimal("50000"),
+            leverage=20,  # High leverage
+            margin_mode=MarginMode.ISOLATED,
+        )
+
+        # Price drops significantly
+        mark_price = Decimal("47800")  # ~4.4% drop
+
+        # Should trigger liquidation check
+        liq_result = stack["liquidation"].check_liquidation(
+            position=position,
+            mark_price=mark_price,
+            maintenance_margin_rate=Decimal("0.004"),  # 0.4%
+        )
+
+        assert liq_result.is_liquidatable is True
+        assert liq_result.reason == "margin_ratio_below_maintenance"
+
+    def test_funding_accumulation_over_time(self, full_trading_stack):
+        """Test funding payments accumulate correctly over multiple periods."""
+        stack = full_trading_stack
+
+        position = FuturesPosition(
+            symbol="ETHUSDT",
+            qty=Decimal("10.0"),
+            entry_price=Decimal("3000"),
+            leverage=5,
+        )
+
+        # Simulate 3 funding periods
+        funding_rates = [
+            Decimal("0.0001"),   # 1 bps
+            Decimal("-0.0002"),  # -2 bps (receive)
+            Decimal("0.0003"),   # 3 bps
+        ]
+
+        total_funding = Decimal("0")
+        for rate in funding_rates:
+            payment = stack["funding"].calculate_funding(
+                position=position,
+                funding_rate=rate,
+                mark_price=Decimal("3000"),
+            )
+            total_funding += payment
+
+        # Net: -1 + 2 - 3 = -2 bps = -$6 on $30k position
+        assert total_funding == Decimal("-6")
+
+
+class TestCMEFuturesIntegration:
+    """End-to-end CME futures integration tests."""
+
+    def test_span_margin_with_position_change(self):
+        """SPAN margin recalculation on position changes."""
+        pass
+
+    def test_daily_settlement_integration(self):
+        """Daily settlement at 15:30 ET triggers correctly."""
+        pass
+
+    def test_contract_rollover_integration(self):
+        """Contract rollover preserves position state."""
+        pass
+
+
+class TestCrossExchangeIntegration:
+    """Tests for multi-exchange scenarios."""
+
+    def test_crypto_and_cme_simultaneous(self):
+        """
+        Test running crypto and CME futures simultaneously:
+        - Different margin systems
+        - Different trading hours
+        - Separate risk limits
+        """
+        pass
+
+    def test_feature_flag_isolation(self):
+        """Feature flags correctly isolate exchange behavior."""
+        pass
+```
+
+#### 2. Data Pipeline Integration Tests
+
+```python
+# NEW FILE: tests/integration/test_futures_data_integration.py
+"""
+Data pipeline integration tests.
+
+Tests verify:
+- Data download → Validation → Feature generation → Training
+"""
+
+class TestFuturesDataPipeline:
+    """Data pipeline integration tests."""
+
+    def test_funding_data_to_features(self):
+        """Funding rate data correctly flows to features."""
+        # Download → Parse → Validate → Feature extraction
+        pass
+
+    def test_mark_price_temporal_alignment(self):
+        """Mark price aligns with OHLCV data temporally."""
+        pass
+
+    def test_liquidation_data_integration(self):
+        """Liquidation cascades appear in order flow features."""
+        pass
+
+    def test_feature_shift_prevents_leakage(self):
+        """No look-ahead bias in futures features."""
+        # Apply shift_features_for_lookahead()
+        # Verify features at t don't use data from t+1
+        pass
+```
+
+#### 3. Training Integration Tests
+
+```python
+# NEW FILE: tests/integration/test_futures_training_integration.py
+"""
+Training pipeline integration tests.
+"""
+
+class TestFuturesTrainingIntegration:
+    """Training integration tests."""
+
+    def test_training_with_liquidation_episodes(self):
+        """Training handles liquidation-terminated episodes."""
+        pass
+
+    def test_reward_includes_funding(self):
+        """Reward correctly includes funding payments."""
+        pass
+
+    def test_model_checkpoint_includes_futures_state(self):
+        """Model checkpoints save futures-specific state."""
+        pass
+```
+
+#### 4. Live Trading Integration Tests
+
+```python
+# NEW FILE: tests/integration/test_futures_live_integration.py
+"""
+Live trading integration tests (paper mode).
+"""
+
+class TestFuturesLiveIntegration:
+    """Live trading integration tests."""
+
+    @pytest.mark.integration
+    @pytest.mark.slow
+    def test_position_sync_recovery(self):
+        """Position sync recovers after disconnect."""
+        pass
+
+    @pytest.mark.integration
+    def test_margin_call_notification_flow(self):
+        """Margin call triggers notification chain."""
+        pass
+
+    @pytest.mark.integration
+    def test_rate_limiter_under_load(self):
+        """Rate limiter prevents API violations under load."""
+        pass
+```
+
+### Test Configuration
+
+```yaml
+# NEW FILE: tests/integration/pytest_integration.ini
+[pytest]
+markers =
+    integration: Integration tests (may require external services)
+    slow: Slow tests (> 10 seconds)
+    requires_api: Tests requiring live API connection
+
+testpaths =
+    tests/integration
+
+timeout = 120
+timeout_method = thread
+
+# Run integration tests with: pytest -m integration
+# Skip slow tests with: pytest -m "not slow"
+```
+
+### Coverage Requirements
+
+| Category | Minimum Coverage | Target Coverage |
+|----------|-----------------|-----------------|
+| Core Models | 95% | 100% |
+| Margin Calculators | 90% | 95% |
+| Liquidation Engine | 95% | 100% |
+| Risk Guards | 90% | 95% |
+| Adapters | 85% | 90% |
+| Features Pipeline | 90% | 95% |
+
+---
+
+## 📊 MONITORING DASHBOARDS CONFIGURATION
+
+### Prometheus Metrics
+
+```yaml
+# NEW FILE: configs/monitoring/futures_metrics.yaml
+# Prometheus metrics configuration for futures trading
+
+metrics:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # POSITION METRICS
+  # ═══════════════════════════════════════════════════════════════════════════
+  position_metrics:
+    - name: futures_position_value_usd
+      type: gauge
+      help: "Current position value in USD"
+      labels: [symbol, side, exchange]
+
+    - name: futures_position_leverage
+      type: gauge
+      help: "Current leverage for position"
+      labels: [symbol, exchange]
+
+    - name: futures_unrealized_pnl_usd
+      type: gauge
+      help: "Unrealized P&L in USD"
+      labels: [symbol, side]
+
+    - name: futures_margin_ratio
+      type: gauge
+      help: "Current margin ratio (equity/maintenance)"
+      labels: [symbol, margin_mode]
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # FUNDING METRICS
+  # ═══════════════════════════════════════════════════════════════════════════
+  funding_metrics:
+    - name: futures_funding_rate_bps
+      type: gauge
+      help: "Current funding rate in basis points"
+      labels: [symbol]
+
+    - name: futures_funding_payment_usd_total
+      type: counter
+      help: "Total funding payments (cumulative)"
+      labels: [symbol, direction]  # direction: paid/received
+
+    - name: futures_predicted_funding_rate_bps
+      type: gauge
+      help: "Predicted next funding rate"
+      labels: [symbol]
+
+    - name: futures_funding_rate_8h_avg_bps
+      type: gauge
+      help: "8-hour average funding rate"
+      labels: [symbol]
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # LIQUIDATION METRICS
+  # ═══════════════════════════════════════════════════════════════════════════
+  liquidation_metrics:
+    - name: futures_liquidation_price_distance_pct
+      type: gauge
+      help: "Distance to liquidation price in percent"
+      labels: [symbol, side]
+
+    - name: futures_liquidation_events_total
+      type: counter
+      help: "Total liquidation events"
+      labels: [symbol, reason]  # reason: margin_call, mark_price, adl
+
+    - name: futures_adl_queue_rank
+      type: gauge
+      help: "ADL queue rank (1-5, higher = more risk)"
+      labels: [symbol, side]
+
+    - name: futures_margin_call_events_total
+      type: counter
+      help: "Total margin call events by level"
+      labels: [symbol, level]  # level: warning, danger, critical
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # EXECUTION METRICS
+  # ═══════════════════════════════════════════════════════════════════════════
+  execution_metrics:
+    - name: futures_order_fill_rate
+      type: gauge
+      help: "Order fill rate (0-1)"
+      labels: [symbol, order_type, side]
+
+    - name: futures_slippage_bps
+      type: histogram
+      help: "Execution slippage in basis points"
+      labels: [symbol, side, liquidity_role]
+      buckets: [0.5, 1, 2, 5, 10, 20, 50, 100]
+
+    - name: futures_fill_latency_ms
+      type: histogram
+      help: "Order fill latency in milliseconds"
+      labels: [symbol, order_type]
+      buckets: [10, 50, 100, 500, 1000, 5000]
+
+    - name: futures_fees_paid_usd_total
+      type: counter
+      help: "Total fees paid in USD"
+      labels: [symbol, fee_type]  # fee_type: maker, taker, funding
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # RISK METRICS
+  # ═══════════════════════════════════════════════════════════════════════════
+  risk_metrics:
+    - name: futures_risk_guard_triggers_total
+      type: counter
+      help: "Risk guard trigger count"
+      labels: [guard_type, action]  # action: blocked, warning, passed
+
+    - name: futures_max_leverage_used
+      type: gauge
+      help: "Maximum leverage used across positions"
+      labels: [exchange]
+
+    - name: futures_concentration_ratio
+      type: gauge
+      help: "Position concentration (largest/total)"
+      labels: [exchange]
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # API METRICS (IB + Binance)
+  # ═══════════════════════════════════════════════════════════════════════════
+  api_metrics:
+    - name: futures_api_requests_total
+      type: counter
+      help: "Total API requests"
+      labels: [exchange, endpoint, status]
+
+    - name: futures_api_latency_ms
+      type: histogram
+      help: "API request latency"
+      labels: [exchange, endpoint]
+      buckets: [10, 50, 100, 200, 500, 1000, 2000, 5000]
+
+    - name: futures_api_rate_limit_remaining
+      type: gauge
+      help: "Remaining rate limit quota"
+      labels: [exchange, limit_type]
+
+    - name: futures_websocket_reconnects_total
+      type: counter
+      help: "WebSocket reconnection count"
+      labels: [exchange, stream_type]
+```
+
+### Grafana Dashboard Configuration
+
+```json
+// NEW FILE: configs/monitoring/grafana/futures_dashboard.json
+{
+  "dashboard": {
+    "title": "Futures Trading Dashboard",
+    "uid": "futures-main",
+    "tags": ["futures", "trading", "production"],
+    "refresh": "10s",
+    "rows": [
+      {
+        "title": "Position Overview",
+        "panels": [
+          {
+            "title": "Total Position Value (USD)",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "sum(futures_position_value_usd)",
+                "legendFormat": "Total Value"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {
+                "unit": "currencyUSD",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"color": "green", "value": null},
+                    {"color": "yellow", "value": 100000},
+                    {"color": "red", "value": 500000}
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "title": "Margin Ratio by Symbol",
+            "type": "gauge",
+            "targets": [
+              {
+                "expr": "futures_margin_ratio",
+                "legendFormat": "{{symbol}}"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {
+                "min": 0,
+                "max": 10,
+                "thresholds": {
+                  "steps": [
+                    {"color": "red", "value": 0},
+                    {"color": "orange", "value": 1.5},
+                    {"color": "yellow", "value": 2.0},
+                    {"color": "green", "value": 3.0}
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "title": "Unrealized P&L",
+            "type": "timeseries",
+            "targets": [
+              {
+                "expr": "futures_unrealized_pnl_usd",
+                "legendFormat": "{{symbol}} ({{side}})"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Funding Rates",
+        "panels": [
+          {
+            "title": "Current Funding Rates (bps)",
+            "type": "table",
+            "targets": [
+              {
+                "expr": "futures_funding_rate_bps",
+                "format": "table",
+                "instant": true
+              }
+            ]
+          },
+          {
+            "title": "Funding Rate History",
+            "type": "timeseries",
+            "targets": [
+              {
+                "expr": "futures_funding_rate_bps",
+                "legendFormat": "{{symbol}}"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {
+                "custom": {
+                  "lineWidth": 2,
+                  "fillOpacity": 10
+                }
+              }
+            }
+          },
+          {
+            "title": "Cumulative Funding Paid/Received",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "sum(futures_funding_payment_usd_total{direction='paid'})",
+                "legendFormat": "Paid"
+              },
+              {
+                "expr": "sum(futures_funding_payment_usd_total{direction='received'})",
+                "legendFormat": "Received"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Risk & Liquidation",
+        "panels": [
+          {
+            "title": "Distance to Liquidation",
+            "type": "gauge",
+            "targets": [
+              {
+                "expr": "futures_liquidation_price_distance_pct",
+                "legendFormat": "{{symbol}}"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {
+                "unit": "percent",
+                "min": 0,
+                "max": 50,
+                "thresholds": {
+                  "steps": [
+                    {"color": "red", "value": 0},
+                    {"color": "orange", "value": 5},
+                    {"color": "yellow", "value": 10},
+                    {"color": "green", "value": 20}
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "title": "ADL Queue Position",
+            "type": "bargauge",
+            "targets": [
+              {
+                "expr": "futures_adl_queue_rank",
+                "legendFormat": "{{symbol}}"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {
+                "min": 1,
+                "max": 5,
+                "thresholds": {
+                  "steps": [
+                    {"color": "green", "value": 1},
+                    {"color": "yellow", "value": 3},
+                    {"color": "orange", "value": 4},
+                    {"color": "red", "value": 5}
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "title": "Margin Calls (Last 24h)",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "increase(futures_margin_call_events_total[24h])",
+                "legendFormat": "{{level}}"
+              }
+            ]
+          },
+          {
+            "title": "Risk Guard Triggers",
+            "type": "timeseries",
+            "targets": [
+              {
+                "expr": "rate(futures_risk_guard_triggers_total[5m])",
+                "legendFormat": "{{guard_type}} - {{action}}"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "title": "Execution Quality",
+        "panels": [
+          {
+            "title": "Slippage Distribution (bps)",
+            "type": "histogram",
+            "targets": [
+              {
+                "expr": "futures_slippage_bps_bucket",
+                "legendFormat": "{{le}} bps"
+              }
+            ]
+          },
+          {
+            "title": "Fill Rate by Order Type",
+            "type": "bargauge",
+            "targets": [
+              {
+                "expr": "futures_order_fill_rate",
+                "legendFormat": "{{order_type}}"
+              }
+            ]
+          },
+          {
+            "title": "Fill Latency p95",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "histogram_quantile(0.95, futures_fill_latency_ms_bucket)",
+                "legendFormat": "p95 Latency"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ms"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "title": "API Health",
+        "panels": [
+          {
+            "title": "API Request Rate",
+            "type": "timeseries",
+            "targets": [
+              {
+                "expr": "rate(futures_api_requests_total[1m])",
+                "legendFormat": "{{exchange}} - {{endpoint}}"
+              }
+            ]
+          },
+          {
+            "title": "Rate Limit Remaining",
+            "type": "gauge",
+            "targets": [
+              {
+                "expr": "futures_api_rate_limit_remaining",
+                "legendFormat": "{{exchange}} - {{limit_type}}"
+              }
+            ]
+          },
+          {
+            "title": "WebSocket Reconnects (24h)",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "increase(futures_websocket_reconnects_total[24h])",
+                "legendFormat": "{{exchange}}"
+              }
+            ]
+          },
+          {
+            "title": "API Latency p99",
+            "type": "timeseries",
+            "targets": [
+              {
+                "expr": "histogram_quantile(0.99, futures_api_latency_ms_bucket)",
+                "legendFormat": "{{exchange}}"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+### Alert Rules
+
+```yaml
+# NEW FILE: configs/monitoring/alerts/futures_alerts.yaml
+# Prometheus alerting rules for futures trading
+
+groups:
+  - name: futures_critical
+    rules:
+      # ─────────────────────────────────────────────────────────────────────────
+      # MARGIN ALERTS
+      # ─────────────────────────────────────────────────────────────────────────
+      - alert: FuturesMarginCritical
+        expr: futures_margin_ratio < 1.2
+        for: 1m
+        labels:
+          severity: critical
+          team: trading
+        annotations:
+          summary: "Critical margin ratio on {{ $labels.symbol }}"
+          description: "Margin ratio {{ $value }} is below 1.2 (critical threshold)"
+          runbook: "https://docs.internal/runbooks/margin-critical"
+
+      - alert: FuturesLiquidationImminent
+        expr: futures_liquidation_price_distance_pct < 2
+        for: 30s
+        labels:
+          severity: critical
+          team: trading
+          page: true
+        annotations:
+          summary: "Liquidation imminent on {{ $labels.symbol }}"
+          description: "Distance to liquidation is {{ $value }}%"
+          action: "Immediately reduce position or add margin"
+
+      # ─────────────────────────────────────────────────────────────────────────
+      # FUNDING ALERTS
+      # ─────────────────────────────────────────────────────────────────────────
+      - alert: FuturesHighFundingRate
+        expr: abs(futures_funding_rate_bps) > 50
+        for: 5m
+        labels:
+          severity: warning
+          team: trading
+        annotations:
+          summary: "High funding rate on {{ $labels.symbol }}"
+          description: "Funding rate is {{ $value }} bps"
+
+      - alert: FuturesFundingExcessivePaid
+        expr: increase(futures_funding_payment_usd_total{direction="paid"}[24h]) > 1000
+        for: 1m
+        labels:
+          severity: warning
+          team: trading
+        annotations:
+          summary: "Excessive funding paid on {{ $labels.symbol }}"
+          description: "Paid ${{ $value }} in funding over 24h"
+
+      # ─────────────────────────────────────────────────────────────────────────
+      # ADL ALERTS
+      # ─────────────────────────────────────────────────────────────────────────
+      - alert: FuturesADLHighRisk
+        expr: futures_adl_queue_rank >= 4
+        for: 5m
+        labels:
+          severity: warning
+          team: trading
+        annotations:
+          summary: "High ADL risk on {{ $labels.symbol }}"
+          description: "ADL queue rank is {{ $value }}/5"
+
+      # ─────────────────────────────────────────────────────────────────────────
+      # API ALERTS
+      # ─────────────────────────────────────────────────────────────────────────
+      - alert: FuturesAPIRateLimitLow
+        expr: futures_api_rate_limit_remaining < 10
+        for: 1m
+        labels:
+          severity: warning
+          team: infrastructure
+        annotations:
+          summary: "API rate limit nearly exhausted for {{ $labels.exchange }}"
+          description: "Only {{ $value }} requests remaining"
+
+      - alert: FuturesAPIHighLatency
+        expr: histogram_quantile(0.99, futures_api_latency_ms_bucket) > 2000
+        for: 5m
+        labels:
+          severity: warning
+          team: infrastructure
+        annotations:
+          summary: "High API latency for {{ $labels.exchange }}"
+          description: "p99 latency is {{ $value }}ms"
+
+      - alert: FuturesWebSocketDisconnected
+        expr: increase(futures_websocket_reconnects_total[5m]) > 3
+        for: 1m
+        labels:
+          severity: warning
+          team: infrastructure
+        annotations:
+          summary: "Frequent WebSocket reconnects for {{ $labels.exchange }}"
+          description: "{{ $value }} reconnects in 5 minutes"
+
+      # ─────────────────────────────────────────────────────────────────────────
+      # EXECUTION ALERTS
+      # ─────────────────────────────────────────────────────────────────────────
+      - alert: FuturesHighSlippage
+        expr: histogram_quantile(0.95, futures_slippage_bps_bucket) > 10
+        for: 10m
+        labels:
+          severity: warning
+          team: trading
+        annotations:
+          summary: "High slippage on {{ $labels.symbol }}"
+          description: "p95 slippage is {{ $value }} bps"
+
+      - alert: FuturesLowFillRate
+        expr: futures_order_fill_rate < 0.8
+        for: 15m
+        labels:
+          severity: warning
+          team: trading
+        annotations:
+          summary: "Low fill rate on {{ $labels.symbol }}"
+          description: "Fill rate is {{ $value | humanizePercentage }}"
+```
+
+### Metrics Collection Implementation
+
+```python
+# NEW FILE: services/futures_metrics.py
+"""
+Prometheus metrics collector for futures trading.
+
+Usage:
+    from services.futures_metrics import FuturesMetrics
+
+    metrics = FuturesMetrics()
+    metrics.update_position(position)
+    metrics.record_funding_payment(symbol, amount)
+    metrics.record_fill(fill)
+"""
+
+from prometheus_client import Counter, Gauge, Histogram, CollectorRegistry
+from typing import Optional
+from decimal import Decimal
+
+
+class FuturesMetrics:
+    """Prometheus metrics for futures trading."""
+
+    def __init__(self, registry: Optional[CollectorRegistry] = None):
+        self.registry = registry or CollectorRegistry()
+
+        # Position metrics
+        self.position_value = Gauge(
+            "futures_position_value_usd",
+            "Current position value in USD",
+            ["symbol", "side", "exchange"],
+            registry=self.registry,
+        )
+        self.margin_ratio = Gauge(
+            "futures_margin_ratio",
+            "Current margin ratio",
+            ["symbol", "margin_mode"],
+            registry=self.registry,
+        )
+        self.unrealized_pnl = Gauge(
+            "futures_unrealized_pnl_usd",
+            "Unrealized P&L in USD",
+            ["symbol", "side"],
+            registry=self.registry,
+        )
+
+        # Funding metrics
+        self.funding_rate = Gauge(
+            "futures_funding_rate_bps",
+            "Current funding rate in basis points",
+            ["symbol"],
+            registry=self.registry,
+        )
+        self.funding_payment = Counter(
+            "futures_funding_payment_usd_total",
+            "Total funding payments",
+            ["symbol", "direction"],
+            registry=self.registry,
+        )
+
+        # Liquidation metrics
+        self.liquidation_distance = Gauge(
+            "futures_liquidation_price_distance_pct",
+            "Distance to liquidation price",
+            ["symbol", "side"],
+            registry=self.registry,
+        )
+        self.adl_rank = Gauge(
+            "futures_adl_queue_rank",
+            "ADL queue rank (1-5)",
+            ["symbol", "side"],
+            registry=self.registry,
+        )
+        self.margin_call_events = Counter(
+            "futures_margin_call_events_total",
+            "Margin call events by level",
+            ["symbol", "level"],
+            registry=self.registry,
+        )
+
+        # Execution metrics
+        self.slippage = Histogram(
+            "futures_slippage_bps",
+            "Execution slippage in basis points",
+            ["symbol", "side", "liquidity_role"],
+            buckets=[0.5, 1, 2, 5, 10, 20, 50, 100],
+            registry=self.registry,
+        )
+        self.fill_latency = Histogram(
+            "futures_fill_latency_ms",
+            "Order fill latency",
+            ["symbol", "order_type"],
+            buckets=[10, 50, 100, 500, 1000, 5000],
+            registry=self.registry,
+        )
+
+        # API metrics
+        self.api_requests = Counter(
+            "futures_api_requests_total",
+            "Total API requests",
+            ["exchange", "endpoint", "status"],
+            registry=self.registry,
+        )
+        self.api_latency = Histogram(
+            "futures_api_latency_ms",
+            "API request latency",
+            ["exchange", "endpoint"],
+            buckets=[10, 50, 100, 200, 500, 1000, 2000, 5000],
+            registry=self.registry,
+        )
+        self.rate_limit_remaining = Gauge(
+            "futures_api_rate_limit_remaining",
+            "Remaining rate limit quota",
+            ["exchange", "limit_type"],
+            registry=self.registry,
+        )
+
+    def update_position(
+        self,
+        symbol: str,
+        side: str,
+        exchange: str,
+        value_usd: Decimal,
+        margin_ratio: Decimal,
+        unrealized_pnl: Decimal,
+        margin_mode: str = "isolated",
+    ) -> None:
+        """Update position metrics."""
+        self.position_value.labels(
+            symbol=symbol, side=side, exchange=exchange
+        ).set(float(value_usd))
+
+        self.margin_ratio.labels(
+            symbol=symbol, margin_mode=margin_mode
+        ).set(float(margin_ratio))
+
+        self.unrealized_pnl.labels(
+            symbol=symbol, side=side
+        ).set(float(unrealized_pnl))
+
+    def record_funding_payment(
+        self,
+        symbol: str,
+        amount: Decimal,
+    ) -> None:
+        """Record funding payment."""
+        direction = "paid" if amount < 0 else "received"
+        self.funding_payment.labels(
+            symbol=symbol, direction=direction
+        ).inc(abs(float(amount)))
+
+    def update_funding_rate(self, symbol: str, rate_bps: float) -> None:
+        """Update current funding rate."""
+        self.funding_rate.labels(symbol=symbol).set(rate_bps)
+
+    def update_liquidation_distance(
+        self,
+        symbol: str,
+        side: str,
+        distance_pct: float,
+    ) -> None:
+        """Update distance to liquidation."""
+        self.liquidation_distance.labels(
+            symbol=symbol, side=side
+        ).set(distance_pct)
+
+    def update_adl_rank(self, symbol: str, side: str, rank: int) -> None:
+        """Update ADL queue rank."""
+        self.adl_rank.labels(symbol=symbol, side=side).set(rank)
+
+    def record_margin_call(self, symbol: str, level: str) -> None:
+        """Record margin call event."""
+        self.margin_call_events.labels(symbol=symbol, level=level).inc()
+
+    def record_fill(
+        self,
+        symbol: str,
+        side: str,
+        order_type: str,
+        slippage_bps: float,
+        latency_ms: float,
+        liquidity_role: str,
+    ) -> None:
+        """Record order fill metrics."""
+        self.slippage.labels(
+            symbol=symbol, side=side, liquidity_role=liquidity_role
+        ).observe(slippage_bps)
+
+        self.fill_latency.labels(
+            symbol=symbol, order_type=order_type
+        ).observe(latency_ms)
+
+    def record_api_request(
+        self,
+        exchange: str,
+        endpoint: str,
+        status: str,
+        latency_ms: float,
+    ) -> None:
+        """Record API request metrics."""
+        self.api_requests.labels(
+            exchange=exchange, endpoint=endpoint, status=status
+        ).inc()
+        self.api_latency.labels(
+            exchange=exchange, endpoint=endpoint
+        ).observe(latency_ms)
+
+    def update_rate_limit(
+        self,
+        exchange: str,
+        limit_type: str,
+        remaining: int,
+    ) -> None:
+        """Update rate limit remaining."""
+        self.rate_limit_remaining.labels(
+            exchange=exchange, limit_type=limit_type
+        ).set(remaining)
+```
 
 ---
 
