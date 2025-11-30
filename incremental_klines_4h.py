@@ -78,7 +78,7 @@ def _get_with_retry(url: str, *, params: dict, retries: int = 3, backoff: float 
 
 
 def _header_needed(path: str) -> bool:
-    """Return ``True`` if the CSV is missing and header should be written."""
+    """Return ``True`` when the CSV is absent and needs a header row."""
     return not os.path.exists(path)
 
 

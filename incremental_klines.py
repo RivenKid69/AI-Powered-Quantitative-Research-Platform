@@ -30,7 +30,7 @@ BASE = "https://api.binance.com/api/v3/klines"
 OUT_DIR = os.path.join("data", "candles")
 os.makedirs(OUT_DIR, exist_ok=True)
 
-INTERVAL_MS = 14_400_000  # 4h (changed from 3_600_000 = 1h)
+INTERVAL_MS = 14_400_000  # 4h interval in milliseconds
 MAX_BATCH = 1000
 
 HEADER = [
@@ -130,7 +130,7 @@ def _read_first_ts(path: str) -> Optional[int]:
 def _fetch_earliest_open_time(symbol: str) -> Optional[int]:
     params = {
         "symbol": symbol.upper(),
-        "interval": "4h",  # Changed from 1h to 4h for 4-hour timeframe
+        "interval": "4h",  # Explicit 4h Binance interval
         "startTime": 0,
         "limit": 1,
     }
@@ -216,7 +216,7 @@ def sync_symbol(symbol: str, close_lag_ms: int, *, out_dir: Optional[str] = None
         limit = min(MAX_BATCH, steps)
         params = {
             "symbol": symbol.upper(),
-            "interval": "4h",  # Changed from 1h to 4h for 4-hour timeframe
+            "interval": "4h",  # Explicit 4h Binance interval
             "startTime": cursor,
             "limit": max(limit, 1),
         }
