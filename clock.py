@@ -11,7 +11,9 @@ from binance_public import BinancePublicClient
 from core_config import ClockSyncConfig
 from services.rest_budget import RestBudgetSession
 
-# Global clock skew in milliseconds (server - local) and last sync timestamp
+# Global clock skew in milliseconds (server - local) and last sync timestamp (ms)
+# Explicitly keep ``last_sync_at`` in milliseconds to match ``system_utc_ms`` so
+# age calculations divide by 1000 cleanly.
 clock_skew_ms: float = 0.0
 last_sync_at: float = 0.0
 
