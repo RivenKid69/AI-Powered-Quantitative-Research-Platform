@@ -1,0 +1,648 @@
+# CME Contract Specifications Database
+# Phase 0 Deliverable: Unified Futures Integration
+# Version: 1.0
+# Date: 2025-11-30
+#
+# Sources:
+# - CME Group: https://www.cmegroup.com/trading/products/
+# - Interactive Brokers Contract Database
+# - Exchange specifications as of 2025-11-30
+#
+# Notes:
+# - Margins are approximate and change frequently based on volatility
+# - All times are in US Central Time (CT) unless noted
+# - Multiplier is the dollar value per point
+
+---
+# Metadata
+metadata:
+  version: "1.0"
+  last_updated: "2025-11-30"
+  data_source: "CME Group / Interactive Brokers"
+  notes: |
+    Contract specifications for futures trading integration.
+    Margins are indicative and should be fetched from broker at runtime.
+
+# =============================================================================
+# EQUITY INDEX FUTURES
+# =============================================================================
+equity_index:
+  ES:
+    name: "E-mini S&P 500"
+    exchange: CME
+    underlying: "S&P 500 Index"
+    currency: USD
+    multiplier: 50.0  # $50 per index point
+    tick_size: 0.25
+    tick_value: 12.50  # $50 × 0.25
+    contract_months: [H, M, U, Z]  # Mar, Jun, Sep, Dec
+    expiration_rule: "3rd Friday of contract month"
+    settlement_type: cash
+    trading_hours:
+      globex_start: "17:00"  # Sunday
+      globex_end: "16:00"    # Friday
+      maintenance: "15:15-15:30"
+      timezone: "US/Central"
+    margin:
+      initial_pct: 5.5
+      maintenance_pct: 5.0
+      approx_initial_usd: 12000
+      approx_maintenance_usd: 10800
+    price_limits:
+      level_1_pct: 7
+      level_2_pct: 13
+      level_3_pct: 20
+    micro_contract:
+      symbol: MES
+      multiplier: 5.0
+      tick_value: 1.25
+
+  NQ:
+    name: "E-mini Nasdaq-100"
+    exchange: CME
+    underlying: "Nasdaq-100 Index"
+    currency: USD
+    multiplier: 20.0  # $20 per index point
+    tick_size: 0.25
+    tick_value: 5.00
+    contract_months: [H, M, U, Z]
+    expiration_rule: "3rd Friday of contract month"
+    settlement_type: cash
+    trading_hours:
+      globex_start: "17:00"
+      globex_end: "16:00"
+      maintenance: "15:15-15:30"
+      timezone: "US/Central"
+    margin:
+      initial_pct: 5.5
+      maintenance_pct: 5.0
+      approx_initial_usd: 16000
+      approx_maintenance_usd: 14400
+    price_limits:
+      level_1_pct: 7
+      level_2_pct: 13
+      level_3_pct: 20
+    micro_contract:
+      symbol: MNQ
+      multiplier: 2.0
+      tick_value: 0.50
+
+  YM:
+    name: "E-mini Dow"
+    exchange: CBOT
+    underlying: "Dow Jones Industrial Average"
+    currency: USD
+    multiplier: 5.0  # $5 per index point
+    tick_size: 1.0
+    tick_value: 5.00
+    contract_months: [H, M, U, Z]
+    expiration_rule: "3rd Friday of contract month"
+    settlement_type: cash
+    trading_hours:
+      globex_start: "17:00"
+      globex_end: "16:00"
+      maintenance: "15:15-15:30"
+      timezone: "US/Central"
+    margin:
+      initial_pct: 5.5
+      maintenance_pct: 5.0
+      approx_initial_usd: 9000
+      approx_maintenance_usd: 8100
+    price_limits:
+      level_1_pct: 7
+      level_2_pct: 13
+      level_3_pct: 20
+    micro_contract:
+      symbol: MYM
+      multiplier: 0.5
+      tick_value: 0.50
+
+  RTY:
+    name: "E-mini Russell 2000"
+    exchange: CME
+    underlying: "Russell 2000 Index"
+    currency: USD
+    multiplier: 50.0  # $50 per index point
+    tick_size: 0.10
+    tick_value: 5.00
+    contract_months: [H, M, U, Z]
+    expiration_rule: "3rd Friday of contract month"
+    settlement_type: cash
+    trading_hours:
+      globex_start: "17:00"
+      globex_end: "16:00"
+      maintenance: "15:15-15:30"
+      timezone: "US/Central"
+    margin:
+      initial_pct: 6.0
+      maintenance_pct: 5.5
+      approx_initial_usd: 7000
+      approx_maintenance_usd: 6300
+    price_limits:
+      level_1_pct: 7
+      level_2_pct: 13
+      level_3_pct: 20
+    micro_contract:
+      symbol: M2K
+      multiplier: 5.0
+      tick_value: 0.50
+
+# =============================================================================
+# COMMODITY FUTURES - METALS
+# =============================================================================
+commodity_metals:
+  GC:
+    name: "Gold Futures"
+    exchange: COMEX
+    underlying: "Gold (100 troy oz)"
+    currency: USD
+    multiplier: 100.0  # 100 troy ounces
+    tick_size: 0.10
+    tick_value: 10.00
+    contract_months: [G, J, M, Q, V, Z]  # Feb, Apr, Jun, Aug, Oct, Dec
+    expiration_rule: "3rd last business day of month before delivery month"
+    settlement_type: physical
+    first_notice_day: "last business day of month before delivery"
+    trading_hours:
+      globex_start: "17:00"
+      globex_end: "16:00"
+      maintenance: "16:15-16:30"
+      timezone: "US/Central"
+    margin:
+      initial_pct: 4.0
+      maintenance_pct: 3.6
+      approx_initial_usd: 8000
+      approx_maintenance_usd: 7200
+    price_limits:
+      daily_limit_usd: 150.0  # $150/oz
+    micro_contract:
+      symbol: MGC
+      multiplier: 10.0
+      tick_value: 1.00
+
+  SI:
+    name: "Silver Futures"
+    exchange: COMEX
+    underlying: "Silver (5000 troy oz)"
+    currency: USD
+    multiplier: 5000.0  # 5000 troy ounces
+    tick_size: 0.005
+    tick_value: 25.00
+    contract_months: [H, K, N, U, Z]  # Mar, May, Jul, Sep, Dec
+    expiration_rule: "3rd last business day of month before delivery"
+    settlement_type: physical
+    trading_hours:
+      globex_start: "17:00"
+      globex_end: "16:00"
+      maintenance: "16:15-16:30"
+      timezone: "US/Central"
+    margin:
+      initial_pct: 6.0
+      maintenance_pct: 5.4
+      approx_initial_usd: 9000
+      approx_maintenance_usd: 8100
+    micro_contract:
+      symbol: SIL
+      multiplier: 1000.0
+      tick_value: 5.00
+
+  HG:
+    name: "Copper Futures"
+    exchange: COMEX
+    underlying: "Copper (25000 lbs)"
+    currency: USD
+    multiplier: 25000.0  # 25000 pounds
+    tick_size: 0.0005
+    tick_value: 12.50
+    contract_months: [H, K, N, U, Z]  # Mar, May, Jul, Sep, Dec
+    expiration_rule: "3rd last business day of delivery month"
+    settlement_type: physical
+    trading_hours:
+      globex_start: "17:00"
+      globex_end: "16:00"
+      maintenance: "16:15-16:30"
+      timezone: "US/Central"
+    margin:
+      initial_pct: 5.5
+      maintenance_pct: 5.0
+      approx_initial_usd: 5500
+      approx_maintenance_usd: 5000
+
+# =============================================================================
+# COMMODITY FUTURES - ENERGY
+# =============================================================================
+commodity_energy:
+  CL:
+    name: "Crude Oil Futures (WTI)"
+    exchange: NYMEX
+    underlying: "West Texas Intermediate Crude Oil (1000 barrels)"
+    currency: USD
+    multiplier: 1000.0  # 1000 barrels
+    tick_size: 0.01
+    tick_value: 10.00
+    contract_months: [F, G, H, J, K, M, N, Q, U, V, X, Z]  # All months
+    expiration_rule: "3rd business day before 25th calendar day"
+    settlement_type: physical
+    first_notice_day: "1st business day of delivery month"
+    trading_hours:
+      globex_start: "17:00"
+      globex_end: "16:00"
+      maintenance: "16:15-16:30"
+      timezone: "US/Central"
+    margin:
+      initial_pct: 7.0
+      maintenance_pct: 6.3
+      approx_initial_usd: 8500
+      approx_maintenance_usd: 7650
+    price_limits:
+      daily_limit_usd: 15.0  # $15/barrel
+    micro_contract:
+      symbol: MCL
+      multiplier: 100.0
+      tick_value: 1.00
+
+  NG:
+    name: "Natural Gas Futures"
+    exchange: NYMEX
+    underlying: "Natural Gas (10000 MMBtu)"
+    currency: USD
+    multiplier: 10000.0  # 10000 MMBtu
+    tick_size: 0.001
+    tick_value: 10.00
+    contract_months: [F, G, H, J, K, M, N, Q, U, V, X, Z]  # All months
+    expiration_rule: "3rd last business day of month before delivery"
+    settlement_type: physical
+    trading_hours:
+      globex_start: "17:00"
+      globex_end: "16:00"
+      maintenance: "16:15-16:30"
+      timezone: "US/Central"
+    margin:
+      initial_pct: 8.0
+      maintenance_pct: 7.2
+      approx_initial_usd: 4500
+      approx_maintenance_usd: 4050
+    price_limits:
+      daily_limit_usd: 3.0  # $3/MMBtu
+
+  RB:
+    name: "RBOB Gasoline Futures"
+    exchange: NYMEX
+    underlying: "RBOB Gasoline (42000 gallons)"
+    currency: USD
+    multiplier: 42000.0  # 42000 gallons
+    tick_size: 0.0001
+    tick_value: 4.20
+    contract_months: [F, G, H, J, K, M, N, Q, U, V, X, Z]  # All months
+    expiration_rule: "last business day of month before delivery"
+    settlement_type: physical
+    trading_hours:
+      globex_start: "17:00"
+      globex_end: "16:00"
+      maintenance: "16:15-16:30"
+      timezone: "US/Central"
+    margin:
+      initial_pct: 7.0
+      maintenance_pct: 6.3
+      approx_initial_usd: 7500
+      approx_maintenance_usd: 6750
+
+# =============================================================================
+# CURRENCY FUTURES
+# =============================================================================
+currency:
+  "6E":
+    name: "Euro FX Futures"
+    exchange: CME
+    underlying: "EUR/USD (125000 EUR)"
+    currency: USD
+    multiplier: 125000.0  # 125000 EUR
+    tick_size: 0.00005
+    tick_value: 6.25
+    contract_months: [H, M, U, Z]  # Mar, Jun, Sep, Dec
+    expiration_rule: "2nd business day before 3rd Wednesday"
+    settlement_type: cash
+    trading_hours:
+      globex_start: "17:00"
+      globex_end: "16:00"
+      maintenance: "16:15-16:30"
+      timezone: "US/Central"
+    margin:
+      initial_pct: 2.0
+      maintenance_pct: 1.8
+      approx_initial_usd: 2500
+      approx_maintenance_usd: 2250
+    micro_contract:
+      symbol: M6E
+      multiplier: 12500.0
+      tick_value: 0.625
+
+  "6J":
+    name: "Japanese Yen Futures"
+    exchange: CME
+    underlying: "USD/JPY (12500000 JPY)"
+    currency: USD
+    multiplier: 12500000.0  # 12.5 million JPY
+    tick_size: 0.0000005
+    tick_value: 6.25
+    contract_months: [H, M, U, Z]
+    expiration_rule: "2nd business day before 3rd Wednesday"
+    settlement_type: cash
+    trading_hours:
+      globex_start: "17:00"
+      globex_end: "16:00"
+      maintenance: "16:15-16:30"
+      timezone: "US/Central"
+    margin:
+      initial_pct: 2.5
+      maintenance_pct: 2.25
+      approx_initial_usd: 3000
+      approx_maintenance_usd: 2700
+    micro_contract:
+      symbol: M6J
+      multiplier: 1250000.0
+      tick_value: 0.625
+
+  "6B":
+    name: "British Pound Futures"
+    exchange: CME
+    underlying: "GBP/USD (62500 GBP)"
+    currency: USD
+    multiplier: 62500.0  # 62500 GBP
+    tick_size: 0.0001
+    tick_value: 6.25
+    contract_months: [H, M, U, Z]
+    expiration_rule: "2nd business day before 3rd Wednesday"
+    settlement_type: cash
+    trading_hours:
+      globex_start: "17:00"
+      globex_end: "16:00"
+      maintenance: "16:15-16:30"
+      timezone: "US/Central"
+    margin:
+      initial_pct: 2.0
+      maintenance_pct: 1.8
+      approx_initial_usd: 2200
+      approx_maintenance_usd: 1980
+    micro_contract:
+      symbol: M6B
+      multiplier: 6250.0
+      tick_value: 0.625
+
+  "6A":
+    name: "Australian Dollar Futures"
+    exchange: CME
+    underlying: "AUD/USD (100000 AUD)"
+    currency: USD
+    multiplier: 100000.0  # 100000 AUD
+    tick_size: 0.0001
+    tick_value: 10.00
+    contract_months: [H, M, U, Z]
+    expiration_rule: "2nd business day before 3rd Wednesday"
+    settlement_type: cash
+    trading_hours:
+      globex_start: "17:00"
+      globex_end: "16:00"
+      maintenance: "16:15-16:30"
+      timezone: "US/Central"
+    margin:
+      initial_pct: 2.0
+      maintenance_pct: 1.8
+      approx_initial_usd: 1800
+      approx_maintenance_usd: 1620
+
+  "6C":
+    name: "Canadian Dollar Futures"
+    exchange: CME
+    underlying: "CAD/USD (100000 CAD)"
+    currency: USD
+    multiplier: 100000.0  # 100000 CAD
+    tick_size: 0.00005
+    tick_value: 5.00
+    contract_months: [H, M, U, Z]
+    expiration_rule: "2nd business day before 3rd Wednesday"
+    settlement_type: cash
+    trading_hours:
+      globex_start: "17:00"
+      globex_end: "16:00"
+      maintenance: "16:15-16:30"
+      timezone: "US/Central"
+    margin:
+      initial_pct: 2.0
+      maintenance_pct: 1.8
+      approx_initial_usd: 1500
+      approx_maintenance_usd: 1350
+
+  "6S":
+    name: "Swiss Franc Futures"
+    exchange: CME
+    underlying: "CHF/USD (125000 CHF)"
+    currency: USD
+    multiplier: 125000.0  # 125000 CHF
+    tick_size: 0.0001
+    tick_value: 12.50
+    contract_months: [H, M, U, Z]
+    expiration_rule: "2nd business day before 3rd Wednesday"
+    settlement_type: cash
+    trading_hours:
+      globex_start: "17:00"
+      globex_end: "16:00"
+      maintenance: "16:15-16:30"
+      timezone: "US/Central"
+    margin:
+      initial_pct: 2.5
+      maintenance_pct: 2.25
+      approx_initial_usd: 3500
+      approx_maintenance_usd: 3150
+
+# =============================================================================
+# INTEREST RATE / BOND FUTURES
+# =============================================================================
+bond:
+  ZB:
+    name: "30-Year Treasury Bond Futures"
+    exchange: CBOT
+    underlying: "US Treasury Bonds (face value $100,000)"
+    currency: USD
+    multiplier: 1000.0  # $1000 per point
+    tick_size: 0.03125  # 1/32 of a point
+    tick_value: 31.25
+    contract_months: [H, M, U, Z]
+    expiration_rule: "7th business day before last business day"
+    settlement_type: physical
+    trading_hours:
+      globex_start: "17:00"
+      globex_end: "16:00"
+      maintenance: "16:00-16:15"
+      timezone: "US/Central"
+    margin:
+      initial_pct: 3.0
+      maintenance_pct: 2.7
+      approx_initial_usd: 4000
+      approx_maintenance_usd: 3600
+
+  ZN:
+    name: "10-Year Treasury Note Futures"
+    exchange: CBOT
+    underlying: "US Treasury Notes (face value $100,000)"
+    currency: USD
+    multiplier: 1000.0
+    tick_size: 0.015625  # 1/64 of a point
+    tick_value: 15.625
+    contract_months: [H, M, U, Z]
+    expiration_rule: "7th business day before last business day"
+    settlement_type: physical
+    trading_hours:
+      globex_start: "17:00"
+      globex_end: "16:00"
+      maintenance: "16:00-16:15"
+      timezone: "US/Central"
+    margin:
+      initial_pct: 2.0
+      maintenance_pct: 1.8
+      approx_initial_usd: 2000
+      approx_maintenance_usd: 1800
+
+  ZF:
+    name: "5-Year Treasury Note Futures"
+    exchange: CBOT
+    underlying: "US Treasury Notes (face value $100,000)"
+    currency: USD
+    multiplier: 1000.0
+    tick_size: 0.0078125  # 1/128 of a point
+    tick_value: 7.8125
+    contract_months: [H, M, U, Z]
+    expiration_rule: "Last business day of contract month"
+    settlement_type: physical
+    trading_hours:
+      globex_start: "17:00"
+      globex_end: "16:00"
+      maintenance: "16:00-16:15"
+      timezone: "US/Central"
+    margin:
+      initial_pct: 1.5
+      maintenance_pct: 1.35
+      approx_initial_usd: 1100
+      approx_maintenance_usd: 990
+
+  ZT:
+    name: "2-Year Treasury Note Futures"
+    exchange: CBOT
+    underlying: "US Treasury Notes (face value $200,000)"
+    currency: USD
+    multiplier: 2000.0
+    tick_size: 0.0078125
+    tick_value: 15.625
+    contract_months: [H, M, U, Z]
+    expiration_rule: "Last business day of contract month"
+    settlement_type: physical
+    trading_hours:
+      globex_start: "17:00"
+      globex_end: "16:00"
+      maintenance: "16:00-16:15"
+      timezone: "US/Central"
+    margin:
+      initial_pct: 0.75
+      maintenance_pct: 0.675
+      approx_initial_usd: 600
+      approx_maintenance_usd: 540
+
+# =============================================================================
+# CONTRACT MONTH CODES
+# =============================================================================
+contract_month_codes:
+  F: January
+  G: February
+  H: March
+  J: April
+  K: May
+  M: June
+  N: July
+  Q: August
+  U: September
+  V: October
+  X: November
+  Z: December
+
+# =============================================================================
+# CRYPTO PERPETUAL FUTURES (BINANCE)
+# =============================================================================
+crypto_perpetual:
+  BTCUSDT:
+    name: "Bitcoin Perpetual (USDT-Margined)"
+    exchange: BINANCE
+    underlying: "BTC/USDT"
+    currency: USDT
+    multiplier: 1.0
+    tick_size: 0.10
+    tick_value: 0.10
+    contract_type: perpetual
+    settlement_type: funding
+    funding_interval_hours: 8
+    max_leverage: 125
+    trading_hours:
+      type: "24/7"
+    margin:
+      tiered: true
+      brackets:
+        - notional_cap: 10000
+          max_leverage: 125
+          maint_margin_pct: 0.40
+        - notional_cap: 50000
+          max_leverage: 100
+          maint_margin_pct: 0.50
+        - notional_cap: 250000
+          max_leverage: 50
+          maint_margin_pct: 1.00
+        - notional_cap: 1000000
+          max_leverage: 20
+          maint_margin_pct: 2.50
+        - notional_cap: 5000000
+          max_leverage: 10
+          maint_margin_pct: 5.00
+
+  ETHUSDT:
+    name: "Ethereum Perpetual (USDT-Margined)"
+    exchange: BINANCE
+    underlying: "ETH/USDT"
+    currency: USDT
+    multiplier: 1.0
+    tick_size: 0.01
+    tick_value: 0.01
+    contract_type: perpetual
+    settlement_type: funding
+    funding_interval_hours: 8
+    max_leverage: 100
+    trading_hours:
+      type: "24/7"
+    margin:
+      tiered: true
+      brackets:
+        - notional_cap: 10000
+          max_leverage: 100
+          maint_margin_pct: 0.50
+        - notional_cap: 50000
+          max_leverage: 75
+          maint_margin_pct: 0.65
+        - notional_cap: 250000
+          max_leverage: 50
+          maint_margin_pct: 1.00
+
+# =============================================================================
+# ROLLOVER SCHEDULES
+# =============================================================================
+rollover:
+  equity_index:
+    roll_days_before_expiry: 8
+    volume_rollover_threshold: 0.5  # Roll when front month < 50% of volume
+    standard_roll_day: "2nd Thursday of contract month"
+  commodities:
+    roll_days_before_expiry: 4
+    gold_silver_roll: "4 business days before 1st notice"
+    crude_oil_roll: "3-4 business days before expiry"
+  currency:
+    roll_days_before_expiry: 2
+    standard_roll_day: "Friday before expiration week"
+  bonds:
+    roll_days_before_expiry: 7
+    standard_roll_day: "Week before expiration"
