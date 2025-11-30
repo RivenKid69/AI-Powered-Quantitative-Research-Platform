@@ -112,9 +112,11 @@ def _in_custom_window(ts_ms: np.ndarray, windows: List[Dict[str, int]]) -> np.nd
 # Earnings Blackout Filter
 # ==============================================================================
 
-# Cache for earnings data to avoid repeated API calls
+# Cache for earnings data to avoid repeated API calls. Note: we currently rely on
+# the GIL only; no explicit lock is wired up yet, so concurrent threads share
+# the cache without additional synchronization.
 _earnings_cache: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
-_earnings_cache_lock = None  # For thread safety in future if needed
+_earnings_cache_lock = None
 
 
 def _get_earnings_events(

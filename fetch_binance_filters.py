@@ -12,7 +12,7 @@ from binance_public import BinancePublicClient
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python scripts/fetch_binance_filters.py <output_json> [SYMBOL1 SYMBOL2 ...]")
+        print("Usage: python fetch_binance_filters.py <output_json> [SYMBOL1 SYMBOL2 ...]")
         sys.exit(2)
     out_path = sys.argv[1]
     symbols = sys.argv[2:] if len(sys.argv) > 2 else None
