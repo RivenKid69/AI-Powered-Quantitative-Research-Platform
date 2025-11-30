@@ -69,7 +69,7 @@ class TimingConfig(BaseModel):
     """Настройки тайминга обработки баров и задержек закрытия."""
 
     enforce_closed_bars: bool = Field(default=True)
-    timeframe_ms: int = Field(default=14_400_000)  # 4h timeframe (changed from 60_000 for 1m)
+    timeframe_ms: int = Field(default=14_400_000)  # Default 4h timeframe; override for other cadences
     close_lag_ms: int = Field(default=2000)
 
 
