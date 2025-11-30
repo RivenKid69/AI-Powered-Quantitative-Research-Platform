@@ -13,7 +13,7 @@ Architecture:
 Levels of Fidelity:
     L1: Simple constant spread/fee model
     L2: Statistical models (√participation impact, OHLCV fills) - DEFAULT
-    L3: Full LOB simulation (future - requires order book data)
+    L3: Full LOB simulation (Production Ready - see lob/ module, execution_providers_l3.py)
 
 Design Principles:
     - Protocol-based for flexibility and testability

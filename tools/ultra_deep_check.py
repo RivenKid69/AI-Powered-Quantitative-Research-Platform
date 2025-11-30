@@ -142,7 +142,7 @@ try:
         print("  ✓ vol_proxy is NOT NaN during warmup (BUG FIXED!)")
     else:
         print("  ✗ CRITICAL: vol_proxy is NaN during warmup!")
-        errors.append("CRITICAL: vol_proxy NaN during warmup (BUG NOT FIXED)")
+        errors.append("CRITICAL: vol_proxy NaN during warmup (regression detected - atr_fallback not working)")
 
     if np.isfinite(obs2[22]):
         print("  ✓ vol_proxy is finite during warmup")
