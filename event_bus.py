@@ -145,10 +145,13 @@ def configure(
     root: str = "logs",
     run_id: str | None = None,
     default_symbol: str | None = None,
-) -> str:
+) -> None:
     """
     Настройка уровня логирования и корневой директории.
-    Возвращает путь к директории текущего запуска.
+
+    Конфигурация применяется лениво: директория и файлы создаются при первой
+    записи через ``_ensure_open``. Функция не создаёт директории и ничего не
+    возвращает.
     """
     _STATE.level = int(level)
     _STATE.root = str(root)
@@ -169,7 +172,9 @@ def run_dir() -> str:
 def log_trade(ts: int, price: float, volume: float, is_buy: bool, agent_flag: bool, order_id: int | None = None):
     """
     Логирует трейд. Если уровень NONE — запись пропускается (но формат сохраняем для совместимости).
-    side: 'B' или 'S'
+
+    Аргумент ``is_buy`` используется для построения строк ``BUY``/``SELL`` в
+    unified CSV; отдельный символьный код ``B``/``S`` больше не пишется.
     """
     if _STATE.level <= EventLevel.NONE:
         return
