@@ -120,7 +120,7 @@ def floor_to_timeframe(ts_ms: int, timeframe_ms: int) -> int:
 
 
 def is_bar_closed(ts_close_ms: int, now_utc_ms: int, lag_ms: int = 0) -> bool:
-    """Return ``True`` if current time exceeds ``ts_close_ms`` plus ``lag_ms``."""
+    """Return ``True`` when the current time is **at or past** ``ts_close_ms`` plus ``lag_ms``."""
 
     return now_utc_ms >= ts_close_ms + lag_ms
 
@@ -132,7 +132,7 @@ def now_ms() -> int:
 
 
 def next_bar_open_ms(close_ms: int, timeframe_ms: int) -> int:
-    """Return the open timestamp of the bar following ``close_ms``."""
+    """Return the next bar's open timestamp; if ``close_ms`` already equals a bar open, return that same boundary."""
 
     start_ms, close_bound_ms = _normalize_bar_bounds(close_ms, timeframe_ms)
     if close_ms == start_ms:
