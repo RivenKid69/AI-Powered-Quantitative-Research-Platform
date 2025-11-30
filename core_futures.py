@@ -167,6 +167,18 @@ class WorkingType(str, Enum):
     CONTRACT_PRICE = "CONTRACT_PRICE"
 
 
+class OrderStatus(str, Enum):
+    """Order status for futures orders."""
+    NEW = "NEW"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
+    FILLED = "FILLED"
+    CANCELLED = "CANCELLED"
+    REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
+    PENDING_NEW = "PENDING_NEW"
+    PENDING_CANCEL = "PENDING_CANCEL"
+
+
 # ============================================================================
 # CONTRACT SPECIFICATION (Works for ALL futures types)
 # ============================================================================
