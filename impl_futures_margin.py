@@ -1062,3 +1062,7 @@ def load_brackets_from_json(filepath: str) -> Dict[str, List[LeverageBracket]]:
         result[symbol] = brackets
 
     return result
+
+
+# Alias for compatibility with execution_providers_futures_base.py
+load_leverage_brackets = load_brackets_from_json
