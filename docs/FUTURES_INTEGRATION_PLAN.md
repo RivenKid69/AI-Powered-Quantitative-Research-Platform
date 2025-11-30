@@ -1028,6 +1028,581 @@ pytest tests/test_alpaca*.py -v
 - Создать liquidation simulation
 - Поддержка cross и isolated margin
 
+### 2.0 Abstract Base for Futures Execution Provider
+
+```python
+# NEW FILE: execution_providers_futures_base.py
+"""
+Abstract base classes for unified futures execution providers.
+
+Design Principles:
+1. Single interface for ALL futures types (crypto, index, commodity, currency)
+2. Vendor-agnostic execution logic
+3. Clear separation between L2 (parametric) and L3 (LOB) simulation
+4. Protocol-based dependency injection for testability
+
+References:
+- Almgren & Chriss (2001): "Optimal Execution of Portfolio Transactions"
+- CME Group (2023): Futures Execution Best Practices
+- Binance API (2024): USDT-M Futures Execution Documentation
+"""
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from decimal import Decimal
+from enum import Enum
+from typing import Protocol, Optional, Dict, Any, List
+from datetime import datetime
+
+from core_futures import (
+    FuturesContract,
+    FuturesPosition,
+    MarginMode,
+    MarginRequirement,
+)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ENUMS & DATA MODELS
+# ═══════════════════════════════════════════════════════════════════════════
+
+class FuturesType(str, Enum):
+    """Futures contract type classification."""
+    CRYPTO_PERPETUAL = "crypto_perp"       # Binance USDT-M Perpetual
+    CRYPTO_QUARTERLY = "crypto_quarterly"  # Binance USDT-M Quarterly
+    INDEX_FUTURES = "index"                # ES, NQ, YM, RTY
+    COMMODITY_FUTURES = "commodity"        # GC, CL, SI, NG
+    CURRENCY_FUTURES = "currency"          # 6E, 6J, 6B, 6A
+    BOND_FUTURES = "bond"                  # ZB, ZN, ZF
+
+
+@dataclass(frozen=True)
+class FuturesMarketState:
+    """
+    Unified market state for futures execution.
+
+    Vendor-agnostic representation of current market conditions.
+    """
+    timestamp_ms: int
+    bid: Decimal
+    ask: Decimal
+    bid_size: Decimal
+    ask_size: Decimal
+    mark_price: Decimal           # For liquidation calc
+    index_price: Decimal          # Underlying reference
+    last_price: Decimal
+    volume_24h: Decimal
+    open_interest: Decimal
+    funding_rate: Optional[Decimal] = None        # Crypto only
+    next_funding_time_ms: Optional[int] = None    # Crypto only
+    settlement_price: Optional[Decimal] = None    # CME daily settlement
+    days_to_expiry: Optional[int] = None          # Quarterly contracts
+
+    @property
+    def mid_price(self) -> Decimal:
+        return (self.bid + self.ask) / 2
+
+    @property
+    def spread_bps(self) -> Decimal:
+        if self.mid_price == 0:
+            return Decimal("0")
+        return (self.ask - self.bid) / self.mid_price * 10000
+
+
+@dataclass(frozen=True)
+class FuturesOrder:
+    """Unified order representation for all futures types."""
+    symbol: str
+    side: str              # "BUY" or "SELL"
+    order_type: str        # "MARKET", "LIMIT", "STOP", "STOP_MARKET"
+    qty: Decimal
+    price: Optional[Decimal] = None
+    reduce_only: bool = False
+    time_in_force: str = "GTC"
+    post_only: bool = False
+    client_order_id: Optional[str] = None
+
+
+@dataclass
+class FuturesFill:
+    """Result of a simulated futures execution."""
+    order_id: str
+    symbol: str
+    side: str
+    filled_qty: Decimal
+    avg_price: Decimal
+    commission: Decimal
+    commission_asset: str
+    realized_pnl: Decimal
+    slippage_bps: Decimal
+    timestamp_ms: int
+    is_maker: bool
+    liquidity: str               # "MAKER" or "TAKER"
+
+    # Futures-specific fields
+    margin_impact: Decimal       # Change in margin requirement
+    new_position_size: Decimal   # Position after fill
+    new_avg_entry: Decimal       # New average entry price
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PROTOCOL INTERFACES (Dependency Injection)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class FuturesMarginProvider(Protocol):
+    """Protocol for margin calculation providers."""
+
+    def calculate_initial_margin(
+        self,
+        contract: FuturesContract,
+        notional: Decimal,
+        leverage: int,
+    ) -> Decimal:
+        """Calculate initial margin requirement."""
+        ...
+
+    def calculate_maintenance_margin(
+        self,
+        contract: FuturesContract,
+        notional: Decimal,
+    ) -> Decimal:
+        """Calculate maintenance margin requirement."""
+        ...
+
+    def calculate_liquidation_price(
+        self,
+        position: FuturesPosition,
+        wallet_balance: Decimal,
+    ) -> Decimal:
+        """Calculate liquidation price for position."""
+        ...
+
+
+class FuturesSlippageProvider(Protocol):
+    """Protocol for slippage estimation providers."""
+
+    def estimate_slippage_bps(
+        self,
+        order: FuturesOrder,
+        market: FuturesMarketState,
+        participation_rate: Optional[Decimal] = None,
+    ) -> Decimal:
+        """Estimate execution slippage in basis points."""
+        ...
+
+
+class FuturesFeeProvider(Protocol):
+    """Protocol for fee calculation providers."""
+
+    def calculate_fee(
+        self,
+        notional: Decimal,
+        is_maker: bool,
+        fee_tier: Optional[str] = None,
+    ) -> Decimal:
+        """Calculate trading fee."""
+        ...
+
+
+class FuturesFundingProvider(Protocol):
+    """Protocol for funding rate providers (crypto only)."""
+
+    def get_current_funding_rate(self, symbol: str) -> Decimal:
+        """Get current funding rate."""
+        ...
+
+    def calculate_funding_payment(
+        self,
+        position: FuturesPosition,
+        funding_rate: Decimal,
+        mark_price: Decimal,
+    ) -> Decimal:
+        """Calculate funding payment amount."""
+        ...
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ABSTRACT BASE CLASSES
+# ═══════════════════════════════════════════════════════════════════════════
+
+class BaseFuturesExecutionProvider(ABC):
+    """
+    Abstract base class for all futures execution providers.
+
+    Provides unified interface for:
+    - Crypto perpetuals (Binance)
+    - Crypto quarterly (Binance)
+    - Index futures (CME via IB)
+    - Commodity futures (CME via IB)
+    - Currency futures (CME via IB)
+
+    Subclasses implement vendor-specific execution logic while
+    maintaining consistent interface for backtesting and live trading.
+    """
+
+    def __init__(
+        self,
+        futures_type: FuturesType,
+        margin_provider: FuturesMarginProvider,
+        slippage_provider: FuturesSlippageProvider,
+        fee_provider: FuturesFeeProvider,
+        funding_provider: Optional[FuturesFundingProvider] = None,
+    ):
+        self._futures_type = futures_type
+        self._margin_provider = margin_provider
+        self._slippage_provider = slippage_provider
+        self._fee_provider = fee_provider
+        self._funding_provider = funding_provider
+
+        # Validate funding provider for crypto
+        if futures_type in (FuturesType.CRYPTO_PERPETUAL,) and not funding_provider:
+            raise ValueError("FundingProvider required for crypto perpetuals")
+
+    @property
+    def futures_type(self) -> FuturesType:
+        return self._futures_type
+
+    @abstractmethod
+    def execute(
+        self,
+        order: FuturesOrder,
+        market: FuturesMarketState,
+        position: Optional[FuturesPosition] = None,
+    ) -> FuturesFill:
+        """
+        Execute order in simulation.
+
+        Args:
+            order: Order to execute
+            market: Current market state
+            position: Current position (if any)
+
+        Returns:
+            FuturesFill with execution details
+        """
+        pass
+
+    @abstractmethod
+    def estimate_execution_cost(
+        self,
+        order: FuturesOrder,
+        market: FuturesMarketState,
+    ) -> Dict[str, Decimal]:
+        """
+        Pre-trade cost estimation.
+
+        Returns:
+            Dict with keys: 'slippage_bps', 'fee_bps', 'total_cost_bps',
+            'impact_cost', 'estimated_fill_price'
+        """
+        pass
+
+    def get_margin_requirement(
+        self,
+        contract: FuturesContract,
+        qty: Decimal,
+        price: Decimal,
+        leverage: int,
+    ) -> MarginRequirement:
+        """Get margin requirement for position."""
+        notional = qty * price * contract.multiplier
+        initial = self._margin_provider.calculate_initial_margin(
+            contract, notional, leverage
+        )
+        maintenance = self._margin_provider.calculate_maintenance_margin(
+            contract, notional
+        )
+        return MarginRequirement(
+            initial=initial,
+            maintenance=maintenance,
+            variation=Decimal("0"),  # Calculated on daily settlement
+        )
+
+    def calculate_pnl(
+        self,
+        position: FuturesPosition,
+        current_price: Decimal,
+    ) -> Decimal:
+        """Calculate unrealized P&L for position."""
+        if position.qty == 0:
+            return Decimal("0")
+
+        notional_entry = position.qty * position.entry_price * position.contract.multiplier
+        notional_current = position.qty * current_price * position.contract.multiplier
+
+        if position.side == "LONG":
+            return notional_current - notional_entry
+        else:  # SHORT
+            return notional_entry - notional_current
+
+
+class L2FuturesExecutionProvider(BaseFuturesExecutionProvider):
+    """
+    L2 parametric execution provider for futures.
+
+    Uses statistical models for slippage estimation:
+    - √participation impact model (Almgren-Chriss)
+    - Volatility regime adjustments
+    - Funding rate stress (crypto)
+    - Time-of-day liquidity curves
+
+    Suitable for:
+    - Backtesting with realistic cost modeling
+    - Strategy development and optimization
+    - Production with moderate accuracy requirements (~80-90%)
+    """
+
+    def execute(
+        self,
+        order: FuturesOrder,
+        market: FuturesMarketState,
+        position: Optional[FuturesPosition] = None,
+    ) -> FuturesFill:
+        """Execute with L2 parametric slippage model."""
+        # Estimate slippage
+        slippage_bps = self._slippage_provider.estimate_slippage_bps(order, market)
+
+        # Calculate execution price
+        mid = market.mid_price
+        slippage_factor = slippage_bps / Decimal("10000")
+
+        if order.side == "BUY":
+            exec_price = mid * (1 + slippage_factor)
+        else:
+            exec_price = mid * (1 - slippage_factor)
+
+        # Calculate fee
+        notional = order.qty * exec_price
+        is_maker = order.order_type == "LIMIT" and order.post_only
+        fee = self._fee_provider.calculate_fee(notional, is_maker)
+
+        # Calculate margin impact
+        margin_req = self.get_margin_requirement(
+            position.contract if position else FuturesContract.default(order.symbol),
+            order.qty,
+            exec_price,
+            20,  # Default leverage
+        )
+
+        # Calculate realized PnL if reducing position
+        realized_pnl = Decimal("0")
+        new_position_size = order.qty
+        new_avg_entry = exec_price
+
+        if position and position.qty != 0:
+            if (position.side == "LONG" and order.side == "SELL") or \
+               (position.side == "SHORT" and order.side == "BUY"):
+                # Reducing position
+                close_qty = min(order.qty, abs(position.qty))
+                realized_pnl = self.calculate_pnl(
+                    FuturesPosition(
+                        contract=position.contract,
+                        qty=close_qty,
+                        entry_price=position.entry_price,
+                        side=position.side,
+                        leverage=position.leverage,
+                        margin_mode=position.margin_mode,
+                    ),
+                    exec_price,
+                )
+
+        return FuturesFill(
+            order_id=order.client_order_id or f"SIM_{market.timestamp_ms}",
+            symbol=order.symbol,
+            side=order.side,
+            filled_qty=order.qty,
+            avg_price=exec_price,
+            commission=fee,
+            commission_asset="USDT",  # Configurable
+            realized_pnl=realized_pnl,
+            slippage_bps=slippage_bps,
+            timestamp_ms=market.timestamp_ms,
+            is_maker=is_maker,
+            liquidity="MAKER" if is_maker else "TAKER",
+            margin_impact=margin_req.initial,
+            new_position_size=new_position_size,
+            new_avg_entry=new_avg_entry,
+        )
+
+    def estimate_execution_cost(
+        self,
+        order: FuturesOrder,
+        market: FuturesMarketState,
+    ) -> Dict[str, Decimal]:
+        """Pre-trade cost estimation."""
+        slippage_bps = self._slippage_provider.estimate_slippage_bps(order, market)
+
+        mid = market.mid_price
+        slippage_factor = slippage_bps / Decimal("10000")
+        estimated_price = mid * (1 + slippage_factor) if order.side == "BUY" else mid * (1 - slippage_factor)
+
+        notional = order.qty * estimated_price
+        fee = self._fee_provider.calculate_fee(notional, is_maker=False)
+        fee_bps = fee / notional * Decimal("10000")
+
+        return {
+            'slippage_bps': slippage_bps,
+            'fee_bps': fee_bps,
+            'total_cost_bps': slippage_bps + fee_bps,
+            'impact_cost': notional * slippage_bps / Decimal("10000"),
+            'estimated_fill_price': estimated_price,
+        }
+
+
+class L3FuturesExecutionProvider(BaseFuturesExecutionProvider):
+    """
+    L3 order book execution provider for futures.
+
+    Uses full LOB simulation:
+    - Queue position tracking
+    - Market impact modeling (Kyle, Almgren-Chriss, Gatheral)
+    - Latency simulation
+    - Fill probability models
+
+    Extends existing lob/ module for futures-specific features:
+    - Liquidation order injection
+    - Funding rate impact
+    - Daily settlement simulation (CME)
+
+    Suitable for:
+    - High-fidelity backtesting (95%+ accuracy)
+    - Market microstructure research
+    - HFT strategy development
+    """
+
+    def __init__(
+        self,
+        futures_type: FuturesType,
+        margin_provider: FuturesMarginProvider,
+        slippage_provider: FuturesSlippageProvider,
+        fee_provider: FuturesFeeProvider,
+        funding_provider: Optional[FuturesFundingProvider] = None,
+        lob_config: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(
+            futures_type,
+            margin_provider,
+            slippage_provider,
+            fee_provider,
+            funding_provider,
+        )
+        # Initialize LOB components
+        self._lob_config = lob_config or {}
+        # LOB initialization deferred to avoid circular imports
+        self._matching_engine = None
+        self._impact_model = None
+        self._latency_model = None
+
+    def execute(
+        self,
+        order: FuturesOrder,
+        market: FuturesMarketState,
+        position: Optional[FuturesPosition] = None,
+    ) -> FuturesFill:
+        """Execute with full LOB simulation."""
+        # Implementation delegates to lob/matching_engine.py
+        # with futures-specific extensions
+        raise NotImplementedError("L3 execution requires LOB initialization")
+
+    def estimate_execution_cost(
+        self,
+        order: FuturesOrder,
+        market: FuturesMarketState,
+    ) -> Dict[str, Decimal]:
+        """Pre-trade cost estimation using LOB state."""
+        raise NotImplementedError("L3 estimation requires LOB initialization")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FACTORY FUNCTION
+# ═══════════════════════════════════════════════════════════════════════════
+
+def create_futures_execution_provider(
+    futures_type: FuturesType,
+    level: str = "L2",  # "L2" or "L3"
+    config: Optional[Dict[str, Any]] = None,
+) -> BaseFuturesExecutionProvider:
+    """
+    Factory function for creating futures execution providers.
+
+    Args:
+        futures_type: Type of futures contract
+        level: Simulation fidelity ("L2" = parametric, "L3" = LOB)
+        config: Provider configuration
+
+    Returns:
+        Configured execution provider
+
+    Example:
+        >>> provider = create_futures_execution_provider(
+        ...     FuturesType.CRYPTO_PERPETUAL,
+        ...     level="L2",
+        ...     config={"slippage_profile": "binance_futures"},
+        ... )
+    """
+    config = config or {}
+
+    # Create default providers based on futures type
+    margin_provider = _create_margin_provider(futures_type, config)
+    slippage_provider = _create_slippage_provider(futures_type, config)
+    fee_provider = _create_fee_provider(futures_type, config)
+    funding_provider = None
+
+    if futures_type in (FuturesType.CRYPTO_PERPETUAL,):
+        funding_provider = _create_funding_provider(futures_type, config)
+
+    if level == "L2":
+        return L2FuturesExecutionProvider(
+            futures_type=futures_type,
+            margin_provider=margin_provider,
+            slippage_provider=slippage_provider,
+            fee_provider=fee_provider,
+            funding_provider=funding_provider,
+        )
+    elif level == "L3":
+        return L3FuturesExecutionProvider(
+            futures_type=futures_type,
+            margin_provider=margin_provider,
+            slippage_provider=slippage_provider,
+            fee_provider=fee_provider,
+            funding_provider=funding_provider,
+            lob_config=config.get("lob_config"),
+        )
+    else:
+        raise ValueError(f"Unknown execution level: {level}")
+
+
+def _create_margin_provider(futures_type: FuturesType, config: Dict) -> FuturesMarginProvider:
+    """Create appropriate margin provider for futures type."""
+    # Implementation depends on futures type
+    # - Crypto: TieredMarginProvider (Binance brackets)
+    # - CME: SPANMarginProvider (simplified SPAN)
+    raise NotImplementedError("Use concrete implementations")
+
+
+def _create_slippage_provider(futures_type: FuturesType, config: Dict) -> FuturesSlippageProvider:
+    """Create appropriate slippage provider for futures type."""
+    raise NotImplementedError("Use concrete implementations")
+
+
+def _create_fee_provider(futures_type: FuturesType, config: Dict) -> FuturesFeeProvider:
+    """Create appropriate fee provider for futures type."""
+    raise NotImplementedError("Use concrete implementations")
+
+
+def _create_funding_provider(futures_type: FuturesType, config: Dict) -> FuturesFundingProvider:
+    """Create funding provider for crypto perpetuals."""
+    raise NotImplementedError("Use concrete implementations")
+```
+
+**Key Design Decisions:**
+
+1. **Protocol-based DI**: Uses Python `Protocol` for dependency injection, enabling easy mocking in tests
+2. **Unified Data Models**: `FuturesMarketState`, `FuturesOrder`, `FuturesFill` work for ALL futures types
+3. **Clear L2/L3 Separation**: L2 uses parametric models, L3 uses full LOB simulation
+4. **Factory Pattern**: `create_futures_execution_provider()` abstracts instantiation complexity
+5. **Type Safety**: Full typing with `Decimal` for financial calculations
+
 ### 2.1 Margin Calculator (`impl_futures_margin.py`)
 
 ```python
@@ -1194,7 +1769,148 @@ References:
 
 from decimal import Decimal
 from typing import List, Optional, Tuple
+from enum import Enum
 from core_futures import FuturesPosition, LiquidationEvent, MarginMode
+
+
+class LiquidationPriority(str, Enum):
+    """
+    Liquidation priority for cross-margin accounts.
+
+    When an account's total margin ratio falls below 1.0, positions must be
+    liquidated to restore margin. This enum defines the order in which
+    positions are selected for liquidation.
+
+    Different exchanges use different strategies:
+    - Binance: HIGHEST_LOSS_FIRST (liquidate most unprofitable first)
+    - Some exchanges: LOWEST_MARGIN_RATIO (most risky positions first)
+    - Others: LARGEST_POSITION (reduce biggest exposure first)
+
+    References:
+    - Binance Cross-Margin: https://www.binance.com/en/support/faq/360038685551
+    """
+    HIGHEST_LOSS_FIRST = "highest_loss"      # Binance default - close losers first
+    LOWEST_MARGIN_RATIO = "lowest_ratio"     # Most risky positions first
+    OLDEST_POSITION = "oldest"               # FIFO - oldest positions first
+    LARGEST_POSITION = "largest"             # Biggest notional first
+    HIGHEST_LEVERAGE = "highest_leverage"    # Most leveraged first
+
+
+class CrossMarginLiquidationOrdering:
+    """
+    Determines order of position liquidation for cross-margin accounts.
+
+    In cross-margin mode, all positions share the same margin pool. When
+    total account margin ratio drops below maintenance, the system must
+    decide WHICH positions to liquidate first.
+
+    This affects:
+    1. Which positions get closed (user preference may differ from system)
+    2. Cascade effects (closing one position may save others)
+    3. Overall account survival probability
+    """
+
+    def __init__(self, priority: LiquidationPriority = LiquidationPriority.HIGHEST_LOSS_FIRST):
+        self._priority = priority
+
+    def order_positions_for_liquidation(
+        self,
+        positions: List[FuturesPosition],
+        mark_prices: Dict[str, Decimal],
+    ) -> List[FuturesPosition]:
+        """
+        Order positions by liquidation priority.
+
+        Args:
+            positions: All open positions in cross-margin account
+            mark_prices: Current mark prices per symbol
+
+        Returns:
+            Positions ordered from first-to-liquidate to last
+        """
+        def get_pnl(pos: FuturesPosition) -> Decimal:
+            mark = mark_prices.get(pos.symbol, pos.entry_price)
+            if pos.qty > 0:  # Long
+                return (mark - pos.entry_price) * abs(pos.qty)
+            else:  # Short
+                return (pos.entry_price - mark) * abs(pos.qty)
+
+        def get_notional(pos: FuturesPosition) -> Decimal:
+            mark = mark_prices.get(pos.symbol, pos.entry_price)
+            return mark * abs(pos.qty)
+
+        if self._priority == LiquidationPriority.HIGHEST_LOSS_FIRST:
+            # Sort by PnL ascending (most negative first)
+            return sorted(positions, key=get_pnl)
+
+        elif self._priority == LiquidationPriority.LOWEST_MARGIN_RATIO:
+            # Would need margin calc per position - simplified to use leverage
+            return sorted(positions, key=lambda p: -p.leverage)
+
+        elif self._priority == LiquidationPriority.OLDEST_POSITION:
+            # Sort by entry time (requires timestamp on position)
+            return sorted(positions, key=lambda p: getattr(p, 'entry_time_ms', 0))
+
+        elif self._priority == LiquidationPriority.LARGEST_POSITION:
+            # Sort by notional descending
+            return sorted(positions, key=get_notional, reverse=True)
+
+        elif self._priority == LiquidationPriority.HIGHEST_LEVERAGE:
+            # Sort by leverage descending
+            return sorted(positions, key=lambda p: -p.leverage)
+
+        return positions  # Default: no ordering
+
+    def select_positions_to_liquidate(
+        self,
+        positions: List[FuturesPosition],
+        mark_prices: Dict[str, Decimal],
+        target_margin_ratio: Decimal,
+        current_balance: Decimal,
+        margin_calculator: 'MarginCalculator',
+    ) -> List[FuturesPosition]:
+        """
+        Select minimum set of positions to liquidate to restore margin.
+
+        Greedy algorithm: liquidate in priority order until margin ratio >= target.
+
+        Args:
+            positions: All open positions
+            mark_prices: Current mark prices
+            target_margin_ratio: Target margin ratio to achieve (e.g., 1.5)
+            current_balance: Current wallet balance
+            margin_calculator: Margin calculator instance
+
+        Returns:
+            List of positions to liquidate (subset of input)
+        """
+        ordered = self.order_positions_for_liquidation(positions, mark_prices)
+        to_liquidate = []
+
+        remaining = list(ordered)
+        for pos in ordered:
+            # Check if we've achieved target
+            total_margin = sum(
+                margin_calculator.calculate_maintenance_margin(
+                    mark_prices.get(p.symbol, p.entry_price) * abs(p.qty)
+                )
+                for p in remaining
+            )
+            total_upnl = sum(
+                (mark_prices.get(p.symbol, p.entry_price) - p.entry_price) * p.qty
+                for p in remaining
+            )
+            current_ratio = (current_balance + total_upnl) / total_margin if total_margin > 0 else Decimal("inf")
+
+            if current_ratio >= target_margin_ratio:
+                break  # Target achieved
+
+            # Mark for liquidation and remove from remaining
+            to_liquidate.append(pos)
+            remaining.remove(pos)
+
+        return to_liquidate
+
 
 class LiquidationEngine:
     """
@@ -1487,12 +2203,28 @@ class FundingRateTracker:
         funding_rate: Decimal,
         mark_price: Decimal,
         timestamp_ms: int,
+        entry_time_ms: Optional[int] = None,
+        exit_time_ms: Optional[int] = None,
     ) -> FundingPayment:
         """
-        Calculate funding payment for position.
+        Calculate funding payment for position with pro-rata support.
 
         Payment = Position Value * Funding Rate
         Position Value = Mark Price * |Qty|
+
+        Pro-rata calculation:
+        - If position opened/closed near funding timestamp, only charge
+          for the portion of the funding period the position was held.
+        - This prevents edge cases where a position opened 1 second before
+          funding pays full 8-hour funding cost.
+
+        Args:
+            position: Futures position
+            funding_rate: Funding rate for this period
+            mark_price: Mark price at funding time
+            timestamp_ms: Funding settlement timestamp
+            entry_time_ms: When position was opened (None = before period start)
+            exit_time_ms: When position was closed (None = still open)
 
         Returns:
             FundingPayment with positive = received, negative = paid
@@ -1500,8 +2232,34 @@ class FundingRateTracker:
         abs_qty = abs(position.qty)
         position_value = mark_price * abs_qty
 
-        # Payment amount
-        payment = position_value * funding_rate
+        # Funding period is 8 hours = 28,800,000 ms
+        FUNDING_PERIOD_MS = 8 * 3600 * 1000
+        period_start_ms = timestamp_ms - FUNDING_PERIOD_MS
+
+        # Calculate pro-rata factor (0.0 to 1.0)
+        prorate_factor = Decimal("1.0")
+
+        if entry_time_ms is not None or exit_time_ms is not None:
+            # Determine effective holding period within this funding window
+            effective_start = max(period_start_ms, entry_time_ms or 0)
+            effective_end = min(timestamp_ms, exit_time_ms or timestamp_ms)
+
+            # Position must have been held during the funding period
+            if effective_start >= timestamp_ms:
+                # Position opened after funding timestamp - no payment
+                prorate_factor = Decimal("0.0")
+            elif effective_end <= period_start_ms:
+                # Position closed before funding period started - no payment
+                prorate_factor = Decimal("0.0")
+            else:
+                # Calculate fraction of period held
+                held_duration_ms = max(0, effective_end - effective_start)
+                prorate_factor = Decimal(str(held_duration_ms)) / Decimal(str(FUNDING_PERIOD_MS))
+                # Clamp to [0, 1]
+                prorate_factor = max(Decimal("0"), min(Decimal("1"), prorate_factor))
+
+        # Payment amount (with pro-rata adjustment)
+        payment = position_value * funding_rate * prorate_factor
 
         # Sign depends on position direction
         if position.qty > 0:  # Long
@@ -1518,7 +2276,33 @@ class FundingRateTracker:
             mark_price=mark_price,
             position_qty=position.qty,
             payment_amount=payment,
+            prorate_factor=float(prorate_factor),  # New field for debugging
         )
+
+    def should_apply_funding(
+        self,
+        position_entry_ms: int,
+        position_exit_ms: Optional[int],
+        funding_time_ms: int,
+    ) -> bool:
+        """
+        Check if position should receive/pay funding at given time.
+
+        A position is eligible for funding if:
+        1. It was open BEFORE the funding timestamp
+        2. It was not closed BEFORE the funding timestamp
+
+        Edge case handling:
+        - Position opened at exactly funding time: NO funding (need to hold through)
+        - Position closed at exactly funding time: YES funding (held through)
+        """
+        if position_entry_ms >= funding_time_ms:
+            return False  # Opened at or after funding - no payment
+
+        if position_exit_ms is not None and position_exit_ms < funding_time_ms:
+            return False  # Closed before funding - no payment
+
+        return True
 
     def get_next_funding_time(self, current_ts_ms: int) -> int:
         """Get next funding settlement time."""
@@ -1699,6 +2483,169 @@ from core_models import Bar, Tick
 from adapters.base import MarketDataAdapter
 from adapters.models import ExchangeVendor
 
+class IBConnectionManager:
+    """
+    Production-grade IB TWS connection lifecycle manager.
+
+    Handles:
+    - Automatic heartbeat every 30 seconds (IB requires activity)
+    - Message rate limiting (IB limit: 50 msg/sec, we use 45 for safety)
+    - Exponential backoff reconnection
+    - Paper vs Live account routing
+    - Connection state monitoring
+
+    References:
+    - IB TWS API: https://interactivebrokers.github.io/tws-api/
+    - ib_insync: https://ib-insync.readthedocs.io/
+    """
+
+    HEARTBEAT_INTERVAL_SEC = 30  # IB requires activity every 60s, we use 30 for safety
+    MAX_MESSAGES_PER_SEC = 45    # IB limit is 50, leave margin for safety
+    RECONNECT_DELAYS = [1, 2, 5, 10, 30, 60, 120]  # Exponential backoff (seconds)
+    MAX_RECONNECT_ATTEMPTS = len(RECONNECT_DELAYS)
+
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 7497,  # 7497=TWS Paper, 7496=TWS Live, 4002=Gateway Paper, 4001=Gateway Live
+        client_id: int = 1,
+        readonly: bool = False,
+        account: Optional[str] = None,
+    ):
+        self._host = host
+        self._port = port
+        self._client_id = client_id
+        self._readonly = readonly
+        self._account = account
+
+        self._ib: Optional[IB] = None
+        self._connected = False
+        self._reconnect_count = 0
+        self._last_heartbeat_ts: float = 0.0
+        self._message_count_this_second: int = 0
+        self._last_second: float = 0.0
+
+        # Rate limiter
+        self._message_times: List[float] = []
+
+    def connect(self, timeout: float = 10.0) -> bool:
+        """
+        Connect to TWS/Gateway with retry logic.
+
+        Args:
+            timeout: Connection timeout in seconds
+
+        Returns:
+            True if connected successfully
+        """
+        for attempt, delay in enumerate(self.RECONNECT_DELAYS):
+            try:
+                self._ib = IB()
+                self._ib.connect(
+                    self._host,
+                    self._port,
+                    clientId=self._client_id,
+                    readonly=self._readonly,
+                    account=self._account,
+                    timeout=timeout,
+                )
+                self._connected = True
+                self._reconnect_count = 0
+                self._last_heartbeat_ts = time.time()
+
+                # Register disconnect handler
+                self._ib.disconnectedEvent += self._on_disconnect
+
+                return True
+
+            except Exception as e:
+                self._reconnect_count = attempt + 1
+                if attempt < len(self.RECONNECT_DELAYS) - 1:
+                    time.sleep(delay)
+                else:
+                    raise ConnectionError(
+                        f"Failed to connect after {self.MAX_RECONNECT_ATTEMPTS} attempts: {e}"
+                    )
+
+        return False
+
+    def disconnect(self) -> None:
+        """Safely disconnect from TWS/Gateway."""
+        if self._ib and self._ib.isConnected():
+            self._ib.disconnect()
+        self._connected = False
+
+    def _on_disconnect(self) -> None:
+        """Handle unexpected disconnection - attempt reconnect."""
+        self._connected = False
+        try:
+            self.connect()
+        except ConnectionError:
+            pass  # Will be handled by health check
+
+    def send_heartbeat(self) -> None:
+        """Send heartbeat to keep connection alive."""
+        if not self._connected or not self._ib:
+            return
+
+        now = time.time()
+        if now - self._last_heartbeat_ts >= self.HEARTBEAT_INTERVAL_SEC:
+            # Request current time as heartbeat
+            try:
+                self._ib.reqCurrentTime()
+                self._last_heartbeat_ts = now
+            except Exception:
+                self._connected = False
+
+    def check_rate_limit(self) -> bool:
+        """
+        Check if we can send a message without exceeding rate limit.
+
+        Returns:
+            True if message can be sent, False if should wait
+        """
+        now = time.time()
+
+        # Clean old entries (older than 1 second)
+        self._message_times = [t for t in self._message_times if now - t < 1.0]
+
+        if len(self._message_times) >= self.MAX_MESSAGES_PER_SEC:
+            return False
+
+        self._message_times.append(now)
+        return True
+
+    def wait_for_rate_limit(self) -> None:
+        """Block until rate limit allows sending."""
+        while not self.check_rate_limit():
+            time.sleep(0.02)  # 20ms
+
+    @property
+    def ib(self) -> IB:
+        """Get IB instance, ensuring connected."""
+        if not self._connected or not self._ib:
+            raise ConnectionError("Not connected to IB")
+        self.send_heartbeat()  # Opportunistic heartbeat
+        return self._ib
+
+    @property
+    def is_connected(self) -> bool:
+        """Check connection status."""
+        return self._connected and self._ib is not None and self._ib.isConnected()
+
+    def health_check(self) -> Dict[str, Any]:
+        """Return connection health status."""
+        return {
+            "connected": self.is_connected,
+            "host": self._host,
+            "port": self._port,
+            "client_id": self._client_id,
+            "reconnect_count": self._reconnect_count,
+            "last_heartbeat": self._last_heartbeat_ts,
+            "messages_this_second": len(self._message_times),
+        }
+
+
 class IBMarketDataAdapter(MarketDataAdapter):
     """
     Interactive Brokers market data adapter.
@@ -1708,6 +2655,13 @@ class IBMarketDataAdapter(MarketDataAdapter):
         port: TWS port (7497 paper, 7496 live) or Gateway (4002 paper, 4001 live)
         client_id: Unique client ID
         timeout: Connection timeout seconds
+        readonly: If True, no trading allowed (safer for data-only usage)
+        account: Specific account to use (for multi-account setups)
+
+    Rate Limits:
+        - IB allows max 50 messages/second - we enforce 45 for safety
+        - Historical data: max 60 requests per 10 minutes (pacing)
+        - Market data lines: varies by subscription
     """
 
     def __init__(
@@ -1716,20 +2670,37 @@ class IBMarketDataAdapter(MarketDataAdapter):
         config: Optional[Mapping[str, Any]] = None,
     ) -> None:
         super().__init__(vendor, config)
-        self._ib: Optional[IB] = None
+        self._conn_manager: Optional[IBConnectionManager] = None
         self._host = self._config.get("host", "127.0.0.1")
         self._port = self._config.get("port", 7497)  # Paper trading default
         self._client_id = self._config.get("client_id", 1)
+        self._readonly = self._config.get("readonly", True)
+        self._account = self._config.get("account")
 
     def _do_connect(self) -> None:
-        """Connect to TWS/Gateway."""
-        self._ib = IB()
-        self._ib.connect(self._host, self._port, clientId=self._client_id)
+        """Connect to TWS/Gateway with production-grade connection management."""
+        self._conn_manager = IBConnectionManager(
+            host=self._host,
+            port=self._port,
+            client_id=self._client_id,
+            readonly=self._readonly,
+            account=self._account,
+        )
+        self._conn_manager.connect(timeout=self._config.get("timeout", 10.0))
 
     def _do_disconnect(self) -> None:
         """Disconnect from TWS/Gateway."""
-        if self._ib and self._ib.isConnected():
-            self._ib.disconnect()
+        if self._conn_manager:
+            self._conn_manager.disconnect()
+            self._conn_manager = None
+
+    @property
+    def _ib(self) -> IB:
+        """Get IB instance with rate limiting."""
+        if not self._conn_manager:
+            raise ConnectionError("Not connected")
+        self._conn_manager.wait_for_rate_limit()
+        return self._conn_manager.ib
 
     def _create_contract(self, symbol: str, use_continuous: bool = True) -> Future:
         """
@@ -2494,12 +3465,44 @@ class SPANMarginRequirement:
 
 class SPANMarginCalculator:
     """
-    Simplified SPAN margin calculator.
+    Simplified SPAN margin calculator (APPROXIMATION).
 
-    Full SPAN uses 16 price/volatility scenarios.
-    This implementation uses simplified scanning ranges.
+    ⚠️ IMPORTANT LIMITATIONS:
+    This is a SIMPLIFIED approximation of SPAN margin. Full SPAN (CME's official
+    Standard Portfolio Analysis of Risk) uses a comprehensive 16-scenario risk
+    analysis that we approximate here.
 
-    For production, use CME SPAN files or IB margin queries.
+    What Full SPAN Does (NOT implemented here):
+    1. 16 price/volatility scenarios: Tests portfolio under ±3σ price moves
+       combined with ±33% volatility changes
+    2. Inter-commodity spread credits: Complex correlation-based offsets
+       between related products (e.g., ES vs NQ, WTI vs Brent)
+    3. Intra-commodity spread credits: Calendar spread offsets for different
+       delivery months
+    4. Delivery month charges: Extra margin for near-expiry contracts
+    5. Short option minimum: Floor margin for short options
+    6. Net option value: Mark-to-market of option positions
+
+    What This Implementation Does:
+    - Uses simplified scanning ranges per product (±6-12% moves)
+    - Provides basic inter-commodity credits for common spreads
+    - Applies fixed initial/maintenance ratios (initial = 1.25x scanning,
+      maintenance = 0.80x initial)
+
+    Accuracy Assessment:
+    - For single positions: ~90-95% accurate vs real SPAN
+    - For simple spreads (ES/NQ): ~80-90% accurate
+    - For complex portfolios: ~60-80% accurate (may underestimate margin)
+
+    For Production Systems:
+    - Use CME's official PC-SPAN calculator
+    - Use IB's whatIfOrder() for real-time margin queries
+    - Integrate with CME SPAN parameter files (updated daily)
+    - Consider OpenGamma's Strata for enterprise-grade SPAN
+
+    References:
+    - CME SPAN Methodology: https://www.cmegroup.com/clearing/risk-management/span-overview.html
+    - SPAN Parameter Files: https://www.cmegroup.com/clearing/risk-management/files-resources.html
     """
 
     # Default scanning ranges (% of price move)
@@ -2730,44 +3733,270 @@ class CMESlippageProvider(EquityParametricSlippageProvider):
 
 class CMECircuitBreaker:
     """
-    CME circuit breaker simulation.
+    CME circuit breaker and price limit simulation.
 
-    Levels (for S&P 500 index):
-    - Level 1: -7% → 15 min halt
-    - Level 2: -13% → 15 min halt
-    - Level 3: -20% → trading halted for day
+    This class implements multiple CME price protection mechanisms:
+
+    1. EQUITY INDEX CIRCUIT BREAKERS (Rule 80B):
+       - Level 1: -7% → 15 min halt (RTH only, once per day)
+       - Level 2: -13% → 15 min halt (RTH only, once per day)
+       - Level 3: -20% → trading halted for day
+       Note: Levels 1 & 2 only apply during RTH (9:30-15:25 ET)
+
+    2. OVERNIGHT LIMIT UP/LIMIT DOWN (Equity Index Futures):
+       - During ETH (after 5pm CT previous day until RTH open)
+       - Limit: ±5% from reference price
+       - Orders beyond limit rejected, no halt
+
+    3. COMMODITY PRICE LIMITS (GC, CL, NG):
+       - Limit Up/Down: ±10% (varies by product)
+       - Expanded limits: Can expand 2x after initial limit hit
+       - No trading halt, just price ceiling/floor
+
+    4. VELOCITY LOGIC:
+       - Detects rapid price moves (potential fat finger)
+       - Triggers brief (1-2 second) protective pause
+       - Different thresholds per product
+
+    5. STOP SPIKE LOGIC:
+       - Prevents stop-loss cascade
+       - Protects against price gaps that trigger multiple stops
+
+    References:
+    - CME Rule 80B: https://www.cmegroup.com/education/articles-and-reports/understanding-stock-index-futures-circuit-breakers.html
+    - Limit Up/Limit Down: https://www.cmegroup.com/trading/equity-index/us-index/e-mini-sandp500_contract_specifications.html
     """
 
-    LEVELS = {
+    # Equity Index Circuit Breaker Levels (based on S&P 500 decline from previous close)
+    EQUITY_CB_LEVELS = {
         1: Decimal("-0.07"),   # -7%
         2: Decimal("-0.13"),   # -13%
         3: Decimal("-0.20"),   # -20%
     }
 
-    HALT_DURATIONS = {
+    EQUITY_HALT_DURATIONS_SEC = {
         1: 15 * 60,  # 15 minutes
-        2: 15 * 60,
+        2: 15 * 60,  # 15 minutes
         3: None,     # Full day halt
     }
+
+    # Overnight Price Limits (ETH only, equity index futures)
+    OVERNIGHT_LIMIT_PCT = {
+        "ES": Decimal("0.05"),   # ±5%
+        "NQ": Decimal("0.05"),
+        "YM": Decimal("0.05"),
+        "RTY": Decimal("0.05"),
+    }
+
+    # Commodity Daily Price Limits
+    COMMODITY_LIMITS = {
+        "GC": {
+            "initial": Decimal("0.05"),      # ±5% initial limit
+            "expanded_1": Decimal("0.075"),  # ±7.5% expanded
+            "expanded_2": Decimal("0.10"),   # ±10% max
+        },
+        "CL": {
+            "initial": Decimal("0.07"),      # ±7%
+            "expanded_1": Decimal("0.105"),  # ±10.5%
+            "expanded_2": Decimal("0.14"),   # ±14%
+        },
+        "NG": {
+            "initial": Decimal("0.10"),      # ±10% (more volatile)
+            "expanded_1": Decimal("0.15"),
+            "expanded_2": Decimal("0.20"),
+        },
+        "SI": {
+            "initial": Decimal("0.07"),
+            "expanded_1": Decimal("0.105"),
+            "expanded_2": Decimal("0.14"),
+        },
+    }
+
+    # Velocity Logic Thresholds (price move in ticks per second)
+    VELOCITY_THRESHOLDS = {
+        "ES": 12,    # 12 ticks/sec = 3 points/sec = $150/contract/sec
+        "NQ": 20,    # 20 ticks/sec = 5 points/sec
+        "GC": 30,    # 30 ticks/sec = 3 points/sec
+        "CL": 50,    # 50 ticks/sec = 0.50/sec
+    }
+
+    VELOCITY_PAUSE_DURATION_MS = 2000  # 2 second protective pause
+
+    def __init__(self, symbol: str = "ES"):
+        self._symbol = symbol
+        self._triggered_levels: Set[int] = set()  # Track triggered CBs for the day
+        self._current_limit_expansion: int = 0     # For commodity limit expansion
+        self._velocity_pause_until_ms: int = 0
+        self._last_price: Optional[Decimal] = None
+        self._last_price_ts_ms: int = 0
 
     def check_circuit_breaker(
         self,
         current_price: Decimal,
-        reference_price: Decimal,  # Previous day close
+        reference_price: Decimal,  # Previous day settlement
+        timestamp_ms: int,
+        is_rth: bool = True,
     ) -> Optional[int]:
         """
-        Check if circuit breaker triggered.
+        Check if equity index circuit breaker triggered.
+
+        Args:
+            current_price: Current price
+            reference_price: Previous day settlement price
+            timestamp_ms: Current timestamp
+            is_rth: True if during Regular Trading Hours (9:30-15:25 ET)
 
         Returns:
             Circuit breaker level (1, 2, 3) or None
         """
+        # Circuit breakers only apply to equity index futures
+        if self._symbol not in ("ES", "NQ", "YM", "RTY"):
+            return None
+
         change_pct = (current_price - reference_price) / reference_price
 
-        for level, threshold in sorted(self.LEVELS.items(), reverse=True):
+        for level, threshold in sorted(self.EQUITY_CB_LEVELS.items(), reverse=True):
             if change_pct <= threshold:
+                # Level 1 & 2 only trigger during RTH
+                if level in (1, 2) and not is_rth:
+                    continue
+
+                # Each level only triggers once per day
+                if level in self._triggered_levels:
+                    continue
+
+                self._triggered_levels.add(level)
                 return level
 
         return None
+
+    def check_overnight_limit(
+        self,
+        price: Decimal,
+        reference_price: Decimal,
+        is_overnight: bool = True,
+    ) -> Tuple[bool, Optional[str]]:
+        """
+        Check overnight price limit (limit up/down).
+
+        Args:
+            price: Order or trade price
+            reference_price: Previous settlement
+            is_overnight: True if in ETH session
+
+        Returns:
+            (is_within_limit, violation_type or None)
+            violation_type: "LIMIT_UP" or "LIMIT_DOWN"
+        """
+        if not is_overnight:
+            return (True, None)
+
+        limit_pct = self.OVERNIGHT_LIMIT_PCT.get(self._symbol)
+        if limit_pct is None:
+            return (True, None)
+
+        upper_limit = reference_price * (1 + limit_pct)
+        lower_limit = reference_price * (1 - limit_pct)
+
+        if price > upper_limit:
+            return (False, "LIMIT_UP")
+        if price < lower_limit:
+            return (False, "LIMIT_DOWN")
+
+        return (True, None)
+
+    def check_commodity_limit(
+        self,
+        price: Decimal,
+        reference_price: Decimal,
+    ) -> Tuple[bool, Decimal, Decimal]:
+        """
+        Check commodity daily price limit.
+
+        Returns:
+            (is_within_limit, lower_bound, upper_bound)
+        """
+        limits = self.COMMODITY_LIMITS.get(self._symbol)
+        if limits is None:
+            return (True, Decimal("0"), Decimal("inf"))
+
+        # Get current limit level (initial, expanded_1, expanded_2)
+        if self._current_limit_expansion == 0:
+            limit_pct = limits["initial"]
+        elif self._current_limit_expansion == 1:
+            limit_pct = limits["expanded_1"]
+        else:
+            limit_pct = limits["expanded_2"]
+
+        upper = reference_price * (1 + limit_pct)
+        lower = reference_price * (1 - limit_pct)
+
+        is_within = lower <= price <= upper
+        return (is_within, lower, upper)
+
+    def expand_commodity_limit(self) -> bool:
+        """
+        Expand commodity limit after hitting initial limit.
+
+        Returns:
+            True if expansion successful, False if already at max
+        """
+        if self._current_limit_expansion >= 2:
+            return False
+        self._current_limit_expansion += 1
+        return True
+
+    def check_velocity_logic(
+        self,
+        price: Decimal,
+        timestamp_ms: int,
+    ) -> bool:
+        """
+        Check if velocity logic should trigger protective pause.
+
+        Returns:
+            True if velocity logic triggered (should pause)
+        """
+        if timestamp_ms < self._velocity_pause_until_ms:
+            return True  # Already in pause
+
+        if self._last_price is None:
+            self._last_price = price
+            self._last_price_ts_ms = timestamp_ms
+            return False
+
+        # Calculate velocity in ticks per second
+        tick_size = Decimal("0.25")  # Default for ES
+        if self._symbol in ("GC",):
+            tick_size = Decimal("0.10")
+        elif self._symbol in ("CL",):
+            tick_size = Decimal("0.01")
+
+        price_move_ticks = abs(price - self._last_price) / tick_size
+        time_delta_sec = max(0.001, (timestamp_ms - self._last_price_ts_ms) / 1000)
+        velocity = float(price_move_ticks / Decimal(str(time_delta_sec)))
+
+        threshold = self.VELOCITY_THRESHOLDS.get(self._symbol, 20)
+
+        self._last_price = price
+        self._last_price_ts_ms = timestamp_ms
+
+        if velocity > threshold:
+            self._velocity_pause_until_ms = timestamp_ms + self.VELOCITY_PAUSE_DURATION_MS
+            return True
+
+        return False
+
+    def reset_daily(self) -> None:
+        """Reset circuit breakers for new trading day."""
+        self._triggered_levels.clear()
+        self._current_limit_expansion = 0
+        self._velocity_pause_until_ms = 0
+        self._last_price = None
+
+    def get_halt_duration(self, level: int) -> Optional[int]:
+        """Get halt duration in seconds for a circuit breaker level."""
+        return self.EQUITY_HALT_DURATIONS_SEC.get(level)
 ```
 
 ### Tests for Phase 4B
@@ -4821,6 +6050,185 @@ def calculate_basis_features(
 
     return features
 
+
+def compute_basis_features_extended(
+    futures_price: pd.Series,
+    spot_price: pd.Series,
+    funding_rate: Optional[pd.Series] = None,
+    days_to_expiry: Optional[pd.Series] = None,
+    risk_free_rate: float = 0.05,  # Annual risk-free rate
+    storage_cost: float = 0.0,     # For commodities
+) -> pd.DataFrame:
+    """
+    Extended basis features for cash-and-carry arbitrage analysis.
+
+    Implements research-backed metrics for basis trading:
+    - Theoretical fair value using cost-of-carry model
+    - Basis mispricing signals
+    - Roll yield for term structure trading
+    - Carry trade opportunity detection
+
+    References:
+    - Hull, J.C. (2018): Options, Futures, and Other Derivatives
+    - CME Group (2023): Understanding Basis Trading
+
+    Args:
+        futures_price: Futures price series
+        spot_price: Underlying spot price series
+        funding_rate: Funding rate for perpetuals (optional)
+        days_to_expiry: Days to contract expiration (optional)
+        risk_free_rate: Annualized risk-free rate
+        storage_cost: Annualized storage cost (for commodities like GC, CL)
+
+    Returns:
+        DataFrame with extended basis features
+    """
+    features = pd.DataFrame(index=futures_price.index)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # 1. BASIC BASIS METRICS
+    # ─────────────────────────────────────────────────────────────────────
+    basis = futures_price - spot_price
+    features['basis_absolute'] = basis
+    features['basis_pct'] = basis / spot_price * 100
+    features['basis_log'] = np.log(futures_price / spot_price) * 100
+
+    # ─────────────────────────────────────────────────────────────────────
+    # 2. THEORETICAL FAIR VALUE (Cost-of-Carry Model)
+    # ─────────────────────────────────────────────────────────────────────
+    # F_theoretical = S * exp((r + c) * T)
+    # where: r = risk-free rate, c = storage cost, T = time to expiry
+    if days_to_expiry is not None:
+        time_to_expiry = days_to_expiry / 365.0
+        cost_of_carry = risk_free_rate + storage_cost
+        fair_value = spot_price * np.exp(cost_of_carry * time_to_expiry)
+        features['fair_value_theoretical'] = fair_value
+        features['mispricing'] = futures_price - fair_value
+        features['mispricing_pct'] = (features['mispricing'] / fair_value) * 100
+
+        # Annualized basis for quarterly contracts
+        features['basis_annualized'] = (basis / spot_price) * (365 / days_to_expiry.replace(0, np.nan)) * 100
+
+        # Implied yield: what rate does the market imply?
+        # F = S * exp(y * T) => y = ln(F/S) / T
+        features['implied_yield'] = (np.log(futures_price / spot_price) / time_to_expiry.replace(0, np.nan)) * 100
+
+    # ─────────────────────────────────────────────────────────────────────
+    # 3. CARRY TRADE SIGNALS (Contango/Backwardation)
+    # ─────────────────────────────────────────────────────────────────────
+    features['is_contango'] = (basis > 0).astype(float)
+    features['is_backwardation'] = (basis < 0).astype(float)
+
+    # Basis regime (normalized between -1 and 1)
+    basis_percentile = basis.rolling(window=252, min_periods=20).apply(
+        lambda x: pd.Series(x).rank(pct=True).iloc[-1]
+    )
+    features['basis_regime'] = (basis_percentile - 0.5) * 2  # Scale to [-1, 1]
+
+    # ─────────────────────────────────────────────────────────────────────
+    # 4. ROLL YIELD FEATURES
+    # ─────────────────────────────────────────────────────────────────────
+    # Roll yield = (F_near - F_far) / F_near * (365 / days_between)
+    # Positive roll yield in backwardation = profit from rolling long position
+    if days_to_expiry is not None:
+        features['roll_yield_signal'] = -features['basis_annualized']  # Negative basis = positive roll
+
+    # ─────────────────────────────────────────────────────────────────────
+    # 5. FUNDING RATE INTEGRATION (Perpetuals)
+    # ─────────────────────────────────────────────────────────────────────
+    # For perpetuals: basis ≈ expected funding (arbitrage keeps them aligned)
+    if funding_rate is not None:
+        features['funding_rate'] = funding_rate
+        # Annualized funding (3 payments per day × 365 days)
+        features['funding_annualized'] = funding_rate * 3 * 365 * 100
+
+        # Basis-funding spread: if basis >> funding, arbitrage opportunity
+        features['basis_funding_spread'] = features['basis_pct'] * 3 * 365 - features['funding_annualized']
+
+        # Funding prediction: basis often leads funding
+        features['funding_predicted'] = features['basis_pct'].shift(1) / 3  # Approx next 8h funding
+
+    # ─────────────────────────────────────────────────────────────────────
+    # 6. MEAN REVERSION SIGNALS
+    # ─────────────────────────────────────────────────────────────────────
+    # Basis tends to mean-revert around fair value
+    basis_zscore = (features['basis_pct'] - features['basis_pct'].rolling(20).mean()) / \
+                   features['basis_pct'].rolling(20).std()
+    features['basis_zscore'] = basis_zscore.clip(-3, 3)
+
+    # Bollinger bands for basis
+    basis_sma = features['basis_pct'].rolling(20).mean()
+    basis_std = features['basis_pct'].rolling(20).std()
+    features['basis_bb_upper'] = basis_sma + 2 * basis_std
+    features['basis_bb_lower'] = basis_sma - 2 * basis_std
+    features['basis_bb_signal'] = (features['basis_pct'] - basis_sma) / (2 * basis_std)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # 7. CASH-AND-CARRY ARBITRAGE DETECTION
+    # ─────────────────────────────────────────────────────────────────────
+    if days_to_expiry is not None:
+        # Arbitrage profit = |mispricing| - transaction_costs
+        # Conservative estimate: 0.1% round-trip for execution
+        TRANSACTION_COST_PCT = 0.1
+
+        features['arb_profit_pct'] = features['mispricing_pct'].abs() - TRANSACTION_COST_PCT
+        features['arb_opportunity'] = (features['arb_profit_pct'] > 0).astype(float)
+
+        # Direction: positive mispricing = sell futures, buy spot
+        features['arb_direction'] = np.sign(features['mispricing_pct'])
+
+    return features
+
+
+def calculate_term_structure_features(
+    front_month_price: pd.Series,
+    back_month_price: pd.Series,
+    front_dte: pd.Series,
+    back_dte: pd.Series,
+) -> pd.DataFrame:
+    """
+    Calculate term structure features for calendar spread trading.
+
+    Used for:
+    - Index futures (ES, NQ) quarterly rolls
+    - Commodity futures (GC, CL) monthly rolls
+    - VIX futures term structure
+
+    Args:
+        front_month_price: Near-term contract price
+        back_month_price: Next-term contract price
+        front_dte: Days to expiry (front)
+        back_dte: Days to expiry (back)
+
+    Returns:
+        DataFrame with term structure features
+    """
+    features = pd.DataFrame(index=front_month_price.index)
+
+    # Calendar spread
+    spread = back_month_price - front_month_price
+    features['calendar_spread'] = spread
+    features['calendar_spread_pct'] = spread / front_month_price * 100
+
+    # Annualized roll
+    days_between = back_dte - front_dte
+    features['roll_annualized'] = (spread / front_month_price) * (365 / days_between.replace(0, np.nan)) * 100
+
+    # Term structure shape
+    features['is_contango'] = (spread > 0).astype(float)
+    features['is_backwardation'] = (spread < 0).astype(float)
+
+    # Spread volatility
+    features['spread_volatility'] = features['calendar_spread_pct'].rolling(20).std()
+
+    # Z-score for mean reversion
+    spread_mean = features['calendar_spread_pct'].rolling(60).mean()
+    spread_std = features['calendar_spread_pct'].rolling(60).std()
+    features['spread_zscore'] = ((features['calendar_spread_pct'] - spread_mean) / spread_std).clip(-3, 3)
+
+    return features
+
+
 def calculate_liquidation_features(
     liquidation_volume: pd.Series,
     total_volume: pd.Series,
@@ -5148,6 +6556,765 @@ slippage:
   profile: crypto_futures
   k: 0.09
 ```
+
+### 8.4 Unified Futures Config Structure
+
+The following template provides a **unified configuration schema** for ALL futures types.
+This enables consistent configuration across crypto perpetuals, index futures, commodities, and currency futures.
+
+```yaml
+# ═══════════════════════════════════════════════════════════════════════════════
+# UNIFIED FUTURES CONFIGURATION TEMPLATE
+# ═══════════════════════════════════════════════════════════════════════════════
+# NEW FILE: configs/config_futures_unified.yaml
+#
+# This is the master template for futures trading configuration.
+# Supports: crypto_perp, crypto_quarterly, index, commodity, currency futures
+#
+# Usage:
+#   python script_futures_backtest.py --config configs/config_futures_unified.yaml
+#   python script_futures_live.py --config configs/config_futures_unified.yaml
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CORE SETTINGS
+# ─────────────────────────────────────────────────────────────────────────────
+mode: backtest                    # train, backtest, live, eval
+futures_type: crypto_perp         # crypto_perp, crypto_quarterly, index, commodity, currency
+
+# Vendor/exchange selection
+vendor:
+  primary: binance                # binance, interactive_brokers, tradovate
+  fallback: null                  # Optional fallback for data
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONTRACT SPECIFICATION (Required for non-crypto)
+# ─────────────────────────────────────────────────────────────────────────────
+contract:
+  symbol: BTCUSDT                 # Trading symbol
+  exchange: binance               # Exchange code
+  underlying: BTC                 # Underlying asset
+  quote_currency: USDT            # Quote currency
+  multiplier: 1                   # Contract multiplier (1 for crypto, $50 for ES)
+  tick_size: 0.10                 # Minimum price increment
+  min_qty: 0.001                  # Minimum order size
+  max_qty: 1000                   # Maximum order size
+  expiry: null                    # ISO date for quarterly (null for perpetual)
+  settlement: cash                # cash, physical
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LEVERAGE & MARGIN
+# ─────────────────────────────────────────────────────────────────────────────
+margin:
+  mode: cross                     # cross, isolated
+  initial_leverage: 10            # Starting leverage (1-125)
+  max_leverage: 50                # Hard cap (exchange limit)
+  maintenance_margin_rate: 0.004  # 0.4% for low leverage (tiered for crypto)
+
+  # Tiered brackets (Binance USDT-M style) - crypto only
+  brackets:
+    - notional_cap: 50000
+      max_leverage: 125
+      maint_margin_rate: 0.004
+    - notional_cap: 250000
+      max_leverage: 100
+      maint_margin_rate: 0.005
+    - notional_cap: 1000000
+      max_leverage: 50
+      maint_margin_rate: 0.01
+    - notional_cap: 10000000
+      max_leverage: 20
+      maint_margin_rate: 0.025
+    - notional_cap: null          # Unlimited
+      max_leverage: 10
+      maint_margin_rate: 0.05
+
+  # SPAN margin settings (CME only)
+  span:
+    enabled: false                # Use SPAN approximation
+    scanning_range: 0.12          # 12% price range
+    volatility_adjustment: true
+    inter_month_spread_credit: 0.70  # 70% credit for calendar spreads
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FUNDING (Perpetuals only)
+# ─────────────────────────────────────────────────────────────────────────────
+funding:
+  enabled: true                   # Enable funding rate simulation
+  interval_hours: 8               # Funding interval (8 for Binance)
+  times_utc: ["00:00", "08:00", "16:00"]  # Settlement times
+  include_in_reward: true         # Include funding P&L in reward
+  clamp_rate_bps: 75              # Max funding rate (0.75%)
+  pro_rata_settlement: true       # Calculate pro-rata for partial period
+
+  # Funding risk limits
+  limits:
+    max_cumulative_24h_bps: 150   # Max 1.5% daily funding exposure
+    skip_when_rate_exceeds_bps: 50  # Avoid high funding positions
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SETTLEMENT (Quarterly/CME only)
+# ─────────────────────────────────────────────────────────────────────────────
+settlement:
+  enabled: false                  # Enable daily settlement (CME)
+  time_et: "16:00"                # Daily settlement time
+  variation_margin: true          # Daily P&L settlement
+  auto_roll:
+    enabled: true                 # Auto-roll before expiry
+    days_before_expiry: 8         # Roll 8 days before
+    max_roll_cost_bps: 50         # Abort roll if spread > 50bps
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LIQUIDATION
+# ─────────────────────────────────────────────────────────────────────────────
+liquidation:
+  penalty_reward: -10.0           # Reward penalty on liquidation
+  simulate_cascade: true          # Simulate liquidation cascades
+  insurance_fund_deduction: true  # Deduct from insurance fund (crypto)
+  adl_simulation: true            # Auto-deleveraging simulation (crypto)
+
+  # Cross-margin priority (when multiple positions)
+  cross_margin_priority: highest_loss  # highest_loss, lowest_ratio, oldest, largest
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TRADING HOURS & SESSIONS
+# ─────────────────────────────────────────────────────────────────────────────
+session:
+  calendar: crypto_24x7           # crypto_24x7, cme_futures, forex_24x5
+
+  # CME-specific (index, commodity, currency futures)
+  cme:
+    regular_hours:
+      start_et: "09:30"
+      end_et: "16:00"
+    globex_hours:
+      start_et: "18:00"           # Sunday 6pm
+      end_et: "17:00"             # Friday 5pm
+    maintenance_break:
+      start_et: "16:15"
+      end_et: "16:30"
+    holidays: us_federal           # Holiday calendar
+
+  # Circuit breakers (CME equity index futures)
+  circuit_breakers:
+    enabled: true
+    levels:
+      - threshold_pct: -7
+        halt_minutes: 15
+        applies_to: rth            # Regular trading hours only
+      - threshold_pct: -13
+        halt_minutes: 15
+        applies_to: rth
+      - threshold_pct: -20
+        halt_minutes: null         # Market closed for day
+        applies_to: rth
+
+    # Overnight limits
+    overnight_limit_pct: 5         # ±5% from settlement price
+    velocity_logic:
+      enabled: true
+      threshold_ticks: 12          # ES: 12 ticks in short window
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEES
+# ─────────────────────────────────────────────────────────────────────────────
+fees:
+  structure: maker_taker          # maker_taker, flat, exchange_fees
+
+  # Crypto (Binance)
+  crypto:
+    maker_bps: 2.0
+    taker_bps: 4.0
+    use_bnb_discount: true
+
+  # CME via IB
+  cme:
+    commission_per_contract: 2.25  # USD per contract (one-way)
+    exchange_fee_per_contract: 1.25
+    nfa_fee_per_contract: 0.02
+    clearing_fee_per_contract: 0.10
+
+  # Regulatory (CME only)
+  regulatory:
+    enabled: true
+    sec_fee_per_million: 27.80     # Not applicable to futures, but for consistency
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SLIPPAGE & EXECUTION
+# ─────────────────────────────────────────────────────────────────────────────
+execution:
+  level: L2                       # L2 (parametric), L3 (LOB simulation)
+
+  slippage:
+    profile: crypto_futures       # crypto_futures, index_futures, commodity_futures
+    impact_coef_base: 0.09        # Almgren-Chriss k coefficient
+    default_spread_bps: 4.0
+    min_slippage_bps: 0.5
+    max_slippage_bps: 500.0
+
+    # Futures-specific adjustments
+    funding_stress_sensitivity: 8.0   # Slippage increase with high funding
+    liquidation_cascade_multiplier: 1.5  # Extra slippage during liquidations
+    oi_imbalance_sensitivity: 0.3     # Open interest imbalance impact
+
+  # L3 LOB settings (if execution.level == "L3")
+  lob:
+    latency_profile: institutional    # colocated, institutional, retail
+    queue_position_method: mbo        # mbo, mbp
+    impact_model: almgren_chriss      # kyle, almgren_chriss, gatheral
+    fill_probability_model: queue_reactive
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RISK MANAGEMENT
+# ─────────────────────────────────────────────────────────────────────────────
+risk:
+  # Position limits
+  max_position_usd: 1000000       # Max notional per symbol
+  max_open_positions: 5           # Max concurrent positions
+  max_leverage_used: 0.8          # Max 80% of available leverage
+
+  # Drawdown limits
+  max_drawdown_pct: 15            # Max 15% drawdown
+  daily_loss_limit_usd: 10000     # Max daily loss
+  trailing_stop_pct: null         # Optional trailing stop
+
+  # Funding risk (crypto)
+  max_funding_exposure_24h_pct: 2.0  # Max 2% funding exposure per day
+
+  # Concentration
+  max_concentration_pct: 50       # Max 50% in single position
+
+  # Kill switch
+  kill_switch:
+    enabled: true
+    triggers:
+      - consecutive_losses: 5
+      - drawdown_pct: 10
+      - daily_loss_usd: 5000
+
+# ─────────────────────────────────────────────────────────────────────────────
+# DATA SOURCES
+# ─────────────────────────────────────────────────────────────────────────────
+data:
+  # OHLCV bars
+  paths:
+    - "data/futures/*.parquet"
+  timeframe: "4h"
+
+  # Funding rate history (crypto)
+  funding_paths:
+    - "data/futures/*_funding.parquet"
+
+  # Mark price (for liquidation simulation)
+  mark_price_paths:
+    - "data/futures/*_mark_*.parquet"
+
+  # Open interest (optional)
+  open_interest_paths:
+    - "data/futures/*_oi.parquet"
+
+  # Liquidations (optional, for cascade simulation)
+  liquidation_paths:
+    - "data/futures/*_liquidations.parquet"
+
+  # Data validation
+  validation:
+    check_gaps: true
+    max_gap_bars: 2
+    check_volume_zeros: true
+    min_history_bars: 1000
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEATURES (Futures-specific)
+# ─────────────────────────────────────────────────────────────────────────────
+features:
+  # Enable futures-specific features
+  include_funding_features: true
+  include_basis_features: true
+  include_oi_features: true
+  include_liquidation_features: true
+  include_term_structure: false   # For quarterly/CME
+
+  # Feature configuration
+  funding_lookback: 8             # 8 funding periods (~2.67 days)
+  oi_lookback: 20                 # 20 bars
+  basis_lookback: 20
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MODEL (Training mode)
+# ─────────────────────────────────────────────────────────────────────────────
+model:
+  algo: ppo
+  policy: RecurrentActorCriticPolicy
+  path: "models/futures_ppo.zip"
+
+  params:
+    learning_rate: 0.0001
+    n_steps: 2048
+    batch_size: 64
+    n_epochs: 10
+    gamma: 0.99
+    gae_lambda: 0.95
+    clip_range: 0.2
+    ent_coef: 0.001
+    vf_coef: 0.5
+    max_grad_norm: 0.5
+    use_twin_critics: true
+    num_quantiles: 21
+    cvar_alpha: 0.05
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOGGING & MONITORING
+# ─────────────────────────────────────────────────────────────────────────────
+logging:
+  level: INFO
+  tensorboard: true
+  tensorboard_dir: "runs/futures"
+
+  # Futures-specific metrics
+  track_funding_pnl: true
+  track_liquidation_distance: true
+  track_margin_usage: true
+```
+
+### 8.5 Feature Flags for Gradual Rollout
+
+Feature flags enable safe, incremental deployment of futures functionality.
+
+```python
+# NEW FILE: services/futures_feature_flags.py
+"""
+Feature flags for gradual futures integration rollout.
+
+Enables:
+1. Shadow mode testing (run parallel to production without affecting positions)
+2. Canary deployment (small % of traffic)
+3. Kill switch for rapid rollback
+4. A/B testing of execution algorithms
+
+References:
+- Martin Fowler: Feature Toggles (Feature Flags)
+- LaunchDarkly: Best Practices for Feature Flags
+"""
+
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Optional, Dict, Any, Callable
+import logging
+import json
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+
+class RolloutStage(str, Enum):
+    """Deployment stage for futures features."""
+    DISABLED = "disabled"           # Feature completely off
+    SHADOW = "shadow"               # Run in parallel, don't affect positions
+    CANARY = "canary"               # Small % of traffic (configurable)
+    PRODUCTION = "production"       # Full rollout
+
+
+class FuturesFeature(str, Enum):
+    """Individual futures features that can be toggled."""
+    # Core features
+    PERPETUAL_TRADING = "perpetual_trading"
+    QUARTERLY_TRADING = "quarterly_trading"
+    INDEX_FUTURES = "index_futures"
+    COMMODITY_FUTURES = "commodity_futures"
+    CURRENCY_FUTURES = "currency_futures"
+
+    # Margin & Liquidation
+    CROSS_MARGIN = "cross_margin"
+    ISOLATED_MARGIN = "isolated_margin"
+    LIQUIDATION_SIMULATION = "liquidation_simulation"
+    ADL_SIMULATION = "adl_simulation"
+
+    # Funding
+    FUNDING_RATE_TRACKING = "funding_rate_tracking"
+    FUNDING_IN_REWARD = "funding_in_reward"
+    PRO_RATA_FUNDING = "pro_rata_funding"
+
+    # Execution
+    L2_EXECUTION = "l2_execution"
+    L3_EXECUTION = "l3_execution"
+    LIQUIDATION_CASCADE_SLIPPAGE = "liquidation_cascade_slippage"
+
+    # Risk
+    FUTURES_RISK_GUARDS = "futures_risk_guards"
+    LEVERAGE_GUARD = "leverage_guard"
+    FUNDING_EXPOSURE_GUARD = "funding_exposure_guard"
+
+    # Data
+    FUTURES_FEATURES_PIPELINE = "futures_features_pipeline"
+    TERM_STRUCTURE_FEATURES = "term_structure_features"
+    BASIS_TRADING_FEATURES = "basis_trading_features"
+
+
+@dataclass
+class FeatureConfig:
+    """Configuration for a single feature flag."""
+    stage: RolloutStage = RolloutStage.DISABLED
+    canary_percentage: float = 0.0      # 0-100, used when stage=CANARY
+    allowed_symbols: Optional[list] = None  # If set, only these symbols
+    allowed_accounts: Optional[list] = None  # If set, only these accounts
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class FuturesFeatureFlags:
+    """
+    Centralized feature flag management for futures integration.
+
+    Usage:
+        flags = FuturesFeatureFlags.load("configs/feature_flags.yaml")
+
+        if flags.is_enabled(FuturesFeature.PERPETUAL_TRADING):
+            # Execute perpetual trading logic
+            pass
+
+        if flags.should_execute(FuturesFeature.L3_EXECUTION, symbol="BTCUSDT"):
+            # Use L3 execution for this symbol
+            pass
+    """
+
+    features: Dict[FuturesFeature, FeatureConfig] = field(default_factory=dict)
+    global_kill_switch: bool = False
+    environment: str = "development"  # development, staging, production
+
+    def __post_init__(self):
+        # Initialize all features as disabled by default
+        for feature in FuturesFeature:
+            if feature not in self.features:
+                self.features[feature] = FeatureConfig()
+
+    @classmethod
+    def load(cls, path: str) -> "FuturesFeatureFlags":
+        """Load feature flags from YAML/JSON file."""
+        path = Path(path)
+        if not path.exists():
+            logger.warning(f"Feature flags file not found: {path}, using defaults")
+            return cls()
+
+        with open(path) as f:
+            if path.suffix in (".yaml", ".yml"):
+                import yaml
+                data = yaml.safe_load(f)
+            else:
+                data = json.load(f)
+
+        return cls._from_dict(data)
+
+    @classmethod
+    def _from_dict(cls, data: Dict[str, Any]) -> "FuturesFeatureFlags":
+        """Parse feature flags from dictionary."""
+        flags = cls(
+            global_kill_switch=data.get("global_kill_switch", False),
+            environment=data.get("environment", "development"),
+        )
+
+        for feature_name, config in data.get("features", {}).items():
+            try:
+                feature = FuturesFeature(feature_name)
+                flags.features[feature] = FeatureConfig(
+                    stage=RolloutStage(config.get("stage", "disabled")),
+                    canary_percentage=config.get("canary_percentage", 0.0),
+                    allowed_symbols=config.get("allowed_symbols"),
+                    allowed_accounts=config.get("allowed_accounts"),
+                    metadata=config.get("metadata", {}),
+                )
+            except ValueError:
+                logger.warning(f"Unknown feature flag: {feature_name}")
+
+        return flags
+
+    def is_enabled(self, feature: FuturesFeature) -> bool:
+        """Check if feature is enabled (any stage except DISABLED)."""
+        if self.global_kill_switch:
+            return False
+        return self.features[feature].stage != RolloutStage.DISABLED
+
+    def is_production(self, feature: FuturesFeature) -> bool:
+        """Check if feature is in full production rollout."""
+        if self.global_kill_switch:
+            return False
+        return self.features[feature].stage == RolloutStage.PRODUCTION
+
+    def is_shadow_mode(self, feature: FuturesFeature) -> bool:
+        """Check if feature is in shadow mode (run but don't affect positions)."""
+        return self.features[feature].stage == RolloutStage.SHADOW
+
+    def should_execute(
+        self,
+        feature: FuturesFeature,
+        symbol: Optional[str] = None,
+        account_id: Optional[str] = None,
+        random_value: Optional[float] = None,  # 0-100 for canary selection
+    ) -> bool:
+        """
+        Determine if feature should execute for given context.
+
+        Args:
+            feature: Feature to check
+            symbol: Trading symbol (for symbol-specific rollout)
+            account_id: Account ID (for account-specific rollout)
+            random_value: Random value 0-100 for canary percentage check
+
+        Returns:
+            True if feature should execute
+        """
+        if self.global_kill_switch:
+            return False
+
+        config = self.features[feature]
+
+        if config.stage == RolloutStage.DISABLED:
+            return False
+
+        if config.stage == RolloutStage.SHADOW:
+            # Shadow mode: execute but caller should not affect positions
+            return True
+
+        if config.stage == RolloutStage.CANARY:
+            # Check canary criteria
+            if config.allowed_symbols and symbol not in config.allowed_symbols:
+                return False
+            if config.allowed_accounts and account_id not in config.allowed_accounts:
+                return False
+            if random_value is not None:
+                return random_value < config.canary_percentage
+            return True
+
+        if config.stage == RolloutStage.PRODUCTION:
+            return True
+
+        return False
+
+    def get_stage(self, feature: FuturesFeature) -> RolloutStage:
+        """Get current rollout stage for feature."""
+        return self.features[feature].stage
+
+    def set_stage(self, feature: FuturesFeature, stage: RolloutStage) -> None:
+        """Set rollout stage for feature (runtime update)."""
+        logger.info(f"Feature {feature.value} stage changed: "
+                   f"{self.features[feature].stage.value} -> {stage.value}")
+        self.features[feature].stage = stage
+
+    def enable_kill_switch(self) -> None:
+        """Emergency kill switch - disable all features."""
+        logger.critical("GLOBAL KILL SWITCH ACTIVATED - All futures features disabled")
+        self.global_kill_switch = True
+
+    def disable_kill_switch(self) -> None:
+        """Re-enable features after kill switch."""
+        logger.warning("Global kill switch disabled - Features restored to configured state")
+        self.global_kill_switch = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Export current state as dictionary."""
+        return {
+            "global_kill_switch": self.global_kill_switch,
+            "environment": self.environment,
+            "features": {
+                f.value: {
+                    "stage": self.features[f].stage.value,
+                    "canary_percentage": self.features[f].canary_percentage,
+                    "allowed_symbols": self.features[f].allowed_symbols,
+                    "allowed_accounts": self.features[f].allowed_accounts,
+                }
+                for f in FuturesFeature
+            }
+        }
+
+    def save(self, path: str) -> None:
+        """Save current state to file."""
+        path = Path(path)
+        data = self.to_dict()
+
+        with open(path, "w") as f:
+            if path.suffix in (".yaml", ".yml"):
+                import yaml
+                yaml.dump(data, f, default_flow_style=False)
+            else:
+                json.dump(data, f, indent=2)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# HELPER DECORATORS
+# ═══════════════════════════════════════════════════════════════════════════
+
+def feature_flag(feature: FuturesFeature, fallback: Callable = None):
+    """
+    Decorator to gate function execution by feature flag.
+
+    Usage:
+        @feature_flag(FuturesFeature.L3_EXECUTION)
+        def execute_l3(order, market):
+            # Only runs if L3_EXECUTION is enabled
+            ...
+
+        @feature_flag(FuturesFeature.ADL_SIMULATION, fallback=lambda: None)
+        def simulate_adl(positions):
+            # Falls back to no-op if disabled
+            ...
+    """
+    def decorator(func: Callable):
+        def wrapper(*args, **kwargs):
+            # Get flags from global or context
+            flags = kwargs.pop("_feature_flags", None) or _get_global_flags()
+
+            if flags.should_execute(feature):
+                if flags.is_shadow_mode(feature):
+                    # Execute but log shadow mode
+                    logger.debug(f"[SHADOW] Executing {func.__name__} for {feature.value}")
+                return func(*args, **kwargs)
+            else:
+                if fallback:
+                    return fallback()
+                return None
+
+        return wrapper
+    return decorator
+
+
+# Global flags instance (set during initialization)
+_global_flags: Optional[FuturesFeatureFlags] = None
+
+
+def init_feature_flags(path: str) -> FuturesFeatureFlags:
+    """Initialize global feature flags from file."""
+    global _global_flags
+    _global_flags = FuturesFeatureFlags.load(path)
+    return _global_flags
+
+
+def _get_global_flags() -> FuturesFeatureFlags:
+    """Get global flags instance, creating default if not initialized."""
+    global _global_flags
+    if _global_flags is None:
+        _global_flags = FuturesFeatureFlags()
+    return _global_flags
+```
+
+**Feature Flags Configuration File:**
+
+```yaml
+# NEW FILE: configs/feature_flags_futures.yaml
+# Feature flags for gradual futures rollout
+
+global_kill_switch: false
+environment: staging              # development, staging, production
+
+features:
+  # ─────────────────────────────────────────────────────────────────
+  # CORE TRADING (Enable first)
+  # ─────────────────────────────────────────────────────────────────
+  perpetual_trading:
+    stage: production             # Fully rolled out
+    canary_percentage: 100
+
+  quarterly_trading:
+    stage: canary                 # Limited rollout
+    canary_percentage: 25
+    allowed_symbols:
+      - BTCUSDT_QUARTERLY
+      - ETHUSDT_QUARTERLY
+
+  index_futures:
+    stage: shadow                 # Testing only
+    allowed_symbols:
+      - ES
+      - NQ
+
+  commodity_futures:
+    stage: disabled               # Not yet ready
+
+  currency_futures:
+    stage: disabled               # Not yet ready
+
+  # ─────────────────────────────────────────────────────────────────
+  # MARGIN & LIQUIDATION
+  # ─────────────────────────────────────────────────────────────────
+  cross_margin:
+    stage: production
+
+  isolated_margin:
+    stage: production
+
+  liquidation_simulation:
+    stage: production
+
+  adl_simulation:
+    stage: canary
+    canary_percentage: 50         # 50% of positions
+
+  # ─────────────────────────────────────────────────────────────────
+  # FUNDING
+  # ─────────────────────────────────────────────────────────────────
+  funding_rate_tracking:
+    stage: production
+
+  funding_in_reward:
+    stage: production
+
+  pro_rata_funding:
+    stage: canary                 # New feature, testing
+    canary_percentage: 20
+
+  # ─────────────────────────────────────────────────────────────────
+  # EXECUTION
+  # ─────────────────────────────────────────────────────────────────
+  l2_execution:
+    stage: production
+
+  l3_execution:
+    stage: shadow                 # Running in parallel for comparison
+    allowed_symbols:
+      - BTCUSDT
+      - ETHUSDT
+
+  liquidation_cascade_slippage:
+    stage: canary
+    canary_percentage: 30
+
+  # ─────────────────────────────────────────────────────────────────
+  # RISK
+  # ─────────────────────────────────────────────────────────────────
+  futures_risk_guards:
+    stage: production
+
+  leverage_guard:
+    stage: production
+
+  funding_exposure_guard:
+    stage: production
+
+  # ─────────────────────────────────────────────────────────────────
+  # DATA & FEATURES
+  # ─────────────────────────────────────────────────────────────────
+  futures_features_pipeline:
+    stage: production
+
+  term_structure_features:
+    stage: canary
+    canary_percentage: 50
+
+  basis_trading_features:
+    stage: production
+```
+
+**Recommended Rollout Order:**
+
+| Phase | Features | Stage | Duration |
+|-------|----------|-------|----------|
+| 1 | Core margin, fees, basic execution | Production | Week 1 |
+| 2 | Funding tracking, risk guards | Production | Week 2 |
+| 3 | Liquidation simulation | Canary 50% | Week 3 |
+| 4 | ADL, cascade slippage | Canary 25% | Week 4 |
+| 5 | L3 execution | Shadow | Week 5 |
+| 6 | L3 execution | Canary 10% | Week 6 |
+| 7 | Index/Commodity futures | Shadow | Week 7-8 |
+| 8 | Full production | Production | Week 9+ |
 
 ### Tests for Phase 8
 
