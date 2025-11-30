@@ -7,10 +7,10 @@ Multi-asset execution provider interfaces and implementations.
 
 This module contains protocol-style interfaces (``SlippageProvider``,
 ``FillProvider``, ``FeeProvider``) together with the in-tree reference
-implementations used by the crypto (Binance-style) and equity fee models.
-Level-3 depth-aware simulation lives in ``lob/`` and ``execution_providers_l3.py``;
-here we focus on the L1/L2 models that are wired into the Python stack by
-default.
+implementations used by the crypto (Binance-style), equity, futures and
+forex fee/impact models. Level-3 depth-aware simulation lives in ``lob/`` and
+``execution_providers_l3.py``; here we focus on the L1/L2 models that are wired
+into the Python stack by default.
 
 References:
     - Almgren & Chriss (2001): "Optimal Execution of Portfolio Transactions"
@@ -52,7 +52,7 @@ class AssetClass(enum.Enum):
     EQUITY = "equity"
     FUTURES = "futures"
     OPTIONS = "options"
-    FOREX = "forex"  # Phase 0: Forex support
+    FOREX = "forex"  # Full FX support via parametric slippage/fee models
 
 
 class OrderSide(enum.Enum):
