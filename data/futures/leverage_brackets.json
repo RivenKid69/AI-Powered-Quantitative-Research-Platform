@@ -1,0 +1,656 @@
+{
+  "metadata": {
+    "exchange": "binance",
+    "market_type": "USDT_MARGINED",
+    "last_updated": "2025-01-15T00:00:00Z",
+    "version": "1.0.0",
+    "source": "Binance Futures API",
+    "description": "Leverage brackets for USDT-margined perpetual futures"
+  },
+  "brackets": {
+    "BTCUSDT": [
+      {
+        "bracket": 1,
+        "initial_leverage": 125,
+        "notional_cap": 50000,
+        "notional_floor": 0,
+        "maint_margin_ratio": 0.004,
+        "cum_maint": 0.0
+      },
+      {
+        "bracket": 2,
+        "initial_leverage": 100,
+        "notional_cap": 250000,
+        "notional_floor": 50000,
+        "maint_margin_ratio": 0.005,
+        "cum_maint": 50.0
+      },
+      {
+        "bracket": 3,
+        "initial_leverage": 50,
+        "notional_cap": 1000000,
+        "notional_floor": 250000,
+        "maint_margin_ratio": 0.01,
+        "cum_maint": 1300.0
+      },
+      {
+        "bracket": 4,
+        "initial_leverage": 20,
+        "notional_cap": 5000000,
+        "notional_floor": 1000000,
+        "maint_margin_ratio": 0.025,
+        "cum_maint": 16300.0
+      },
+      {
+        "bracket": 5,
+        "initial_leverage": 10,
+        "notional_cap": 20000000,
+        "notional_floor": 5000000,
+        "maint_margin_ratio": 0.05,
+        "cum_maint": 141300.0
+      },
+      {
+        "bracket": 6,
+        "initial_leverage": 5,
+        "notional_cap": 50000000,
+        "notional_floor": 20000000,
+        "maint_margin_ratio": 0.1,
+        "cum_maint": 1141300.0
+      },
+      {
+        "bracket": 7,
+        "initial_leverage": 4,
+        "notional_cap": 100000000,
+        "notional_floor": 50000000,
+        "maint_margin_ratio": 0.125,
+        "cum_maint": 2391300.0
+      },
+      {
+        "bracket": 8,
+        "initial_leverage": 3,
+        "notional_cap": 200000000,
+        "notional_floor": 100000000,
+        "maint_margin_ratio": 0.15,
+        "cum_maint": 4891300.0
+      },
+      {
+        "bracket": 9,
+        "initial_leverage": 2,
+        "notional_cap": 300000000,
+        "notional_floor": 200000000,
+        "maint_margin_ratio": 0.25,
+        "cum_maint": 24891300.0
+      },
+      {
+        "bracket": 10,
+        "initial_leverage": 1,
+        "notional_cap": 500000000,
+        "notional_floor": 300000000,
+        "maint_margin_ratio": 0.5,
+        "cum_maint": 99891300.0
+      }
+    ],
+    "ETHUSDT": [
+      {
+        "bracket": 1,
+        "initial_leverage": 100,
+        "notional_cap": 10000,
+        "notional_floor": 0,
+        "maint_margin_ratio": 0.005,
+        "cum_maint": 0.0
+      },
+      {
+        "bracket": 2,
+        "initial_leverage": 75,
+        "notional_cap": 100000,
+        "notional_floor": 10000,
+        "maint_margin_ratio": 0.0065,
+        "cum_maint": 15.0
+      },
+      {
+        "bracket": 3,
+        "initial_leverage": 50,
+        "notional_cap": 500000,
+        "notional_floor": 100000,
+        "maint_margin_ratio": 0.01,
+        "cum_maint": 365.0
+      },
+      {
+        "bracket": 4,
+        "initial_leverage": 25,
+        "notional_cap": 1000000,
+        "notional_floor": 500000,
+        "maint_margin_ratio": 0.02,
+        "cum_maint": 5365.0
+      },
+      {
+        "bracket": 5,
+        "initial_leverage": 10,
+        "notional_cap": 5000000,
+        "notional_floor": 1000000,
+        "maint_margin_ratio": 0.05,
+        "cum_maint": 35365.0
+      },
+      {
+        "bracket": 6,
+        "initial_leverage": 5,
+        "notional_cap": 10000000,
+        "notional_floor": 5000000,
+        "maint_margin_ratio": 0.1,
+        "cum_maint": 285365.0
+      },
+      {
+        "bracket": 7,
+        "initial_leverage": 4,
+        "notional_cap": 20000000,
+        "notional_floor": 10000000,
+        "maint_margin_ratio": 0.125,
+        "cum_maint": 535365.0
+      },
+      {
+        "bracket": 8,
+        "initial_leverage": 3,
+        "notional_cap": 50000000,
+        "notional_floor": 20000000,
+        "maint_margin_ratio": 0.15,
+        "cum_maint": 1035365.0
+      },
+      {
+        "bracket": 9,
+        "initial_leverage": 2,
+        "notional_cap": 100000000,
+        "notional_floor": 50000000,
+        "maint_margin_ratio": 0.25,
+        "cum_maint": 6035365.0
+      },
+      {
+        "bracket": 10,
+        "initial_leverage": 1,
+        "notional_cap": 200000000,
+        "notional_floor": 100000000,
+        "maint_margin_ratio": 0.5,
+        "cum_maint": 31035365.0
+      }
+    ],
+    "BNBUSDT": [
+      {
+        "bracket": 1,
+        "initial_leverage": 75,
+        "notional_cap": 10000,
+        "notional_floor": 0,
+        "maint_margin_ratio": 0.0065,
+        "cum_maint": 0.0
+      },
+      {
+        "bracket": 2,
+        "initial_leverage": 50,
+        "notional_cap": 50000,
+        "notional_floor": 10000,
+        "maint_margin_ratio": 0.01,
+        "cum_maint": 35.0
+      },
+      {
+        "bracket": 3,
+        "initial_leverage": 25,
+        "notional_cap": 250000,
+        "notional_floor": 50000,
+        "maint_margin_ratio": 0.02,
+        "cum_maint": 535.0
+      },
+      {
+        "bracket": 4,
+        "initial_leverage": 20,
+        "notional_cap": 1000000,
+        "notional_floor": 250000,
+        "maint_margin_ratio": 0.025,
+        "cum_maint": 1785.0
+      },
+      {
+        "bracket": 5,
+        "initial_leverage": 10,
+        "notional_cap": 5000000,
+        "notional_floor": 1000000,
+        "maint_margin_ratio": 0.05,
+        "cum_maint": 26785.0
+      },
+      {
+        "bracket": 6,
+        "initial_leverage": 5,
+        "notional_cap": 10000000,
+        "notional_floor": 5000000,
+        "maint_margin_ratio": 0.1,
+        "cum_maint": 276785.0
+      },
+      {
+        "bracket": 7,
+        "initial_leverage": 2,
+        "notional_cap": 20000000,
+        "notional_floor": 10000000,
+        "maint_margin_ratio": 0.25,
+        "cum_maint": 1776785.0
+      },
+      {
+        "bracket": 8,
+        "initial_leverage": 1,
+        "notional_cap": 50000000,
+        "notional_floor": 20000000,
+        "maint_margin_ratio": 0.5,
+        "cum_maint": 6776785.0
+      }
+    ],
+    "SOLUSDT": [
+      {
+        "bracket": 1,
+        "initial_leverage": 75,
+        "notional_cap": 10000,
+        "notional_floor": 0,
+        "maint_margin_ratio": 0.0065,
+        "cum_maint": 0.0
+      },
+      {
+        "bracket": 2,
+        "initial_leverage": 50,
+        "notional_cap": 50000,
+        "notional_floor": 10000,
+        "maint_margin_ratio": 0.01,
+        "cum_maint": 35.0
+      },
+      {
+        "bracket": 3,
+        "initial_leverage": 25,
+        "notional_cap": 250000,
+        "notional_floor": 50000,
+        "maint_margin_ratio": 0.02,
+        "cum_maint": 535.0
+      },
+      {
+        "bracket": 4,
+        "initial_leverage": 20,
+        "notional_cap": 1000000,
+        "notional_floor": 250000,
+        "maint_margin_ratio": 0.025,
+        "cum_maint": 1785.0
+      },
+      {
+        "bracket": 5,
+        "initial_leverage": 10,
+        "notional_cap": 2500000,
+        "notional_floor": 1000000,
+        "maint_margin_ratio": 0.05,
+        "cum_maint": 26785.0
+      },
+      {
+        "bracket": 6,
+        "initial_leverage": 5,
+        "notional_cap": 5000000,
+        "notional_floor": 2500000,
+        "maint_margin_ratio": 0.1,
+        "cum_maint": 151785.0
+      },
+      {
+        "bracket": 7,
+        "initial_leverage": 2,
+        "notional_cap": 10000000,
+        "notional_floor": 5000000,
+        "maint_margin_ratio": 0.25,
+        "cum_maint": 901785.0
+      },
+      {
+        "bracket": 8,
+        "initial_leverage": 1,
+        "notional_cap": 20000000,
+        "notional_floor": 10000000,
+        "maint_margin_ratio": 0.5,
+        "cum_maint": 3401785.0
+      }
+    ],
+    "XRPUSDT": [
+      {
+        "bracket": 1,
+        "initial_leverage": 75,
+        "notional_cap": 10000,
+        "notional_floor": 0,
+        "maint_margin_ratio": 0.0065,
+        "cum_maint": 0.0
+      },
+      {
+        "bracket": 2,
+        "initial_leverage": 50,
+        "notional_cap": 50000,
+        "notional_floor": 10000,
+        "maint_margin_ratio": 0.01,
+        "cum_maint": 35.0
+      },
+      {
+        "bracket": 3,
+        "initial_leverage": 25,
+        "notional_cap": 250000,
+        "notional_floor": 50000,
+        "maint_margin_ratio": 0.02,
+        "cum_maint": 535.0
+      },
+      {
+        "bracket": 4,
+        "initial_leverage": 10,
+        "notional_cap": 1000000,
+        "notional_floor": 250000,
+        "maint_margin_ratio": 0.05,
+        "cum_maint": 8035.0
+      },
+      {
+        "bracket": 5,
+        "initial_leverage": 5,
+        "notional_cap": 2000000,
+        "notional_floor": 1000000,
+        "maint_margin_ratio": 0.1,
+        "cum_maint": 58035.0
+      },
+      {
+        "bracket": 6,
+        "initial_leverage": 2,
+        "notional_cap": 5000000,
+        "notional_floor": 2000000,
+        "maint_margin_ratio": 0.25,
+        "cum_maint": 358035.0
+      },
+      {
+        "bracket": 7,
+        "initial_leverage": 1,
+        "notional_cap": 10000000,
+        "notional_floor": 5000000,
+        "maint_margin_ratio": 0.5,
+        "cum_maint": 1608035.0
+      }
+    ],
+    "DOGEUSDT": [
+      {
+        "bracket": 1,
+        "initial_leverage": 75,
+        "notional_cap": 10000,
+        "notional_floor": 0,
+        "maint_margin_ratio": 0.0065,
+        "cum_maint": 0.0
+      },
+      {
+        "bracket": 2,
+        "initial_leverage": 50,
+        "notional_cap": 50000,
+        "notional_floor": 10000,
+        "maint_margin_ratio": 0.01,
+        "cum_maint": 35.0
+      },
+      {
+        "bracket": 3,
+        "initial_leverage": 25,
+        "notional_cap": 250000,
+        "notional_floor": 50000,
+        "maint_margin_ratio": 0.02,
+        "cum_maint": 535.0
+      },
+      {
+        "bracket": 4,
+        "initial_leverage": 10,
+        "notional_cap": 1000000,
+        "notional_floor": 250000,
+        "maint_margin_ratio": 0.05,
+        "cum_maint": 8035.0
+      },
+      {
+        "bracket": 5,
+        "initial_leverage": 5,
+        "notional_cap": 2000000,
+        "notional_floor": 1000000,
+        "maint_margin_ratio": 0.1,
+        "cum_maint": 58035.0
+      },
+      {
+        "bracket": 6,
+        "initial_leverage": 2,
+        "notional_cap": 5000000,
+        "notional_floor": 2000000,
+        "maint_margin_ratio": 0.25,
+        "cum_maint": 358035.0
+      },
+      {
+        "bracket": 7,
+        "initial_leverage": 1,
+        "notional_cap": 10000000,
+        "notional_floor": 5000000,
+        "maint_margin_ratio": 0.5,
+        "cum_maint": 1608035.0
+      }
+    ],
+    "ADAUSDT": [
+      {
+        "bracket": 1,
+        "initial_leverage": 75,
+        "notional_cap": 10000,
+        "notional_floor": 0,
+        "maint_margin_ratio": 0.0065,
+        "cum_maint": 0.0
+      },
+      {
+        "bracket": 2,
+        "initial_leverage": 50,
+        "notional_cap": 50000,
+        "notional_floor": 10000,
+        "maint_margin_ratio": 0.01,
+        "cum_maint": 35.0
+      },
+      {
+        "bracket": 3,
+        "initial_leverage": 25,
+        "notional_cap": 250000,
+        "notional_floor": 50000,
+        "maint_margin_ratio": 0.02,
+        "cum_maint": 535.0
+      },
+      {
+        "bracket": 4,
+        "initial_leverage": 10,
+        "notional_cap": 1000000,
+        "notional_floor": 250000,
+        "maint_margin_ratio": 0.05,
+        "cum_maint": 8035.0
+      },
+      {
+        "bracket": 5,
+        "initial_leverage": 5,
+        "notional_cap": 2000000,
+        "notional_floor": 1000000,
+        "maint_margin_ratio": 0.1,
+        "cum_maint": 58035.0
+      },
+      {
+        "bracket": 6,
+        "initial_leverage": 2,
+        "notional_cap": 5000000,
+        "notional_floor": 2000000,
+        "maint_margin_ratio": 0.25,
+        "cum_maint": 358035.0
+      },
+      {
+        "bracket": 7,
+        "initial_leverage": 1,
+        "notional_cap": 10000000,
+        "notional_floor": 5000000,
+        "maint_margin_ratio": 0.5,
+        "cum_maint": 1608035.0
+      }
+    ],
+    "AVAXUSDT": [
+      {
+        "bracket": 1,
+        "initial_leverage": 75,
+        "notional_cap": 10000,
+        "notional_floor": 0,
+        "maint_margin_ratio": 0.0065,
+        "cum_maint": 0.0
+      },
+      {
+        "bracket": 2,
+        "initial_leverage": 50,
+        "notional_cap": 50000,
+        "notional_floor": 10000,
+        "maint_margin_ratio": 0.01,
+        "cum_maint": 35.0
+      },
+      {
+        "bracket": 3,
+        "initial_leverage": 25,
+        "notional_cap": 150000,
+        "notional_floor": 50000,
+        "maint_margin_ratio": 0.02,
+        "cum_maint": 535.0
+      },
+      {
+        "bracket": 4,
+        "initial_leverage": 10,
+        "notional_cap": 500000,
+        "notional_floor": 150000,
+        "maint_margin_ratio": 0.05,
+        "cum_maint": 5035.0
+      },
+      {
+        "bracket": 5,
+        "initial_leverage": 5,
+        "notional_cap": 1000000,
+        "notional_floor": 500000,
+        "maint_margin_ratio": 0.1,
+        "cum_maint": 30035.0
+      },
+      {
+        "bracket": 6,
+        "initial_leverage": 2,
+        "notional_cap": 2000000,
+        "notional_floor": 1000000,
+        "maint_margin_ratio": 0.25,
+        "cum_maint": 180035.0
+      },
+      {
+        "bracket": 7,
+        "initial_leverage": 1,
+        "notional_cap": 5000000,
+        "notional_floor": 2000000,
+        "maint_margin_ratio": 0.5,
+        "cum_maint": 680035.0
+      }
+    ],
+    "LINKUSDT": [
+      {
+        "bracket": 1,
+        "initial_leverage": 75,
+        "notional_cap": 10000,
+        "notional_floor": 0,
+        "maint_margin_ratio": 0.0065,
+        "cum_maint": 0.0
+      },
+      {
+        "bracket": 2,
+        "initial_leverage": 50,
+        "notional_cap": 50000,
+        "notional_floor": 10000,
+        "maint_margin_ratio": 0.01,
+        "cum_maint": 35.0
+      },
+      {
+        "bracket": 3,
+        "initial_leverage": 25,
+        "notional_cap": 250000,
+        "notional_floor": 50000,
+        "maint_margin_ratio": 0.02,
+        "cum_maint": 535.0
+      },
+      {
+        "bracket": 4,
+        "initial_leverage": 10,
+        "notional_cap": 1000000,
+        "notional_floor": 250000,
+        "maint_margin_ratio": 0.05,
+        "cum_maint": 8035.0
+      },
+      {
+        "bracket": 5,
+        "initial_leverage": 5,
+        "notional_cap": 2000000,
+        "notional_floor": 1000000,
+        "maint_margin_ratio": 0.1,
+        "cum_maint": 58035.0
+      },
+      {
+        "bracket": 6,
+        "initial_leverage": 2,
+        "notional_cap": 5000000,
+        "notional_floor": 2000000,
+        "maint_margin_ratio": 0.25,
+        "cum_maint": 358035.0
+      },
+      {
+        "bracket": 7,
+        "initial_leverage": 1,
+        "notional_cap": 10000000,
+        "notional_floor": 5000000,
+        "maint_margin_ratio": 0.5,
+        "cum_maint": 1608035.0
+      }
+    ],
+    "MATICUSDT": [
+      {
+        "bracket": 1,
+        "initial_leverage": 75,
+        "notional_cap": 10000,
+        "notional_floor": 0,
+        "maint_margin_ratio": 0.0065,
+        "cum_maint": 0.0
+      },
+      {
+        "bracket": 2,
+        "initial_leverage": 50,
+        "notional_cap": 50000,
+        "notional_floor": 10000,
+        "maint_margin_ratio": 0.01,
+        "cum_maint": 35.0
+      },
+      {
+        "bracket": 3,
+        "initial_leverage": 25,
+        "notional_cap": 250000,
+        "notional_floor": 50000,
+        "maint_margin_ratio": 0.02,
+        "cum_maint": 535.0
+      },
+      {
+        "bracket": 4,
+        "initial_leverage": 10,
+        "notional_cap": 1000000,
+        "notional_floor": 250000,
+        "maint_margin_ratio": 0.05,
+        "cum_maint": 8035.0
+      },
+      {
+        "bracket": 5,
+        "initial_leverage": 5,
+        "notional_cap": 2000000,
+        "notional_floor": 1000000,
+        "maint_margin_ratio": 0.1,
+        "cum_maint": 58035.0
+      },
+      {
+        "bracket": 6,
+        "initial_leverage": 2,
+        "notional_cap": 5000000,
+        "notional_floor": 2000000,
+        "maint_margin_ratio": 0.25,
+        "cum_maint": 358035.0
+      },
+      {
+        "bracket": 7,
+        "initial_leverage": 1,
+        "notional_cap": 10000000,
+        "notional_floor": 5000000,
+        "maint_margin_ratio": 0.5,
+        "cum_maint": 1608035.0
+      }
+    ]
+  }
+}
