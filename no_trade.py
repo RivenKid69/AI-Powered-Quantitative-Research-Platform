@@ -112,9 +112,9 @@ def _in_custom_window(ts_ms: np.ndarray, windows: List[Dict[str, int]]) -> np.nd
 # Earnings Blackout Filter
 # ==============================================================================
 
-# Cache for earnings data to avoid repeated API calls. Note: we currently rely on
-# the GIL only; no explicit lock is wired up yet, so concurrent threads share
-# the cache without additional synchronization.
+# Cache for earnings data to avoid repeated API calls. Note: this cache is **not**
+# synchronised; callers running in multiple threads should provide their own
+# locking to avoid races when populating or reading the entries.
 _earnings_cache: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
 _earnings_cache_lock = None
 
@@ -128,7 +128,9 @@ def _get_earnings_events(
     """
     Fetch earnings events for symbols using Yahoo adapter.
 
-    Uses caching to avoid repeated API calls.
+    Uses caching to avoid repeated API calls. If the Yahoo adapter is not
+    available or fails, the function returns an empty list for the affected
+    symbol to keep the no-trade pipeline operational.
 
     Args:
         symbols: List of stock symbols
