@@ -25,9 +25,9 @@ from runtime_flags import get_bool as _get_runtime_bool
 # Global toggle disabling all no-trade mask effects across the platform.
 # Historically the mask filtered training data so aggressively that EV
 # collapsed to zero after a few iterations, so the flag was hard-coded to
-# ``True``.  The underlying issue has since been fixed, therefore we allow the
-# feature to be enabled again while still providing an escape hatch via the
-# ``NO_TRADE_FEATURES_DISABLED`` environment variable.
+# ``True``.  The default remains disabled for safety, but the
+# ``NO_TRADE_FEATURES_DISABLED`` environment variable lets operators re-enable
+# the feature by setting it to a falsy value.
 
 
 NO_TRADE_FEATURES_DISABLED: bool = _get_runtime_bool(
