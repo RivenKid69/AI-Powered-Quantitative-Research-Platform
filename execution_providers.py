@@ -3,23 +3,14 @@
 execution_providers.py
 Multi-asset execution provider interfaces and implementations.
 
-This module provides a clean abstraction layer for execution simulation,
-supporting both crypto (Binance) and equities (Alpaca/Polygon) markets.
+"""Execution provider abstractions and default implementations.
 
-Architecture:
-    Protocol-based interfaces (SlippageProvider, FillProvider, FeeProvider)
-    allow pluggable implementations for different markets and fidelity levels.
-
-Levels of Fidelity:
-    L1: Simple constant spread/fee model
-    L2: Statistical models (√participation impact, OHLCV fills) - DEFAULT
-    L3: Full LOB simulation (Production Ready - see lob/ module, execution_providers_l3.py)
-
-Design Principles:
-    - Protocol-based for flexibility and testability
-    - Backward compatible with existing crypto infrastructure
-    - Asset-class agnostic interfaces with specialized implementations
-    - Research-backed models (Almgren-Chriss for market impact)
+This module contains protocol-style interfaces (``SlippageProvider``,
+``FillProvider``, ``FeeProvider``) together with the in-tree reference
+implementations used by the crypto (Binance-style) and equity fee models.
+Level-3 depth-aware simulation lives in ``lob/`` and ``execution_providers_l3.py``;
+here we focus on the L1/L2 models that are wired into the Python stack by
+default.
 
 References:
     - Almgren & Chriss (2001): "Optimal Execution of Portfolio Transactions"
