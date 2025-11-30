@@ -44,7 +44,14 @@ def _write_table(df: pd.DataFrame | Sequence[bool], path: str) -> None:
 def _blocked_durations(
     ts_ms: Sequence[int], mask: Sequence[bool], tf_ms: int | None = None
 ) -> np.ndarray:
-    """Return durations of consecutive blocked intervals in minutes."""
+    """Return durations of consecutive blocked intervals in minutes.
+
+    When a blocked streak runs through the last available timestamp, the
+    function extends the end of that interval by the provided ``tf_ms`` (or by
+    the median positive timestep inferred from the data). This mirrors the
+    expectation that the final bar would have closed one timeframe after its
+    last observed tick instead of treating the last tick as an immediate end.
+    """
     ts = np.asarray(pd.to_numeric(ts_ms, errors="coerce"), dtype=np.int64)
     m = np.asarray(mask, dtype=bool)
     if ts.size == 0 or not m.any():
