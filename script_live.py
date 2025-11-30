@@ -1,12 +1,20 @@
 """Run realtime signaler using :mod:`service_signal_runner`.
 
-This script is the unified entry point for live trading, supporting both
-crypto (Binance) and equity (Alpaca) markets through the --asset-class option.
+This script is the unified entry point for live trading, supporting
+crypto (Binance), equity (Alpaca), and forex (OANDA) markets through
+the --asset-class option.
 
 Phase 9: Live Trading Improvements (2025-11-27)
 - Explicit asset_class CLI support
 - Auto-detection from config
 - Asset-class-specific defaults
+
+Phase 6: Forex Integration (2025-11-30)
+- Added forex asset class support
+- OANDA broker integration
+- Forex session-aware routing
+- Position synchronization
+- Swap cost tracking
 """
 
 from __future__ import annotations
@@ -29,6 +37,35 @@ from runtime_trade_defaults import (
     merge_runtime_trade_defaults,
 )
 
+# Forex services (Phase 6 integration)
+try:
+    from services.forex_risk_guards import (
+        ForexMarginGuard,
+        ForexLeverageGuard,
+        SwapCostTracker,
+        create_forex_margin_guard,
+        create_forex_leverage_guard,
+        create_swap_cost_tracker,
+    )
+    from services.forex_position_sync import (
+        ForexPositionSynchronizer,
+        SyncConfig,
+        SyncResult,
+        ReconciliationExecutor,
+    )
+    from services.forex_session_router import (
+        ForexSessionRouter,
+        ForexSessionType,
+        get_current_forex_session,
+        is_forex_market_open,
+        create_forex_session_router,
+        ROLLOVER_HOUR_ET,
+        ROLLOVER_KEEPOUT_MINUTES,
+    )
+    FOREX_SERVICES_AVAILABLE = True
+except ImportError:
+    FOREX_SERVICES_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -38,7 +75,8 @@ logger = logging.getLogger(__name__)
 
 ASSET_CLASS_CRYPTO = "crypto"
 ASSET_CLASS_EQUITY = "equity"
-VALID_ASSET_CLASSES = (ASSET_CLASS_CRYPTO, ASSET_CLASS_EQUITY)
+ASSET_CLASS_FOREX = "forex"
+VALID_ASSET_CLASSES = (ASSET_CLASS_CRYPTO, ASSET_CLASS_EQUITY, ASSET_CLASS_FOREX)
 
 # Asset-class-specific execution defaults
 ASSET_CLASS_DEFAULTS: Dict[str, Dict[str, Any]] = {
@@ -56,6 +94,19 @@ ASSET_CLASS_DEFAULTS: Dict[str, Dict[str, Any]] = {
         "extended_hours": False,  # Default to regular hours
         "default_vendor": "alpaca",
     },
+    ASSET_CLASS_FOREX: {
+        "slippage_bps": 0.5,  # Very tight spreads for major pairs (EUR/USD ~0.1-0.5 pip)
+        "limit_offset_bps": 2.0,  # Conservative offset for limit orders
+        "tif": "GTC",  # Good-til-cancelled (forex 24/5)
+        "extended_hours": True,  # Always 24/5 trading
+        "default_vendor": "oanda",
+        # Forex-specific defaults (CFTC/NFA US rules)
+        "max_leverage": 50,  # 50:1 for major pairs under CFTC
+        "margin_call_level": 0.5,  # 50% margin call
+        "rollover_time_utc": 21,  # 5pm ET = 21:00 UTC (winter), 22:00 (summer)
+        "sync_interval_sec": 30.0,  # Position sync interval
+        "auto_reconcile": True,  # Enable auto-reconciliation
+    },
 }
 
 # Vendor to asset class mapping for auto-detection
@@ -63,6 +114,7 @@ VENDOR_TO_ASSET_CLASS: Dict[str, str] = {
     "binance": ASSET_CLASS_CRYPTO,
     "alpaca": ASSET_CLASS_EQUITY,
     "polygon": ASSET_CLASS_EQUITY,
+    "oanda": ASSET_CLASS_FOREX,
 }
 
 try:
@@ -90,7 +142,7 @@ def detect_asset_class(cfg_dict: Dict[str, Any]) -> str:
         cfg_dict: Configuration dictionary
 
     Returns:
-        Asset class string ('crypto' or 'equity')
+        Asset class string ('crypto', 'equity', or 'forex')
     """
     # Priority 1: Explicit asset_class
     asset_class = cfg_dict.get("asset_class")
@@ -109,6 +161,8 @@ def detect_asset_class(cfg_dict: Dict[str, Any]) -> str:
         return ASSET_CLASS_EQUITY
     if market_type in ("CRYPTO", "CRYPTO_SPOT", "CRYPTO_FUTURES"):
         return ASSET_CLASS_CRYPTO
+    if market_type in ("FOREX", "FX", "CURRENCY"):
+        return ASSET_CLASS_FOREX
 
     # Default: crypto for backward compatibility
     return ASSET_CLASS_CRYPTO
@@ -175,6 +229,34 @@ def apply_asset_class_defaults(
 
         exchange["alpaca"] = alpaca_cfg
         cfg_dict["exchange"] = exchange
+
+    # Forex-specific configuration
+    elif asset_class == ASSET_CLASS_FOREX:
+        # Forex is always 24/5 (Sunday 5pm ET to Friday 5pm ET)
+        cfg_dict["extended_hours"] = True
+
+        # Set up OANDA exchange config
+        exchange = dict(cfg_dict.get("exchange", {}) or {})
+        oanda_cfg = dict(exchange.get("oanda", {}) or {})
+
+        # Apply forex-specific defaults
+        if "max_leverage" not in oanda_cfg:
+            oanda_cfg["max_leverage"] = defaults.get("max_leverage", 50)
+        if "margin_call_level" not in oanda_cfg:
+            oanda_cfg["margin_call_level"] = defaults.get("margin_call_level", 0.5)
+        if "rollover_time_utc" not in oanda_cfg:
+            oanda_cfg["rollover_time_utc"] = defaults.get("rollover_time_utc", 21)
+
+        exchange["oanda"] = oanda_cfg
+        cfg_dict["exchange"] = exchange
+
+        # Forex position sync configuration
+        forex_cfg = dict(cfg_dict.get("forex", {}) or {})
+        if "sync_interval_sec" not in forex_cfg:
+            forex_cfg["sync_interval_sec"] = defaults.get("sync_interval_sec", 30.0)
+        if "auto_reconcile" not in forex_cfg:
+            forex_cfg["auto_reconcile"] = defaults.get("auto_reconcile", True)
+        cfg_dict["forex"] = forex_cfg
 
     # Set data_vendor if not specified
     if not cfg_dict.get("data_vendor"):
@@ -494,10 +576,11 @@ def _ensure_state_dir(state_obj: Any) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(
         description=(
-            "Unified live trading script for crypto and equity markets.\n\n"
+            "Unified live trading script for crypto, equity, and forex markets.\n\n"
             "Supports:\n"
             "  - Crypto: Binance (default)\n"
-            "  - Equity: Alpaca (US stocks)\n\n"
+            "  - Equity: Alpaca (US stocks)\n"
+            "  - Forex: OANDA (currency pairs)\n\n"
             "The asset class is auto-detected from config or can be explicitly set."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -536,11 +619,11 @@ def main() -> None:
     )
     asset_group.add_argument(
         "--asset-class",
-        choices=["crypto", "equity"],
+        choices=["crypto", "equity", "forex"],
         default=None,
         help=(
             "Asset class to trade. If not specified, auto-detected from config. "
-            "crypto=Binance, equity=Alpaca"
+            "crypto=Binance, equity=Alpaca, forex=OANDA"
         ),
     )
     asset_group.add_argument(
@@ -566,8 +649,52 @@ def main() -> None:
     asset_group.add_argument(
         "--live",
         action="store_true",
-        help="Use live trading (Alpaca only, overrides --paper)",
+        help="Use live trading (Alpaca/OANDA, overrides --paper)",
     )
+
+    # ==========================================================================
+    # Forex-specific arguments (Phase 6)
+    # ==========================================================================
+    forex_group = p.add_argument_group(
+        "Forex options",
+        "Control forex-specific behavior for OANDA trading",
+    )
+    forex_group.add_argument(
+        "--forex-sync-interval",
+        type=float,
+        default=None,
+        help="Position sync interval in seconds (default: 30.0)",
+    )
+    forex_group.add_argument(
+        "--forex-auto-reconcile",
+        action="store_true",
+        default=None,
+        help="Enable automatic position reconciliation (default: True)",
+    )
+    forex_group.add_argument(
+        "--forex-no-auto-reconcile",
+        action="store_true",
+        help="Disable automatic position reconciliation",
+    )
+    forex_group.add_argument(
+        "--forex-max-leverage",
+        type=int,
+        default=None,
+        help="Maximum leverage (CFTC default: 50 for majors, 20 for minors)",
+    )
+    forex_group.add_argument(
+        "--forex-rollover-keepout-minutes",
+        type=int,
+        default=None,
+        help="Minutes to avoid trading around 5pm ET rollover (default: 5)",
+    )
+    forex_group.add_argument(
+        "--forex-session-filter",
+        choices=["sydney", "tokyo", "london", "new_york", "overlap", "all"],
+        default=None,
+        help="Only trade during specific sessions (default: all)",
+    )
+
     runtime_group = p.add_argument_group("Runtime overrides")
     runtime_group.add_argument(
         "--execution-mode",
@@ -715,6 +842,82 @@ def main() -> None:
 
         exchange["alpaca"] = alpaca_cfg
         cfg_dict["exchange"] = exchange
+
+    # Handle forex-specific configuration (OANDA)
+    elif asset_class == ASSET_CLASS_FOREX:
+        if not FOREX_SERVICES_AVAILABLE:
+            raise SystemExit(
+                "Forex services not available. Ensure forex_risk_guards.py, "
+                "forex_position_sync.py, and forex_session_router.py are present."
+            )
+
+        exchange = dict(cfg_dict.get("exchange", {}) or {})
+        oanda_cfg = dict(exchange.get("oanda", {}) or {})
+        forex_cfg = dict(cfg_dict.get("forex", {}) or {})
+
+        # Paper/live mode for OANDA
+        if args.live:
+            oanda_cfg["practice"] = False
+            logger.warning("FOREX LIVE TRADING MODE enabled - real money at risk!")
+        elif args.paper:
+            oanda_cfg["practice"] = True
+            logger.info("Forex practice mode enabled")
+
+        # CLI overrides for forex-specific settings
+        if args.forex_sync_interval is not None:
+            forex_cfg["sync_interval_sec"] = args.forex_sync_interval
+
+        if args.forex_no_auto_reconcile:
+            forex_cfg["auto_reconcile"] = False
+        elif args.forex_auto_reconcile:
+            forex_cfg["auto_reconcile"] = True
+
+        if args.forex_max_leverage is not None:
+            oanda_cfg["max_leverage"] = args.forex_max_leverage
+            forex_cfg["max_leverage"] = args.forex_max_leverage
+
+        if args.forex_rollover_keepout_minutes is not None:
+            forex_cfg["rollover_keepout_minutes"] = args.forex_rollover_keepout_minutes
+
+        if args.forex_session_filter is not None:
+            forex_cfg["session_filter"] = args.forex_session_filter
+
+        exchange["oanda"] = oanda_cfg
+        cfg_dict["exchange"] = exchange
+        cfg_dict["forex"] = forex_cfg
+
+        # Get current session info
+        session_info = get_current_forex_session()
+
+        # Check rollover window at startup
+        if session_info.in_rollover_window:
+            logger.warning(
+                f"Currently within rollover keepout window (around 5pm ET). "
+                "Trading may be restricted."
+            )
+
+        # Check if forex market is open
+        if not is_forex_market_open():
+            logger.warning(
+                "Forex market is currently CLOSED (weekend). "
+                "Trading will resume Sunday 5pm ET."
+            )
+
+        # Log current session
+        session_filter = forex_cfg.get("session_filter", "all")
+        logger.info(
+            f"Current forex session: {session_info.session.name}, "
+            f"liquidity_factor={session_info.liquidity_factor:.2f}, "
+            f"spread_mult={session_info.spread_multiplier:.2f}, "
+            f"session_filter={session_filter}"
+        )
+
+        # Log forex-specific settings
+        logger.info(
+            f"Forex config: sync_interval={forex_cfg.get('sync_interval_sec', 30.0)}s, "
+            f"auto_reconcile={forex_cfg.get('auto_reconcile', True)}, "
+            f"max_leverage={oanda_cfg.get('max_leverage', 50)}"
+        )
 
     # Get symbols (using asset-class-aware function)
     symbols = _get_symbols_for_asset_class(args, cfg_dict, asset_class)

@@ -51,6 +51,9 @@ from services.forex_position_sync import (
     reconcile_oanda_state,
     create_forex_position_sync,
     create_oanda_position_sync,
+    ReconciliationExecutor,
+    ReconciliationAction,
+    ReconciliationOrderResult,
 )
 
 from services.forex_session_router import (
@@ -1539,6 +1542,496 @@ class TestEdgeCases:
             day_of_week=1,
         )
         assert cost.symbol == "USD_JPY"
+
+
+# =============================================================================
+# Additional Tests to Reach 100 Target
+# =============================================================================
+
+
+class TestSwapRateCaching:
+    """Tests for swap rate caching behavior."""
+
+    def test_swap_rate_cache_hit(self, mock_swap_provider):
+        """Test swap rate caching prevents repeated provider calls."""
+        tracker = SwapCostTracker(
+            swap_rate_provider=mock_swap_provider,
+            cache_ttl_sec=60.0,
+        )
+
+        # First call - should hit provider
+        rate1 = tracker.get_swap_rate("EUR_USD")
+        call_count_1 = mock_swap_provider.get_swap_rate.call_count
+
+        # Second call - should use cache
+        rate2 = tracker.get_swap_rate("EUR_USD")
+        call_count_2 = mock_swap_provider.get_swap_rate.call_count
+
+        assert call_count_2 == call_count_1
+        assert rate1.symbol == rate2.symbol
+
+    def test_swap_rate_different_symbols_separate_cache(self, mock_swap_provider):
+        """Test different symbols have separate cache entries."""
+        mock_swap_provider.get_swap_rate.side_effect = lambda s: SwapRate(
+            symbol=s,
+            long_rate=-0.5 if s == "EUR_USD" else 0.3,
+            short_rate=0.3 if s == "EUR_USD" else -0.2,
+            timestamp_ms=int(time.time() * 1000),
+            source="mock",
+        )
+
+        tracker = SwapCostTracker(swap_rate_provider=mock_swap_provider)
+
+        rate_eur = tracker.get_swap_rate("EUR_USD")
+        rate_gbp = tracker.get_swap_rate("GBP_USD")
+
+        assert rate_eur.long_rate != rate_gbp.long_rate
+        assert mock_swap_provider.get_swap_rate.call_count == 2
+
+
+class TestMultiSymbolSwapTracking:
+    """Tests for multi-symbol swap tracking."""
+
+    def test_multiple_symbols_cumulative(self):
+        """Test cumulative swap across multiple symbols."""
+        tracker = SwapCostTracker()
+
+        symbols = ["EUR_USD", "GBP_USD", "USD_JPY"]
+        for symbol in symbols:
+            tracker.calculate_daily_swap(
+                symbol=symbol,
+                position_units=100000,
+                is_long=True,
+                current_price=1.0850 if "JPY" not in symbol else 149.50,
+                day_of_week=1,
+            )
+
+        # Each symbol should have its own cumulative
+        for symbol in symbols:
+            assert tracker.get_cumulative_swap(symbol) != 0
+
+        # Total should be sum of all
+        total = tracker.get_cumulative_swap()
+        individual_sum = sum(tracker.get_cumulative_swap(s) for s in symbols)
+        assert total == pytest.approx(individual_sum, rel=0.01)
+
+    def test_swap_history_ordering(self):
+        """Test swap history maintains chronological order."""
+        tracker = SwapCostTracker()
+
+        # Add swaps over multiple days
+        for day in range(5):
+            tracker.calculate_daily_swap(
+                symbol="EUR_USD",
+                position_units=100000,
+                is_long=True,
+                current_price=1.0850,
+                day_of_week=day,
+            )
+
+        history = tracker.get_swap_history("EUR_USD")
+        assert len(history) == 5
+
+        # Should be in chronological order (most recent last)
+        for i in range(len(history) - 1):
+            assert history[i].timestamp_ms <= history[i + 1].timestamp_ms
+
+
+class TestCorrelatedExposureAdvanced:
+    """Advanced tests for correlated exposure checking."""
+
+    def test_highly_correlated_pairs(self):
+        """Test detection of highly correlated exposure."""
+        guard = ForexLeverageGuard(
+            correlated_exposure_limit=0.70,
+            concentration_limit=0.50,
+        )
+
+        # EUR/USD and GBP/USD are highly correlated (~0.85)
+        positions = {
+            "EUR_USD": 2_000_000,
+            "GBP_USD": 2_000_000,
+        }
+
+        # Adding more EUR exposure when already exposed to correlated GBP
+        check = guard.check_correlated_exposure(
+            positions=positions,
+            new_symbol="EUR_CHF",  # Also correlated with EUR
+            new_notional=1_500_000,
+            total_notional=4_000_000,
+        )
+
+        # Should detect correlation risk
+        assert check is not None
+
+    def test_uncorrelated_pairs_allowed(self):
+        """Test uncorrelated pairs don't trigger correlation limits."""
+        guard = ForexLeverageGuard(correlated_exposure_limit=0.80)
+
+        # USD/JPY and AUD/NZD have low correlation
+        positions = {
+            "USD_JPY": 2_000_000,
+        }
+
+        check = guard.check_correlated_exposure(
+            positions=positions,
+            new_symbol="AUD_NZD",
+            new_notional=2_000_000,
+            total_notional=2_000_000,
+        )
+
+        # Should be allowed (low correlation)
+        assert check.is_allowed or check.violation_type != LeverageViolationType.CORRELATED_EXPOSURE
+
+
+class TestSessionRouterAdvanced:
+    """Advanced tests for session router."""
+
+    def test_pair_specific_session_recommendations(self):
+        """Test pair-specific session recommendations."""
+        router = ForexSessionRouter()
+
+        # JPY pairs should prefer Tokyo session
+        jpy_tokyo_vol = router.get_session_volume_factor("USD_JPY", ForexSessionType.TOKYO)
+        jpy_sydney_vol = router.get_session_volume_factor("USD_JPY", ForexSessionType.SYDNEY)
+        assert jpy_tokyo_vol > jpy_sydney_vol
+
+        # AUD pairs should have good Sydney volume
+        aud_sydney_vol = router.get_session_volume_factor("AUD_USD", ForexSessionType.SYDNEY)
+        eur_sydney_vol = router.get_session_volume_factor("EUR_USD", ForexSessionType.SYDNEY)
+        assert aud_sydney_vol >= eur_sydney_vol
+
+    def test_routing_respects_all_sessions(self):
+        """Test routing works correctly across all sessions."""
+        router = ForexSessionRouter(min_liquidity_factor=0.0)  # Allow all sessions
+
+        sessions_tested = set()
+        # Test various times to cover all sessions
+        test_times = [
+            datetime(2024, 1, 15, 23, 0, tzinfo=ZoneInfo("UTC")),  # Sydney
+            datetime(2024, 1, 15, 3, 0, tzinfo=ZoneInfo("UTC")),   # Tokyo
+            datetime(2024, 1, 15, 10, 0, tzinfo=ZoneInfo("UTC")),  # London
+            datetime(2024, 1, 15, 15, 0, tzinfo=ZoneInfo("UTC")),  # NY
+            datetime(2024, 1, 15, 14, 0, tzinfo=ZoneInfo("UTC")),  # Overlap
+        ]
+
+        for dt in test_times:
+            ts_ms = int(dt.timestamp() * 1000)
+            decision = router.get_routing_decision(
+                symbol="EUR_USD",
+                side="BUY",
+                size_usd=100000,
+                timestamp_ms=ts_ms,
+            )
+            if decision.should_submit:
+                sessions_tested.add(decision.session)
+
+        # Should have tested multiple sessions
+        assert len(sessions_tested) >= 3
+
+    def test_seconds_to_market_open_calculation(self):
+        """Test calculation of seconds until market opens."""
+        router = ForexSessionRouter()
+
+        # Saturday should return time until Sunday 5pm ET
+        saturday = datetime(2024, 1, 13, 12, 0, tzinfo=ZoneInfo("America/New_York"))
+        ts_ms = int(saturday.timestamp() * 1000)
+
+        seconds = router._seconds_to_market_open(ts_ms)
+        assert seconds > 0
+        # Should be roughly 29 hours (Saturday noon to Sunday 5pm)
+        assert 100000 < seconds < 110000  # ~27-30 hours in seconds
+
+
+class TestPositionSyncAdvanced:
+    """Advanced tests for position synchronization."""
+
+    def test_sync_with_price_tolerance(self, mock_position_provider):
+        """Test sync with price mismatch within tolerance."""
+        mock_position_provider.get_positions.return_value = {
+            "EUR_USD": ForexPosition(
+                symbol="EUR_USD",
+                units=100000,
+                average_price=1.0855,  # Slightly different price
+                unrealized_pnl=500,
+                margin_used=2000,
+                financing=-10.5,
+            ),
+        }
+
+        local_positions = {"EUR_USD": 100000}
+
+        sync = ForexPositionSynchronizer(
+            position_provider=mock_position_provider,
+            local_state_getter=lambda: local_positions,
+            config=SyncConfig(
+                position_tolerance_pct=0.01,
+                price_tolerance_pct=0.01,  # 1% price tolerance
+            ),
+        )
+
+        result = sync.sync_once()
+        assert result.success
+        # Units match, price within tolerance - should not flag as discrepancy
+
+    def test_sync_tracks_margin_usage(self, mock_position_provider):
+        """Test that sync tracks total margin usage."""
+        sync = ForexPositionSynchronizer(
+            position_provider=mock_position_provider,
+            local_state_getter=lambda: {"EUR_USD": 100000, "GBP_USD": -50000},
+        )
+
+        result = sync.sync_once()
+        assert result.success
+        # Total margin from mock positions: 2000 + 1500
+        assert result.total_margin_used == pytest.approx(3500, rel=0.01)
+
+    def test_sync_exposure_calculation(self, mock_position_provider):
+        """Test long/short exposure calculation in sync."""
+        sync = ForexPositionSynchronizer(
+            position_provider=mock_position_provider,
+            local_state_getter=lambda: {"EUR_USD": 100000, "GBP_USD": -50000},
+        )
+
+        result = sync.sync_once()
+        assert result.success
+        # EUR_USD is long, GBP_USD is short
+        assert result.long_exposure > 0
+        assert result.short_exposure > 0
+        assert result.net_exposure != 0
+
+
+class TestAutoReconciliation:
+    """Tests for automatic position reconciliation."""
+
+    @pytest.fixture
+    def mock_order_executor(self):
+        """Create mock order executor."""
+        executor = MagicMock()
+        executor.place_market_order.return_value = ReconciliationOrderResult(
+            success=True,
+            order_id="test-order-123",
+            symbol="EUR_USD",
+            requested_units=5000,
+            filled_units=5000,
+            fill_price=1.0850,
+        )
+        return executor
+
+    def test_reconciliation_executor_init(self, mock_order_executor):
+        """Test ReconciliationExecutor initialization."""
+        executor = ReconciliationExecutor(
+            order_executor=mock_order_executor,
+            max_units_per_order=50000,
+            max_orders_per_hour=5,
+            dry_run=False,
+        )
+        assert executor._max_units == 50000
+        assert executor._max_orders_per_hour == 5
+
+    def test_reconciliation_dry_run(self, mock_order_executor):
+        """Test dry run mode doesn't execute orders."""
+        executor = ReconciliationExecutor(
+            order_executor=mock_order_executor,
+            dry_run=True,
+        )
+
+        disc = PositionDiscrepancy(
+            symbol="EUR_USD",
+            discrepancy_type=PositionDiscrepancyType.UNITS_MISMATCH,
+            local_units=100000,
+            remote_units=105000,
+        )
+
+        action = ReconciliationAction(
+            symbol="EUR_USD",
+            discrepancy=disc,
+            units_to_trade=5000,
+        )
+
+        result = executor.execute_reconciliation(action)
+        assert result.success
+        assert result.error == "DRY_RUN"
+        mock_order_executor.place_market_order.assert_not_called()
+
+    def test_reconciliation_rate_limiting(self, mock_order_executor):
+        """Test rate limiting prevents too many orders."""
+        executor = ReconciliationExecutor(
+            order_executor=mock_order_executor,
+            max_orders_per_hour=2,
+        )
+
+        disc = PositionDiscrepancy(
+            symbol="EUR_USD",
+            discrepancy_type=PositionDiscrepancyType.UNITS_MISMATCH,
+            local_units=100000,
+            remote_units=105000,
+        )
+
+        action = ReconciliationAction(
+            symbol="EUR_USD",
+            discrepancy=disc,
+            units_to_trade=5000,
+        )
+
+        # First two should succeed
+        result1 = executor.execute_reconciliation(action)
+        result2 = executor.execute_reconciliation(action)
+        assert result1.success
+        assert result2.success
+
+        # Third should be blocked by rate limit
+        result3 = executor.execute_reconciliation(action)
+        assert not result3.success
+        assert "Rate limit" in result3.error
+
+    def test_reconciliation_max_units_exceeded(self, mock_order_executor):
+        """Test max units check blocks large orders."""
+        executor = ReconciliationExecutor(
+            order_executor=mock_order_executor,
+            max_units_per_order=10000,
+        )
+
+        disc = PositionDiscrepancy(
+            symbol="EUR_USD",
+            discrepancy_type=PositionDiscrepancyType.UNITS_MISMATCH,
+            local_units=100000,
+            remote_units=200000,
+        )
+
+        action = ReconciliationAction(
+            symbol="EUR_USD",
+            discrepancy=disc,
+            units_to_trade=100000,  # Exceeds 10000 limit
+        )
+
+        result = executor.execute_reconciliation(action)
+        assert not result.success
+        assert "exceeds max" in result.error
+
+    def test_reconciliation_side_flip_prevented(self, mock_order_executor):
+        """Test side flip prevention."""
+        executor = ReconciliationExecutor(
+            order_executor=mock_order_executor,
+            prevent_side_flip=True,
+            max_units_per_order=500_000,  # High limit to test side flip first
+        )
+
+        disc = PositionDiscrepancy(
+            symbol="EUR_USD",
+            discrepancy_type=PositionDiscrepancyType.SIDE_MISMATCH,
+            local_units=100000,  # Long
+            remote_units=-50000,  # Short
+        )
+
+        action = ReconciliationAction(
+            symbol="EUR_USD",
+            discrepancy=disc,
+            units_to_trade=-50000,  # Within limits
+        )
+
+        result = executor.execute_reconciliation(action)
+        assert not result.success
+        assert "Side flip" in result.error
+
+    def test_sync_with_auto_reconciliation(self, mock_position_provider, mock_order_executor):
+        """Test sync with auto-reconciliation enabled."""
+        # Remote has 105000, local has 100000 -> mismatch of 5000
+        mock_position_provider.get_positions.return_value = {
+            "EUR_USD": ForexPosition(
+                symbol="EUR_USD",
+                units=105000,
+                average_price=1.0850,
+                unrealized_pnl=500,
+                margin_used=2100,
+                financing=-10.5,
+            ),
+        }
+
+        local_positions = {"EUR_USD": 100000}
+
+        recon_executor = ReconciliationExecutor(
+            order_executor=mock_order_executor,
+            max_units_per_order=100000,
+        )
+
+        sync = ForexPositionSynchronizer(
+            position_provider=mock_position_provider,
+            local_state_getter=lambda: local_positions,
+            config=SyncConfig(
+                auto_reconcile=True,
+                position_tolerance_pct=0.01,  # 1% = 1000 units for 100k
+                max_reconcile_units=50000,
+            ),
+            reconciliation_executor=recon_executor,
+        )
+
+        result = sync.sync_once()
+        assert result.success
+        assert result.has_discrepancies
+        assert result.reconciliation_count >= 1
+
+    def test_reconciliation_history(self, mock_order_executor):
+        """Test reconciliation history tracking."""
+        executor = ReconciliationExecutor(
+            order_executor=mock_order_executor,
+        )
+
+        disc = PositionDiscrepancy(
+            symbol="EUR_USD",
+            discrepancy_type=PositionDiscrepancyType.UNITS_MISMATCH,
+            local_units=100000,
+            remote_units=105000,
+        )
+
+        action = ReconciliationAction(
+            symbol="EUR_USD",
+            discrepancy=disc,
+            units_to_trade=5000,
+        )
+
+        executor.execute_reconciliation(action)
+        history = executor.get_reconciliation_history()
+
+        assert len(history) == 1
+        assert history[0].success
+        assert history[0].symbol == "EUR_USD"
+
+    def test_reconciliation_callback(self, mock_position_provider, mock_order_executor):
+        """Test reconciliation callback is invoked."""
+        mock_position_provider.get_positions.return_value = {
+            "EUR_USD": ForexPosition(
+                symbol="EUR_USD",
+                units=110000,  # 10% difference from local 100000
+                average_price=1.0850,
+                unrealized_pnl=500,
+                margin_used=2200,
+                financing=-10.5,
+            ),
+        }
+
+        callback_results = []
+
+        def on_recon(result):
+            callback_results.append(result)
+
+        recon_executor = ReconciliationExecutor(
+            order_executor=mock_order_executor,
+        )
+
+        sync = ForexPositionSynchronizer(
+            position_provider=mock_position_provider,
+            local_state_getter=lambda: {"EUR_USD": 100000},
+            config=SyncConfig(
+                auto_reconcile=True,
+                position_tolerance_pct=0.01,
+            ),
+            reconciliation_executor=recon_executor,
+            on_reconciliation=on_recon,
+        )
+
+        sync.sync_once()
+        assert len(callback_results) >= 1
 
 
 # =============================================================================

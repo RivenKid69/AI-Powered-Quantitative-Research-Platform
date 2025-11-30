@@ -134,6 +134,7 @@ class SyncConfig:
 
     sync_interval_sec: float = 30.0       # Interval between syncs
     position_tolerance_pct: float = 0.01  # 1% tolerance for unit comparison
+    price_tolerance_pct: float = 0.01     # 1% tolerance for price comparison
     min_unit_diff: float = 1.0            # Minimum unit difference to report
     auto_reconcile: bool = False          # Auto-reconcile discrepancies
     max_reconcile_units: float = 100_000  # Max units to auto-reconcile
@@ -153,6 +154,10 @@ class SyncResult:
     remote_positions: Dict[str, ForexPosition] = field(default_factory=dict)
     discrepancies: List[PositionDiscrepancy] = field(default_factory=list)
     total_financing: float = 0.0
+    total_margin_used: float = 0.0        # Total margin across all positions
+    long_exposure: float = 0.0            # Total long notional exposure
+    short_exposure: float = 0.0           # Total short notional exposure
+    reconciliation_results: List["ReconciliationOrderResult"] = field(default_factory=list)
     error: Optional[str] = None
 
     @property
@@ -164,6 +169,21 @@ class SyncResult:
     def position_count(self) -> int:
         """Number of remote positions."""
         return len(self.remote_positions)
+
+    @property
+    def net_exposure(self) -> float:
+        """Net exposure (long - short)."""
+        return self.long_exposure - self.short_exposure
+
+    @property
+    def reconciliation_count(self) -> int:
+        """Number of reconciliation orders executed."""
+        return len(self.reconciliation_results)
+
+    @property
+    def reconciliation_success_count(self) -> int:
+        """Number of successful reconciliation orders."""
+        return sum(1 for r in self.reconciliation_results if r.success)
 
 
 # =============================================================================
@@ -210,6 +230,248 @@ class ReconcileCallback(Protocol):
         ...
 
 
+class ForexOrderExecutor(Protocol):
+    """
+    Protocol for forex order execution.
+
+    Used by auto-reconciliation to place corrective orders.
+
+    References:
+        - OANDA Order Endpoints: https://developer.oanda.com/rest-live-v20/order-ep/
+        - Best Execution: MiFID II Article 27
+    """
+
+    def place_market_order(
+        self,
+        symbol: str,
+        units: float,
+    ) -> "ReconciliationOrderResult":
+        """
+        Place a market order for reconciliation.
+
+        Args:
+            symbol: Currency pair (e.g., "EUR_USD")
+            units: Number of units (positive=buy, negative=sell)
+
+        Returns:
+            ReconciliationOrderResult with execution details
+        """
+        ...
+
+
+@dataclass
+class ReconciliationOrderResult:
+    """
+    Result of a reconciliation order.
+
+    Attributes:
+        success: Whether order was executed successfully
+        order_id: Broker order ID (if successful)
+        symbol: Currency pair
+        requested_units: Units requested
+        filled_units: Units actually filled
+        fill_price: Average fill price
+        error: Error message (if failed)
+        timestamp: Execution timestamp
+    """
+    success: bool
+    order_id: Optional[str] = None
+    symbol: str = ""
+    requested_units: float = 0.0
+    filled_units: float = 0.0
+    fill_price: Optional[float] = None
+    error: Optional[str] = None
+    timestamp: float = field(default_factory=time.time)
+
+
+@dataclass
+class ReconciliationAction:
+    """
+    A reconciliation action to be taken.
+
+    Attributes:
+        symbol: Currency pair
+        discrepancy: The discrepancy being reconciled
+        units_to_trade: Units to trade (positive=buy, negative=sell)
+        is_safe: Whether this reconciliation is safe (within limits)
+        reason: Reason for action or why it's blocked
+    """
+    symbol: str
+    discrepancy: "PositionDiscrepancy"
+    units_to_trade: float
+    is_safe: bool = True
+    reason: str = ""
+
+
+class ReconciliationExecutor:
+    """
+    Executes automatic position reconciliation.
+
+    Implements safe reconciliation with:
+    - Maximum units per reconciliation
+    - Rate limiting (max reconciliations per period)
+    - Side verification (prevent side flips)
+    - Audit logging
+
+    References:
+        - CFTC Regulation 1.73: Risk Management
+        - NFA Compliance Rule 2-36: Supervision
+    """
+
+    def __init__(
+        self,
+        order_executor: ForexOrderExecutor,
+        max_units_per_order: float = 100_000.0,
+        max_orders_per_hour: int = 10,
+        prevent_side_flip: bool = True,
+        dry_run: bool = False,
+    ) -> None:
+        """
+        Initialize reconciliation executor.
+
+        Args:
+            order_executor: Executor for placing orders
+            max_units_per_order: Maximum units per reconciliation order
+            max_orders_per_hour: Rate limit (orders per hour)
+            prevent_side_flip: Prevent reconciliation that would flip position side
+            dry_run: If True, log but don't execute orders
+        """
+        self._executor = order_executor
+        self._max_units = max_units_per_order
+        self._max_orders_per_hour = max_orders_per_hour
+        self._prevent_side_flip = prevent_side_flip
+        self._dry_run = dry_run
+
+        # Rate limiting
+        self._order_timestamps: List[float] = []
+        self._lock = threading.Lock()
+
+        # Audit log
+        self._reconciliation_history: List[ReconciliationOrderResult] = []
+
+    def can_reconcile(self, action: ReconciliationAction) -> Tuple[bool, str]:
+        """
+        Check if reconciliation can proceed.
+
+        Args:
+            action: Proposed reconciliation action
+
+        Returns:
+            (can_proceed, reason) tuple
+        """
+        # Check rate limit
+        with self._lock:
+            now = time.time()
+            hour_ago = now - 3600
+            self._order_timestamps = [
+                ts for ts in self._order_timestamps if ts > hour_ago
+            ]
+
+            if len(self._order_timestamps) >= self._max_orders_per_hour:
+                return (False, f"Rate limit: {self._max_orders_per_hour} orders/hour exceeded")
+
+        # Check units limit
+        if abs(action.units_to_trade) > self._max_units:
+            return (
+                False,
+                f"Units {abs(action.units_to_trade):.0f} exceeds max {self._max_units:.0f}",
+            )
+
+        # Check side flip
+        if self._prevent_side_flip:
+            disc = action.discrepancy
+            if disc.local_units and disc.remote_units:
+                local_side = disc.local_units > 0
+                remote_side = disc.remote_units > 0
+                if local_side != remote_side:
+                    return (False, "Side flip detected - manual intervention required")
+
+        return (True, "OK")
+
+    def execute_reconciliation(
+        self,
+        action: ReconciliationAction,
+    ) -> ReconciliationOrderResult:
+        """
+        Execute a reconciliation order.
+
+        Args:
+            action: Reconciliation action to execute
+
+        Returns:
+            ReconciliationOrderResult with execution details
+        """
+        can_proceed, reason = self.can_reconcile(action)
+
+        if not can_proceed:
+            logger.warning(f"Reconciliation blocked for {action.symbol}: {reason}")
+            return ReconciliationOrderResult(
+                success=False,
+                symbol=action.symbol,
+                requested_units=action.units_to_trade,
+                error=reason,
+            )
+
+        if self._dry_run:
+            logger.info(
+                f"[DRY RUN] Would reconcile {action.symbol}: "
+                f"{action.units_to_trade:+.0f} units"
+            )
+            return ReconciliationOrderResult(
+                success=True,
+                symbol=action.symbol,
+                requested_units=action.units_to_trade,
+                filled_units=action.units_to_trade,
+                error="DRY_RUN",
+            )
+
+        try:
+            # Execute order
+            result = self._executor.place_market_order(
+                symbol=action.symbol,
+                units=action.units_to_trade,
+            )
+
+            # Update rate limiting
+            with self._lock:
+                self._order_timestamps.append(time.time())
+                self._reconciliation_history.append(result)
+
+            if result.success:
+                logger.info(
+                    f"Reconciliation order executed: {action.symbol} "
+                    f"{result.filled_units:+.0f} units @ {result.fill_price}"
+                )
+            else:
+                logger.error(
+                    f"Reconciliation order failed: {action.symbol} - {result.error}"
+                )
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Reconciliation execution error: {e}")
+            return ReconciliationOrderResult(
+                success=False,
+                symbol=action.symbol,
+                requested_units=action.units_to_trade,
+                error=str(e),
+            )
+
+    def get_reconciliation_history(
+        self,
+        limit: int = 100,
+    ) -> List[ReconciliationOrderResult]:
+        """Get recent reconciliation history."""
+        with self._lock:
+            return list(self._reconciliation_history[-limit:])
+
+    def clear_history(self) -> None:
+        """Clear reconciliation history."""
+        with self._lock:
+            self._reconciliation_history.clear()
+
+
 # =============================================================================
 # Forex Position Synchronizer
 # =============================================================================
@@ -254,6 +516,8 @@ class ForexPositionSynchronizer:
         on_discrepancy: Optional[Callable[[PositionDiscrepancy], None]] = None,
         on_sync_complete: Optional[Callable[[SyncResult], None]] = None,
         swap_tracker: Optional[SwapCostTracker] = None,
+        reconciliation_executor: Optional[ReconciliationExecutor] = None,
+        on_reconciliation: Optional[Callable[[ReconciliationOrderResult], None]] = None,
     ) -> None:
         """
         Initialize forex position synchronizer.
@@ -265,6 +529,8 @@ class ForexPositionSynchronizer:
             on_discrepancy: Callback for each discrepancy found
             on_sync_complete: Callback after each sync completes
             swap_tracker: Optional swap cost tracker for financing tracking
+            reconciliation_executor: Optional executor for auto-reconciliation
+            on_reconciliation: Callback when reconciliation order is placed
         """
         self._provider = position_provider
         self._local_state_getter = local_state_getter
@@ -272,6 +538,8 @@ class ForexPositionSynchronizer:
         self._on_discrepancy = on_discrepancy
         self._on_sync_complete = on_sync_complete
         self._swap_tracker = swap_tracker
+        self._reconciliation_executor = reconciliation_executor
+        self._on_reconciliation = on_reconciliation
 
         # Background sync state
         self._sync_task: Optional[asyncio.Task] = None
@@ -361,6 +629,17 @@ class ForexPositionSynchronizer:
                 local_positions, remote_positions
             )
 
+            # Calculate exposure metrics
+            total_margin_used = 0.0
+            long_exposure = 0.0
+            short_exposure = 0.0
+            for pos in remote_positions.values():
+                total_margin_used += pos.margin_used
+                if pos.is_long:
+                    long_exposure += pos.notional
+                else:
+                    short_exposure += abs(pos.units) * pos.average_price
+
             # Create result
             result = SyncResult(
                 timestamp=timestamp,
@@ -369,9 +648,14 @@ class ForexPositionSynchronizer:
                 remote_positions=remote_positions,
                 discrepancies=discrepancies,
                 total_financing=total_financing,
+                total_margin_used=total_margin_used,
+                long_exposure=long_exposure,
+                short_exposure=short_exposure,
             )
 
             # Invoke callbacks
+            reconciliation_results: List[ReconciliationOrderResult] = []
+
             if discrepancies:
                 logger.warning(f"Found {len(discrepancies)} forex position discrepancies")
                 for d in discrepancies:
@@ -383,6 +667,18 @@ class ForexPositionSynchronizer:
                             self._on_discrepancy(d)
                         except Exception as e:
                             logger.error(f"Discrepancy callback error: {e}")
+
+                # Auto-reconciliation if enabled
+                if (
+                    self._config.auto_reconcile
+                    and self._reconciliation_executor is not None
+                ):
+                    reconciliation_results = self._execute_auto_reconciliation(
+                        discrepancies, remote_positions
+                    )
+
+            # Store reconciliation results in result
+            result.reconciliation_results = reconciliation_results
 
             if self._on_sync_complete:
                 try:
@@ -602,6 +898,109 @@ class ForexPositionSynchronizer:
                     )
 
         return discrepancies
+
+    def _execute_auto_reconciliation(
+        self,
+        discrepancies: List[PositionDiscrepancy],
+        remote_positions: Dict[str, ForexPosition],
+    ) -> List[ReconciliationOrderResult]:
+        """
+        Execute automatic reconciliation for discrepancies.
+
+        Only reconciles UNITS_MISMATCH and MISSING_LOCAL discrepancies.
+        SIDE_MISMATCH and MISSING_REMOTE require manual intervention.
+
+        Args:
+            discrepancies: List of position discrepancies
+            remote_positions: Current remote positions
+
+        Returns:
+            List of reconciliation order results
+        """
+        results: List[ReconciliationOrderResult] = []
+
+        if self._reconciliation_executor is None:
+            logger.warning("Auto-reconciliation enabled but no executor provided")
+            return results
+
+        for disc in discrepancies:
+            # Only reconcile certain types
+            if disc.discrepancy_type == PositionDiscrepancyType.SIDE_MISMATCH:
+                logger.warning(
+                    f"Skipping {disc.symbol}: side mismatch requires manual intervention"
+                )
+                continue
+
+            if disc.discrepancy_type == PositionDiscrepancyType.MISSING_REMOTE:
+                logger.warning(
+                    f"Skipping {disc.symbol}: position missing on broker "
+                    "(may have been closed externally)"
+                )
+                continue
+
+            # Calculate units to trade to align with remote
+            units_to_trade = 0.0
+
+            if disc.discrepancy_type == PositionDiscrepancyType.MISSING_LOCAL:
+                # Remote has position, local doesn't - skip (external position)
+                # Or optionally close the remote position
+                logger.info(
+                    f"Skipping {disc.symbol}: external position on broker, "
+                    "update local state or close manually"
+                )
+                continue
+
+            elif disc.discrepancy_type == PositionDiscrepancyType.UNITS_MISMATCH:
+                # Align local to remote by trading the difference
+                # If remote > local, we need to sell (remote - local)
+                # If remote < local, we need to buy (local - remote)
+                local_units = disc.local_units or 0.0
+                remote_units = disc.remote_units or 0.0
+
+                # We adjust our local position to match remote
+                # This means we need to trade: local_target - local_current
+                # where local_target = remote_units
+                units_to_trade = remote_units - local_units
+
+            if abs(units_to_trade) < self._config.min_unit_diff:
+                logger.debug(
+                    f"Skipping {disc.symbol}: difference {units_to_trade:.2f} "
+                    f"below minimum {self._config.min_unit_diff}"
+                )
+                continue
+
+            # Check max reconcile units
+            if abs(units_to_trade) > self._config.max_reconcile_units:
+                logger.warning(
+                    f"Reconciliation for {disc.symbol} ({units_to_trade:.0f} units) "
+                    f"exceeds max ({self._config.max_reconcile_units:.0f}). "
+                    f"Capping to max."
+                )
+                units_to_trade = (
+                    self._config.max_reconcile_units
+                    if units_to_trade > 0
+                    else -self._config.max_reconcile_units
+                )
+
+            # Create reconciliation action
+            action = ReconciliationAction(
+                symbol=disc.symbol,
+                discrepancy=disc,
+                units_to_trade=units_to_trade,
+            )
+
+            # Execute reconciliation
+            result = self._reconciliation_executor.execute_reconciliation(action)
+            results.append(result)
+
+            # Invoke callback
+            if self._on_reconciliation:
+                try:
+                    self._on_reconciliation(result)
+                except Exception as e:
+                    logger.error(f"Reconciliation callback error: {e}")
+
+        return results
 
     # =========================================================================
     # Background Sync (Async)

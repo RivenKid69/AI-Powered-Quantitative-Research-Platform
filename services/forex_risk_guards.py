@@ -373,6 +373,7 @@ class SwapCostTracker:
         self,
         swap_rate_provider: Optional[SwapRateProvider] = None,
         max_history_size: int = 1000,
+        cache_ttl_sec: float = 3600.0,
     ) -> None:
         """
         Initialize swap cost tracker.
@@ -380,6 +381,7 @@ class SwapCostTracker:
         Args:
             swap_rate_provider: Optional provider for real-time swap rates
             max_history_size: Maximum size of swap history
+            cache_ttl_sec: Cache TTL for swap rates in seconds (default: 1 hour)
         """
         self._provider = swap_rate_provider
         self._max_history = max_history_size
@@ -393,7 +395,7 @@ class SwapCostTracker:
         # Cached swap rates
         self._swap_cache: Dict[str, SwapRate] = {}
         self._cache_timestamp: float = 0.0
-        self._cache_ttl_sec: float = 3600.0  # 1 hour cache TTL
+        self._cache_ttl_sec: float = cache_ttl_sec
 
         # Thread safety
         self._lock = threading.Lock()
