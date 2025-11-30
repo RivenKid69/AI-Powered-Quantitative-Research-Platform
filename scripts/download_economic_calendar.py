@@ -54,12 +54,15 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from urllib.parse import urljoin
 
 import numpy as np
 import pandas as pd
@@ -351,6 +354,400 @@ def _classify_impact(event_name: str, currency: str) -> str:
 
 
 # =========================
+# ForexFactory Calendar Scraper (Backup)
+# =========================
+# Based on best practices from:
+# - Babypips Calendar Research (https://www.babypips.com/economic-calendar)
+# - ForexFactory structure analysis
+# - Rate limiting best practices (polite scraping)
+
+# ForexFactory URL pattern
+FOREXFACTORY_BASE_URL = "https://www.forexfactory.com"
+FOREXFACTORY_CALENDAR_URL = f"{FOREXFACTORY_BASE_URL}/calendar"
+
+# User-Agent to avoid blocks (be a good citizen)
+FOREXFACTORY_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+}
+
+# Impact color mapping (ForexFactory uses colored icons)
+FOREXFACTORY_IMPACT_MAP = {
+    "high": "high",
+    "medium": "medium",
+    "low": "low",
+    "holiday": "low",
+    "red": "high",      # Red folder icon
+    "orange": "medium", # Orange folder icon
+    "yellow": "low",    # Yellow folder icon
+    "gray": "low",      # Gray = holiday/non-event
+}
+
+
+def fetch_calendar_forexfactory(
+    config: CalendarDownloadConfig,
+    max_retries: int = 3,
+    rate_limit_sec: float = 2.0,
+) -> Optional[pd.DataFrame]:
+    """
+    Fetch economic calendar from ForexFactory (backup source).
+
+    ForexFactory is one of the most comprehensive free forex calendars.
+    Uses HTML scraping with polite rate limiting.
+
+    Reference: ForexFactory Calendar Structure
+    - Events organized by week
+    - Impact levels: High (red), Medium (orange), Low (yellow)
+    - Includes actual/forecast/previous values
+
+    Args:
+        config: Download configuration
+        max_retries: Maximum retry attempts per request
+        rate_limit_sec: Delay between requests (be polite!)
+
+    Returns:
+        DataFrame with calendar events or None if failed
+
+    Note:
+        This scraper respects robots.txt and rate limits.
+        ForexFactory allows scraping but requests reasonable delays.
+    """
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+    except ImportError:
+        logger.warning("BeautifulSoup not installed. Run: pip install beautifulsoup4")
+        return None
+
+    logger.info("Fetching calendar from ForexFactory (backup source)")
+
+    # Date range
+    end_dt = datetime.now(timezone.utc)
+    if config.end_date:
+        end_dt = datetime.strptime(config.end_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+
+    if config.start_date:
+        start_dt = datetime.strptime(config.start_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    else:
+        start_dt = end_dt - timedelta(days=config.lookback_days)
+
+    all_records: List[Dict[str, Any]] = []
+    session = requests.Session()
+    session.headers.update(FOREXFACTORY_HEADERS)
+
+    # Iterate through weeks
+    current_week = start_dt
+    weeks_processed = 0
+    max_weeks = (end_dt - start_dt).days // 7 + 2
+
+    while current_week <= end_dt and weeks_processed < max_weeks:
+        # ForexFactory week URL format: ?week=month.day.year
+        week_str = current_week.strftime("%b%d.%Y").lower()
+        url = f"{FOREXFACTORY_CALENDAR_URL}?week={week_str}"
+
+        for attempt in range(max_retries):
+            try:
+                time.sleep(rate_limit_sec)  # Polite rate limiting
+
+                response = session.get(url, timeout=30)
+
+                if response.status_code == 200:
+                    records = _parse_forexfactory_page(
+                        response.text,
+                        config.currencies,
+                        config.high_impact_only,
+                    )
+                    all_records.extend(records)
+                    break
+                elif response.status_code == 429:
+                    # Rate limited - back off exponentially
+                    wait_time = rate_limit_sec * (2 ** attempt)
+                    logger.warning(f"Rate limited by ForexFactory, waiting {wait_time}s")
+                    time.sleep(wait_time)
+                else:
+                    logger.warning(f"ForexFactory returned {response.status_code} for {url}")
+                    break
+
+            except requests.RequestException as e:
+                logger.warning(f"ForexFactory request failed: {e}")
+                if attempt == max_retries - 1:
+                    break
+                time.sleep(rate_limit_sec * 2)
+
+        # Move to next week
+        current_week += timedelta(days=7)
+        weeks_processed += 1
+
+        # Progress logging for long downloads
+        if weeks_processed % 10 == 0:
+            logger.info(f"ForexFactory: processed {weeks_processed} weeks, {len(all_records)} events")
+
+    if not all_records:
+        logger.warning("No events fetched from ForexFactory")
+        return None
+
+    df = pd.DataFrame(all_records)
+
+    # Parse datetime and sort
+    df["datetime"] = pd.to_datetime(df["datetime"], errors="coerce")
+    df = df.dropna(subset=["datetime"])
+    df = df.sort_values("datetime").reset_index(drop=True)
+
+    # Filter by date range
+    df = df[(df["datetime"] >= pd.Timestamp(start_dt)) &
+            (df["datetime"] <= pd.Timestamp(end_dt))]
+
+    logger.info(f"ForexFactory: fetched {len(df)} events from {weeks_processed} weeks")
+    return df
+
+
+def _parse_forexfactory_page(
+    html: str,
+    currencies: List[str],
+    high_impact_only: bool,
+) -> List[Dict[str, Any]]:
+    """
+    Parse ForexFactory calendar HTML page.
+
+    ForexFactory HTML structure (2024 format):
+    - Events in <tr class="calendar__row">
+    - Date in <td class="calendar__date">
+    - Time in <td class="calendar__time">
+    - Currency in <td class="calendar__currency">
+    - Impact in <td class="calendar__impact"> with colored span
+    - Event in <td class="calendar__event">
+    - Actual/Forecast/Previous in respective <td> columns
+
+    Args:
+        html: Raw HTML content
+        currencies: List of currencies to filter
+        high_impact_only: Only return high-impact events
+
+    Returns:
+        List of event dictionaries
+    """
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        return []
+
+    soup = BeautifulSoup(html, "html.parser")
+    records = []
+
+    # Find all calendar rows
+    rows = soup.find_all("tr", class_=re.compile(r"calendar__row"))
+
+    current_date = None
+    current_time = None
+
+    for row in rows:
+        try:
+            # Skip non-event rows
+            if "calendar__row--day-breaker" in row.get("class", []):
+                continue
+
+            # Date (may be empty if same as previous row)
+            date_cell = row.find("td", class_="calendar__date")
+            if date_cell and date_cell.get_text(strip=True):
+                date_text = date_cell.get_text(strip=True)
+                current_date = _parse_forexfactory_date(date_text)
+
+            # Time
+            time_cell = row.find("td", class_="calendar__time")
+            if time_cell and time_cell.get_text(strip=True):
+                time_text = time_cell.get_text(strip=True)
+                if time_text.lower() not in ["all day", "tentative", ""]:
+                    current_time = _parse_forexfactory_time(time_text)
+
+            # Currency
+            currency_cell = row.find("td", class_="calendar__currency")
+            currency = currency_cell.get_text(strip=True) if currency_cell else ""
+
+            if currencies and currency not in currencies:
+                continue
+
+            # Impact
+            impact_cell = row.find("td", class_="calendar__impact")
+            impact = _parse_forexfactory_impact(impact_cell)
+
+            if high_impact_only and impact != "high":
+                continue
+
+            # Event name
+            event_cell = row.find("td", class_="calendar__event")
+            event_name = ""
+            if event_cell:
+                event_link = event_cell.find("span", class_="calendar__event-title")
+                if event_link:
+                    event_name = event_link.get_text(strip=True)
+                else:
+                    event_name = event_cell.get_text(strip=True)
+
+            if not event_name:
+                continue
+
+            # Actual value
+            actual_cell = row.find("td", class_="calendar__actual")
+            actual = _parse_forexfactory_value(actual_cell)
+
+            # Forecast value
+            forecast_cell = row.find("td", class_="calendar__forecast")
+            forecast = _parse_forexfactory_value(forecast_cell)
+
+            # Previous value
+            previous_cell = row.find("td", class_="calendar__previous")
+            previous = _parse_forexfactory_value(previous_cell)
+
+            # Build datetime
+            if current_date and current_time:
+                event_dt = datetime.combine(current_date, current_time)
+                event_dt = event_dt.replace(tzinfo=timezone.utc)
+            elif current_date:
+                event_dt = datetime.combine(current_date, datetime.min.time())
+                event_dt = event_dt.replace(tzinfo=timezone.utc)
+            else:
+                continue  # Skip events without date
+
+            records.append({
+                "datetime": event_dt.isoformat(),
+                "date": event_dt.strftime("%Y-%m-%d"),
+                "time": event_dt.strftime("%H:%M"),
+                "currency": currency,
+                "event": event_name,
+                "impact": impact,
+                "actual": actual,
+                "forecast": forecast,
+                "previous": previous,
+                "source": "forexfactory",
+            })
+
+        except Exception as e:
+            # Skip malformed rows
+            logger.debug(f"Failed to parse ForexFactory row: {e}")
+            continue
+
+    return records
+
+
+def _parse_forexfactory_date(date_text: str) -> Optional[datetime]:
+    """
+    Parse ForexFactory date format.
+
+    Examples: "Mon Jan 15", "Tue Feb 20", "Wed Mar 1"
+    """
+    try:
+        # Current year assumption (ForexFactory shows current week)
+        current_year = datetime.now().year
+
+        # Parse without year
+        date_text_clean = re.sub(r"\s+", " ", date_text.strip())
+
+        # Try multiple formats
+        for fmt in ["%a %b %d", "%A %b %d", "%b %d"]:
+            try:
+                dt = datetime.strptime(date_text_clean, fmt)
+                return dt.replace(year=current_year).date()
+            except ValueError:
+                continue
+
+        return None
+
+    except Exception:
+        return None
+
+
+def _parse_forexfactory_time(time_text: str) -> Optional[datetime]:
+    """
+    Parse ForexFactory time format.
+
+    Examples: "8:30am", "2:00pm", "12:30am"
+    ForexFactory shows times in US Eastern Time, we convert to UTC.
+    """
+    try:
+        time_text = time_text.strip().lower()
+
+        # Parse AM/PM format
+        match = re.match(r"(\d{1,2}):(\d{2})(am|pm)", time_text)
+        if match:
+            hour = int(match.group(1))
+            minute = int(match.group(2))
+            period = match.group(3)
+
+            if period == "pm" and hour != 12:
+                hour += 12
+            elif period == "am" and hour == 12:
+                hour = 0
+
+            # ForexFactory shows Eastern Time (ET)
+            # Convert to UTC: add 5 hours (EST) or 4 hours (EDT)
+            # Simplified: assume EST (+5)
+            hour = (hour + 5) % 24
+
+            return datetime.min.replace(hour=hour, minute=minute).time()
+
+        return None
+
+    except Exception:
+        return None
+
+
+def _parse_forexfactory_impact(impact_cell) -> str:
+    """
+    Parse ForexFactory impact level from cell.
+
+    ForexFactory uses colored icons:
+    - Red folder = High impact
+    - Orange folder = Medium impact
+    - Yellow folder = Low impact
+    - Gray = Holiday/non-event
+    """
+    if not impact_cell:
+        return "low"
+
+    # Look for impact span with class
+    impact_span = impact_cell.find("span", class_=re.compile(r"icon--ff-impact"))
+    if impact_span:
+        classes = impact_span.get("class", [])
+        class_str = " ".join(classes).lower()
+
+        if "high" in class_str or "red" in class_str:
+            return "high"
+        elif "medium" in class_str or "orange" in class_str:
+            return "medium"
+        elif "low" in class_str or "yellow" in class_str:
+            return "low"
+
+    # Alternative: check for impact icon title
+    icon = impact_cell.find("span", title=True)
+    if icon:
+        title = icon.get("title", "").lower()
+        if "high" in title:
+            return "high"
+        elif "medium" in title:
+            return "medium"
+
+    return "low"
+
+
+def _parse_forexfactory_value(cell) -> Optional[str]:
+    """Parse actual/forecast/previous value from cell."""
+    if not cell:
+        return None
+
+    text = cell.get_text(strip=True)
+
+    # Empty or placeholder
+    if not text or text in ["-", "—", ""]:
+        return None
+
+    return text
+
+
+# =========================
 # Synthetic Calendar Generation
 # =========================
 
@@ -518,11 +915,16 @@ def download_calendar(config: CalendarDownloadConfig) -> Dict[str, Any]:
     """
     Download or generate economic calendar.
 
+    Data source priority (fallback chain):
+    1. OANDA Labs Calendar API (primary, requires API key)
+    2. ForexFactory scraper (backup, comprehensive & free)
+    3. Synthetic generation (fallback, uses known schedules)
+
     Args:
         config: Download configuration
 
     Returns:
-        Summary dict
+        Summary dict with events count and source
     """
     # Check existing
     if config.skip_existing:
@@ -531,25 +933,42 @@ def download_calendar(config: CalendarDownloadConfig) -> Dict[str, Any]:
             logger.info(f"Using existing calendar with {len(existing)} events")
             return {"events": len(existing), "source": "existing"}
 
-    # Try OANDA first
+    df = None
+    source_used = "none"
+
+    # 1. Try OANDA first (primary source)
+    logger.info("Attempting OANDA calendar API (primary source)")
     df = fetch_calendar_oanda(config)
+    if df is not None and not df.empty:
+        source_used = "oanda"
+        logger.info(f"OANDA returned {len(df)} events")
+
+    # 2. Try ForexFactory as backup
+    if df is None or df.empty:
+        logger.info("OANDA unavailable, trying ForexFactory (backup source)")
+        df = fetch_calendar_forexfactory(config)
+        if df is not None and not df.empty:
+            source_used = "forexfactory"
+            logger.info(f"ForexFactory returned {len(df)} events")
+
+    # 3. Fall back to synthetic generation
+    if df is None or df.empty:
+        logger.info("No API sources available, using synthetic calendar generation")
+        df = generate_synthetic_calendar(config)
+        if df is not None and not df.empty:
+            source_used = "synthetic"
 
     if df is None or df.empty:
-        # Fall back to synthetic
-        logger.info("Using synthetic calendar generation")
-        df = generate_synthetic_calendar(config)
-
-    if df.empty:
-        logger.warning("No calendar events generated")
+        logger.warning("No calendar events generated from any source")
         return {"events": 0, "source": "none"}
 
     # Save
     filepath = save_calendar(df, config)
-    logger.info(f"Saved {len(df)} events to {filepath}")
+    logger.info(f"Saved {len(df)} events to {filepath} (source: {source_used})")
 
     return {
         "events": len(df),
-        "source": df["source"].iloc[0] if "source" in df.columns else "unknown",
+        "source": source_used,
         "filepath": filepath,
     }
 

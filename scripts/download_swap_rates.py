@@ -130,6 +130,110 @@ CURRENCY_RATE_SERIES = {
 BROKER_SPREAD_BPS = 25  # 0.25% typical retail markup
 
 
+# =============================================================================
+# CROSS-CURRENCY BASIS (CIP DEVIATION) - Recommendation #2
+# =============================================================================
+#
+# Reference: Sushko et al. (2016) "The failure of covered interest parity"
+#            Du, Tepper & Verdelhan (2018) "Deviations from CIP"
+#
+# Post-2008 Crisis Observations:
+# - CIP deviations persist due to bank balance sheet constraints
+# - USD funding premium creates positive basis for USD crosses
+# - Basis widens during risk-off periods (VIX spikes)
+# - Structural at quarter-end / year-end due to balance sheet reporting
+#
+# Formula: Swap = IR_differential + CIP_deviation - broker_spread
+# =============================================================================
+
+# Cross-currency basis FRED series (3-month tenor)
+# Source: FRED, Bank for International Settlements
+CIP_BASIS_SERIES = {
+    # EUR/USD basis - typically negative (USD funding premium)
+    "EUR_USD": "EABORUSD3M",  # EURIBOR-OIS spread proxy
+    "GBP_USD": None,  # Use synthetic
+    "USD_JPY": "JPABORUSD3M",  # JPY basis
+    "AUD_USD": None,
+    "USD_CAD": None,
+    "NZD_USD": None,
+    "USD_CHF": None,
+}
+
+# Historical average CIP deviations (bps) - based on BIS research (2016-2024)
+# Positive = USD funding premium (more expensive to borrow USD in FX swap market)
+# Negative = non-USD funding premium
+HISTORICAL_CIP_DEVIATIONS = {
+    "EUR_USD": -25,   # EUR/USD: -20 to -40 bps (USD premium)
+    "GBP_USD": -15,   # GBP/USD: -10 to -30 bps
+    "USD_JPY": -35,   # USD/JPY: -30 to -50 bps (JPY funding cheap)
+    "AUD_USD": -10,   # AUD/USD: -5 to -20 bps
+    "USD_CAD": -5,    # USD/CAD: -5 to -15 bps (close economies)
+    "NZD_USD": -8,    # NZD/USD: -5 to -15 bps
+    "USD_CHF": -45,   # USD/CHF: -40 to -60 bps (CHF safe haven)
+    "EUR_GBP": 10,    # EUR/GBP: +5 to +15 bps (GBP premium post-Brexit)
+    "EUR_JPY": -10,   # EUR/JPY: cross basis
+    "GBP_JPY": -20,   # GBP/JPY: cross basis
+}
+
+# CIP deviation volatility multiplier during stress (VIX > 25)
+CIP_STRESS_MULTIPLIER = 2.0
+
+# Quarter-end effect (last 5 business days of quarter)
+CIP_QUARTER_END_ADDON_BPS = 15
+
+
+def get_cip_deviation(
+    pair: str,
+    date: Optional[datetime] = None,
+    vix_level: Optional[float] = None,
+    use_historical_avg: bool = True,
+) -> float:
+    """
+    Get Cross-Currency Basis (CIP deviation) for a currency pair.
+
+    CIP deviation represents the cost/benefit of synthetic USD funding
+    via FX swaps vs. direct USD borrowing. Post-2008, this has been
+    persistently non-zero due to bank balance sheet constraints.
+
+    Reference:
+        - Du, Tepper & Verdelhan (2018): "Deviations from Covered Interest Parity"
+        - Sushko et al. (2016): "The failure of covered interest parity"
+        - BIS Quarterly Review (various): Cross-currency basis analysis
+
+    Args:
+        pair: Currency pair (e.g., "EUR_USD")
+        date: Date for quarter-end adjustment (optional)
+        vix_level: VIX level for stress adjustment (optional)
+        use_historical_avg: Use historical average if no live data
+
+    Returns:
+        CIP deviation in basis points (bps)
+    """
+    # Start with historical average
+    base_deviation = HISTORICAL_CIP_DEVIATIONS.get(pair, 0)
+
+    if not use_historical_avg:
+        # Could fetch from FRED here in production
+        pass
+
+    # Apply stress multiplier if VIX elevated (>25 = high fear)
+    if vix_level is not None and vix_level > 25:
+        stress_factor = 1.0 + (vix_level - 25) / 50  # Gradual increase
+        stress_factor = min(stress_factor, CIP_STRESS_MULTIPLIER)
+        base_deviation *= stress_factor
+
+    # Apply quarter-end effect
+    if date is not None:
+        # Check if within last 5 business days of quarter
+        month = date.month
+        if month in [3, 6, 9, 12]:  # Quarter-end months
+            # Simplified: last 5 days of month
+            if date.day >= 25:
+                base_deviation -= CIP_QUARTER_END_ADDON_BPS  # More negative = wider basis
+
+    return base_deviation
+
+
 # =========================
 # Swap Rate Estimation
 # =========================
@@ -141,16 +245,25 @@ def estimate_swap_from_interest_rates(
     spot_price: float,
     contract_size: int = 100000,
     broker_spread_bps: int = BROKER_SPREAD_BPS,
+    include_cip_deviation: bool = True,
+    cip_deviation_bps: Optional[float] = None,
+    date: Optional[datetime] = None,
+    vix_level: Optional[float] = None,
 ) -> Tuple[float, float]:
     """
-    Estimate swap rates from interest rate differential.
+    Estimate swap rates from interest rate differential with CIP adjustment.
 
-    Swap rate = (Interest Rate Differential + Broker Spread) / 365
+    Enhanced formula (Du, Tepper & Verdelhan, 2018):
+        Swap = IR_differential + CIP_deviation - broker_spread
+
+    The CIP deviation captures the cross-currency basis, which represents
+    the premium/discount of synthetic USD funding via FX swaps.
 
     For a long position in base currency:
         - You pay quote currency interest
         - You receive base currency interest
-        - Net = base_rate - quote_rate - broker_spread
+        - CIP deviation adjusts for cross-currency basis
+        - Net = base_rate - quote_rate + CIP_basis - broker_spread
 
     Args:
         pair: Currency pair (e.g., "EUR_USD")
@@ -159,9 +272,18 @@ def estimate_swap_from_interest_rates(
         spot_price: Current spot price
         contract_size: Contract size (default: 100,000)
         broker_spread_bps: Broker markup in basis points
+        include_cip_deviation: Whether to include CIP adjustment
+        cip_deviation_bps: Override CIP deviation (if known)
+        date: Date for quarter-end adjustment
+        vix_level: VIX level for stress adjustment
 
     Returns:
         (long_swap_pips, short_swap_pips) per day per lot
+
+    References:
+        - Du, Tepper & Verdelhan (2018): "Deviations from CIP"
+        - Sushko et al. (2016): "The failure of covered interest parity"
+        - Borio et al. (2016): "The hunt for duration"
     """
     # Interest rate differential
     diff = base_rate - quote_rate
@@ -169,9 +291,24 @@ def estimate_swap_from_interest_rates(
     # Convert broker spread to percentage
     broker_spread_pct = broker_spread_bps / 100
 
+    # Get CIP deviation (cross-currency basis)
+    cip_adjustment_pct = 0.0
+    if include_cip_deviation:
+        if cip_deviation_bps is not None:
+            cip_adjustment_pct = cip_deviation_bps / 100
+        else:
+            cip_deviation = get_cip_deviation(pair, date, vix_level)
+            cip_adjustment_pct = cip_deviation / 100
+
+    # Full formula: IR_diff + CIP_basis - broker_spread
+    # For USD-quoted pairs, negative CIP basis means USD funding premium
+    # This makes long non-USD positions more expensive (negative swap)
+    long_rate_annual = diff + cip_adjustment_pct - broker_spread_pct
+    short_rate_annual = -diff - cip_adjustment_pct - broker_spread_pct
+
     # Daily rates (divided by 365)
-    long_rate_daily = (diff - broker_spread_pct) / 365  # Long base = receive base, pay quote
-    short_rate_daily = (-diff - broker_spread_pct) / 365  # Short base = pay base, receive quote
+    long_rate_daily = long_rate_annual / 365
+    short_rate_daily = short_rate_annual / 365
 
     # Convert to pips per lot
     # Pip value depends on pair type
@@ -185,6 +322,71 @@ def estimate_swap_from_interest_rates(
     short_swap_pips = (short_rate_daily / 100) * spot_price * contract_size / pip_value / contract_size
 
     return long_swap_pips, short_swap_pips
+
+
+def estimate_swap_with_cip_breakdown(
+    pair: str,
+    base_rate: float,
+    quote_rate: float,
+    spot_price: float,
+    date: Optional[datetime] = None,
+    vix_level: Optional[float] = None,
+) -> Dict[str, Any]:
+    """
+    Estimate swap rates with detailed CIP breakdown for analysis.
+
+    Returns component breakdown useful for research and backtesting.
+
+    Args:
+        pair: Currency pair
+        base_rate: Base currency rate (%)
+        quote_rate: Quote currency rate (%)
+        spot_price: Spot price
+        date: Date for quarter-end effect
+        vix_level: VIX for stress effect
+
+    Returns:
+        Dict with swap rates and all component breakdowns
+    """
+    # Get CIP deviation
+    cip_bps = get_cip_deviation(pair, date, vix_level)
+
+    # Calculate swaps
+    long_swap, short_swap = estimate_swap_from_interest_rates(
+        pair=pair,
+        base_rate=base_rate,
+        quote_rate=quote_rate,
+        spot_price=spot_price,
+        include_cip_deviation=True,
+        cip_deviation_bps=cip_bps,
+        date=date,
+        vix_level=vix_level,
+    )
+
+    # Also calculate without CIP for comparison
+    long_swap_no_cip, short_swap_no_cip = estimate_swap_from_interest_rates(
+        pair=pair,
+        base_rate=base_rate,
+        quote_rate=quote_rate,
+        spot_price=spot_price,
+        include_cip_deviation=False,
+    )
+
+    return {
+        "pair": pair,
+        "long_swap_pips": long_swap,
+        "short_swap_pips": short_swap,
+        "long_swap_pips_no_cip": long_swap_no_cip,
+        "short_swap_pips_no_cip": short_swap_no_cip,
+        "ir_differential_pct": base_rate - quote_rate,
+        "cip_deviation_bps": cip_bps,
+        "broker_spread_bps": BROKER_SPREAD_BPS,
+        "base_rate": base_rate,
+        "quote_rate": quote_rate,
+        "date": date.isoformat() if date else None,
+        "vix_level": vix_level,
+        "is_quarter_end": date.month in [3, 6, 9, 12] and date.day >= 25 if date else False,
+    }
 
 
 def load_interest_rates(
