@@ -3100,7 +3100,7 @@ class L2ExecutionProvider:
         Initialize L2 execution provider.
 
         Args:
-            asset_class: Asset class to configure defaults for
+            asset_class: Asset class to configure defaults for (CRYPTO, EQUITY, FUTURES, FOREX)
             slippage_provider: Custom slippage provider
             fee_provider: Custom fee provider
             **kwargs: Additional configuration
@@ -3118,6 +3118,19 @@ class L2ExecutionProvider:
                     impact_coef=0.05,
                     spread_bps=2.0,
                 )
+            elif asset_class == AssetClass.FUTURES:
+                # Futures: use FuturesSlippageProvider
+                try:
+                    from execution_providers_futures import FuturesSlippageProvider
+                    self.slippage = FuturesSlippageProvider()
+                except ImportError:
+                    logger.warning(
+                        "FuturesSlippageProvider not available, using crypto defaults"
+                    )
+                    self.slippage = StatisticalSlippageProvider(
+                        impact_coef=0.1,
+                        spread_bps=5.0,
+                    )
             else:
                 # Crypto has wider spreads
                 self.slippage = StatisticalSlippageProvider(
@@ -3131,6 +3144,16 @@ class L2ExecutionProvider:
         else:
             if asset_class == AssetClass.EQUITY:
                 self.fees = EquityFeeProvider()
+            elif asset_class == AssetClass.FUTURES:
+                # Futures: use FuturesFeeProvider
+                try:
+                    from execution_providers_futures import FuturesFeeProvider
+                    self.fees = FuturesFeeProvider()
+                except ImportError:
+                    logger.warning(
+                        "FuturesFeeProvider not available, using crypto defaults"
+                    )
+                    self.fees = CryptoFeeProvider()
             else:
                 self.fees = CryptoFeeProvider()
 
@@ -3462,7 +3485,7 @@ def create_execution_provider(
     Factory function to create combined execution provider.
 
     Args:
-        asset_class: Asset class (CRYPTO, EQUITY, or FOREX)
+        asset_class: Asset class (CRYPTO, EQUITY, FUTURES, or FOREX)
         level: Fidelity level ("L2", "L3")
         **kwargs: Provider-specific configuration
 
@@ -3480,6 +3503,10 @@ def create_execution_provider(
         >>> from lob.config import L3ExecutionConfig
         >>> config = L3ExecutionConfig.for_equity()
         >>> provider = create_execution_provider(AssetClass.EQUITY, level="L3", config=config)
+
+        # FUTURES provider (L2 with funding/OI/liquidation factors)
+        >>> provider = create_execution_provider(AssetClass.FUTURES, level="L2")
+        >>> # Uses FuturesSlippageProvider + FuturesFeeProvider
 
         # FOREX provider (L2+ parametric TCA)
         >>> provider = create_execution_provider(AssetClass.FOREX, level="L2")
