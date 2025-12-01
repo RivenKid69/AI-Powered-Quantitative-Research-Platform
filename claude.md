@@ -2722,7 +2722,7 @@ pytest tests/test_futures_execution_providers.py -v
 
 ## 📊 Phase 4B: CME SPAN Margin & Slippage (COMPLETED)
 
-**Статус**: ✅ Production Ready | **Тесты**: 237/237 (100% pass) | **Date**: 2025-12-02
+**Статус**: ✅ Production Ready | **Тесты**: 258/258 (100% pass) | **Покрытие**: 99% | **Date**: 2025-12-02
 
 Phase 4B implements CME-specific margin calculation (SPAN methodology) and slippage modeling for CME Group futures.
 
@@ -2980,13 +2980,13 @@ manager.reset_all_daily()
 ### Тестирование
 
 ```bash
-# All Phase 4B tests (237 tests)
+# All Phase 4B tests (258 tests, 99% coverage)
 pytest tests/test_span_margin.py tests/test_cme_slippage.py tests/test_circuit_breaker.py -v
 
 # By component
-pytest tests/test_span_margin.py -v          # 78 tests
-pytest tests/test_cme_slippage.py -v         # 55 tests
-pytest tests/test_circuit_breaker.py -v      # 60 tests (including 44 existing)
+pytest tests/test_span_margin.py -v          # 85 tests (78 + 7 edge cases)
+pytest tests/test_cme_slippage.py -v         # 66 tests (55 + 11 edge cases)
+pytest tests/test_circuit_breaker.py -v      # 67 tests (60 + 7 edge cases)
 ```
 
 ### Test Categories
@@ -2996,11 +2996,15 @@ pytest tests/test_circuit_breaker.py -v      # 60 tests (including 44 existing)
 | SPAN Scanning Risk | 9 | Product-specific ranges |
 | SPAN Portfolio Margin | 7 | Spread credits |
 | SPAN Margin Impact | 3 | New position impact estimation |
+| SPAN Edge Cases | 5 | Missing specs/prices, fallbacks |
 | CME Slippage Profiles | 6 | Profile configurations |
 | CME Session Factors | 5 | ETH/settlement/roll |
+| CME Limit Orders | 6 | Passive/aggressive/no-fill |
+| CME Edge Cases | 5 | Currency futures, recommendations |
 | CME Circuit Breaker | 20 | Rule 80B, overnight limits |
 | Velocity Logic | 7 | Fat-finger protection |
 | Circuit Breaker Manager | 6 | Multi-product management |
+| Circuit Breaker Edge Cases | 7 | Expanded limits, non-equity products |
 | Integration Scenarios | 5 | Flash crash, overnight trading |
 
 ### Ключевые файлы
