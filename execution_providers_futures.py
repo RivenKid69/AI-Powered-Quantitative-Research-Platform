@@ -88,7 +88,9 @@ class FuturesSlippageConfig(CryptoParametricConfig):
     oi_concentration_threshold: float = 0.3
     liquidation_cascade_sensitivity: float = 5.0
     liquidation_cascade_threshold: float = 0.01
+    liquidation_cascade_max_factor: float = 3.0        # Cap at 200% increase
     open_interest_liquidity_factor: float = 0.1
+    open_interest_max_penalty: float = 2.0             # Cap at 100% increase
     use_mark_price_execution: bool = True
 
 
@@ -200,9 +202,10 @@ class FuturesSlippageProvider(CryptoParametricSlippageProvider):
                 (funding_rate < 0 and str(order.side).upper() == "SELL")
             )
             if is_same_direction:
-                # Convert funding rate to bps and scale by sensitivity
-                # E.g., 0.0001 (0.01%) × 5.0 × 10000 = +5bps
-                funding_stress = 1.0 + abs(funding_rate) * self.futures_config.funding_impact_sensitivity * 10000
+                # FIX (2025-12-02): Use multiplicative ratio, not additive bps
+                # E.g., 0.0001 (0.01%) × 5.0 = 0.0005 = 0.05% increase
+                # Original had × 10000 which gave 51x for 0.1% funding (WRONG!)
+                funding_stress = 1.0 + abs(funding_rate) * self.futures_config.funding_impact_sensitivity
 
         # =====================================================================
         # 3. Liquidation cascade factor
@@ -214,7 +217,11 @@ class FuturesSlippageProvider(CryptoParametricSlippageProvider):
             # Only trigger if above threshold
             if liquidation_ratio > self.futures_config.liquidation_cascade_threshold:
                 # Scale by sensitivity: 1% liquidations × 5.0 = +5% slippage
-                cascade_factor = 1.0 + liquidation_ratio * self.futures_config.liquidation_cascade_sensitivity
+                # FIX (2025-12-02): Cap at max_factor to prevent extreme scenarios
+                cascade_factor = min(
+                    self.futures_config.liquidation_cascade_max_factor,
+                    1.0 + liquidation_ratio * self.futures_config.liquidation_cascade_sensitivity
+                )
 
         # =====================================================================
         # 4. Open interest liquidity penalty
@@ -226,8 +233,12 @@ class FuturesSlippageProvider(CryptoParametricSlippageProvider):
 
             # Penalty grows with OI concentration
             # E.g., OI = 3× ADV → penalty = 1.0 + 3.0 × 0.1 = 1.3 (+30%)
+            # FIX (2025-12-02): Cap at max_penalty to prevent extreme scenarios
             if oi_to_adv > 1.0:
-                oi_penalty = 1.0 + (oi_to_adv - 1.0) * self.futures_config.open_interest_liquidity_factor
+                oi_penalty = min(
+                    self.futures_config.open_interest_max_penalty,
+                    1.0 + (oi_to_adv - 1.0) * self.futures_config.open_interest_liquidity_factor
+                )
 
         # =====================================================================
         # 5. Combine all factors

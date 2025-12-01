@@ -3,7 +3,7 @@
 execution_providers.py
 Multi-asset execution provider interfaces and implementations.
 
-"""Execution provider abstractions and default implementations.
+Execution provider abstractions and default implementations.
 
 This module contains protocol-style interfaces (``SlippageProvider``,
 ``FillProvider``, ``FeeProvider``) together with the in-tree reference

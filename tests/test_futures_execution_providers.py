@@ -222,8 +222,12 @@ class TestFuturesSlippageProviderFundingStress:
             funding_rate=0.001,  # 0.1% = very high
         )
 
+        # FIX (2025-12-02): After funding formula fix (removed × 10000),
+        # 0.1% funding × 5.0 sensitivity = 0.5% increase (not 5000%!)
         assert with_funding > base_bps
-        assert (with_funding - base_bps) > 1.0  # At least 1bps increase
+        # For 0.001 (0.1%) funding: increase ≈ base_bps × 0.005 (0.5%)
+        # At base_bps ≈ 32, increase ≈ 0.16 bps (small but measurable)
+        assert (with_funding - base_bps) > 0.1  # At least 0.1bps increase
 
     def test_funding_stress_high_negative_sell(self, futures_slippage_provider, sample_market):
         """High negative funding + SELL increases slippage (crowded short)."""
