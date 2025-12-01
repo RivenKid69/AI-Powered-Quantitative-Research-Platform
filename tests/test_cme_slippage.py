@@ -847,3 +847,192 @@ class TestEdgeCases:
             bar=es_bar_data,
         )
         assert fill is None
+
+
+# =============================================================================
+# Additional Coverage Tests
+# =============================================================================
+
+class TestCoverageEdgeCases:
+    """Tests for edge cases to achieve 100% coverage."""
+
+    def test_currency_futures_spread_calculation(self):
+        """Test spread calculation for currency futures (small spread values)."""
+        provider = CMESlippageProvider()
+        # Currency futures like 6E have very small tick sizes
+        order = Order(symbol="6E", side="BUY", qty=1.0, order_type="MARKET")
+        # 6E mid price around 1.10, tick size 0.00005
+        market = MarketState(
+            timestamp=0,
+            bid=1.10000,
+            ask=1.10010,  # 1 tick spread
+            adv=50_000_000_000,  # High ADV for low participation
+        )
+        slippage = provider.compute_slippage_bps(
+            order=order,
+            market=market,
+            participation_ratio=0.0001,
+        )
+        # Should compute valid slippage for currency futures
+        assert slippage > 0
+        assert slippage < 50  # Should be reasonable
+
+    def test_estimate_cost_moderate_participation(self):
+        """Test cost estimation for 1-5% ADV participation (moderate recommendation)."""
+        provider = CMESlippageProvider()
+        result = provider.estimate_impact_cost(
+            notional=75_000_000,  # $75M
+            adv=2_500_000_000,    # $2.5B ADV -> 3% participation
+            symbol="ES",
+        )
+        assert "recommendation" in result
+        assert "MODERATE" in result["recommendation"] or "1-5%" in result["recommendation"]
+
+    def test_estimate_cost_high_participation(self):
+        """Test cost estimation for 5-10% ADV participation (high recommendation)."""
+        provider = CMESlippageProvider()
+        result = provider.estimate_impact_cost(
+            notional=200_000_000,  # $200M
+            adv=2_500_000_000,     # $2.5B ADV -> 8% participation
+            symbol="ES",
+        )
+        assert "recommendation" in result
+        assert "HIGH" in result["recommendation"] or "5-10%" in result["recommendation"]
+
+    def test_fee_compute_without_symbol(self):
+        """Test fee computation with None symbol (defaults to ES)."""
+        provider = CMEFeeProvider()
+        fee = provider.compute_fee(
+            notional=225000,
+            side="BUY",
+            liquidity="taker",
+            qty=1.0,
+            symbol=None,
+        )
+        # Should use ES default fees
+        assert fee > 0
+        # ES fee is $1.29 per contract
+        assert 1.0 <= fee <= 2.0
+
+    def test_sell_limit_order_passive_fill(self):
+        """Test SELL LIMIT order that fills passively (maker)."""
+        provider = CMEL2ExecutionProvider()
+        order = Order(
+            symbol="ES",
+            side="SELL",
+            qty=1.0,
+            order_type="LIMIT",
+            limit_price=4510.0,  # Limit above current price
+        )
+        market = MarketState(
+            timestamp=0,
+            bid=4499.75,
+            ask=4500.00,
+            adv=50_000_000_000,
+        )
+        bar = BarData(
+            open=4500.0,
+            high=4515.0,  # High exceeds limit -> fills
+            low=4498.0,
+            close=4510.0,
+            volume=100000,
+        )
+        fill = provider.execute(order=order, market=market, bar=bar)
+        # Should fill as maker since limit is above current ask
+        assert fill is not None
+        assert fill.liquidity == "maker"
+        assert fill.price >= order.limit_price
+
+    def test_sell_limit_order_aggressive_crossing(self):
+        """Test SELL LIMIT order that crosses spread aggressively (taker)."""
+        provider = CMEL2ExecutionProvider()
+        order = Order(
+            symbol="ES",
+            side="SELL",
+            qty=1.0,
+            order_type="LIMIT",
+            limit_price=4499.00,  # Below bid -> immediate execution
+        )
+        market = MarketState(
+            timestamp=0,
+            bid=4499.75,
+            ask=4500.00,
+            adv=50_000_000_000,
+        )
+        bar = BarData(
+            open=4500.0,
+            high=4505.0,
+            low=4495.0,
+            close=4500.0,
+            volume=100000,
+        )
+        fill = provider.execute(order=order, market=market, bar=bar)
+        # Should fill as taker since limit is at or below bid
+        assert fill is not None
+        assert fill.liquidity == "taker"
+
+    def test_sell_limit_order_no_fill(self):
+        """Test SELL LIMIT order that doesn't fill (price not reached)."""
+        provider = CMEL2ExecutionProvider()
+        order = Order(
+            symbol="ES",
+            side="SELL",
+            qty=1.0,
+            order_type="LIMIT",
+            limit_price=4520.0,  # High limit
+        )
+        market = MarketState(
+            timestamp=0,
+            bid=4499.75,
+            ask=4500.00,
+            adv=50_000_000_000,
+        )
+        bar = BarData(
+            open=4500.0,
+            high=4510.0,  # High doesn't reach limit
+            low=4495.0,
+            close=4505.0,
+            volume=100000,
+        )
+        fill = provider.execute(order=order, market=market, bar=bar)
+        # Should not fill since bar high < limit
+        assert fill is None
+
+    def test_set_roll_period(self):
+        """Test set_roll_period method on execution provider."""
+        provider = CMEL2ExecutionProvider()
+        # Initially not in roll period
+        provider.set_roll_period(True)
+        # Check internal state
+        assert provider._slippage._is_roll_period is True
+
+        provider.set_roll_period(False)
+        assert provider._slippage._is_roll_period is False
+
+    def test_buy_limit_order_aggressive_crossing(self):
+        """Test BUY LIMIT order that crosses spread aggressively (taker)."""
+        provider = CMEL2ExecutionProvider()
+        order = Order(
+            symbol="ES",
+            side="BUY",
+            qty=1.0,
+            order_type="LIMIT",
+            limit_price=4500.50,  # Above ask -> immediate execution
+        )
+        market = MarketState(
+            timestamp=0,
+            bid=4499.75,
+            ask=4500.00,
+            adv=50_000_000_000,
+        )
+        bar = BarData(
+            open=4500.0,
+            high=4505.0,
+            low=4495.0,
+            close=4500.0,
+            volume=100000,
+        )
+        fill = provider.execute(order=order, market=market, bar=bar)
+        # Should fill as taker since limit is at or above ask
+        assert fill is not None
+        assert fill.liquidity == "taker"

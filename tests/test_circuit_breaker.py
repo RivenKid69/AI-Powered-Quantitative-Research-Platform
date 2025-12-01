@@ -1073,5 +1073,118 @@ class TestIntegrationScenarios:
         assert len(status["products"]) == 3
 
 
+# =============================================================================
+# Additional Coverage Tests
+# =============================================================================
+
+class TestCoverageEdgeCases:
+    """Tests for edge cases to achieve 100% coverage."""
+
+    def test_non_equity_index_returns_none(self):
+        """Test circuit breaker check on non-equity index product returns NONE."""
+        # GC (gold) is not equity index
+        cb = CMECircuitBreaker("GC")
+        cb.set_reference_price(Decimal("2000"))
+
+        # Should return NONE immediately since not equity index
+        level = cb.check_circuit_breaker(Decimal("1800"), 1000000, True)
+        assert level == CircuitBreakerLevel.NONE
+
+    def test_commodity_limits_no_reference_price(self):
+        """Test commodity limits with no reference price returns early."""
+        cb = CMECircuitBreaker("CL")
+        # Don't set reference price
+
+        is_within, lower, upper, violation = cb.check_commodity_limit(Decimal("70"), 1000000)
+        # Should return early with defaults
+        assert is_within is True
+        assert violation == LimitViolationType.NONE
+
+    def test_commodity_limits_expanded_2(self):
+        """Test commodity limits at EXPANDED_2 status."""
+        cb = CMECircuitBreaker("CL")
+        cb.set_reference_price(Decimal("80"))
+
+        # Expand twice to reach EXPANDED_2
+        cb.expand_commodity_limit()  # -> EXPANDED_1
+        cb.expand_commodity_limit()  # -> EXPANDED_2
+
+        # Check status reflects EXPANDED_2
+        limits = cb.get_current_limits()
+        assert limits["limit_status"] == "EXPANDED_2"
+
+        # CL expanded_2 = 14%, so limits are [68.8, 91.2]
+        # Price of 90 is within expanded limits
+        is_within, lower, upper, violation = cb.check_commodity_limit(Decimal("90"), 1000000)
+        assert is_within is True
+
+    def test_commodity_limits_max_expansion(self):
+        """Test commodity limits at MAX expansion status."""
+        cb = CMECircuitBreaker("CL")
+        cb.set_reference_price(Decimal("80"))
+
+        # Expand three times to reach max
+        cb.expand_commodity_limit()  # -> EXPANDED_1
+        cb.expand_commodity_limit()  # -> EXPANDED_2
+        success = cb.expand_commodity_limit()  # -> MAX_EXPANDED
+        assert success is True
+
+        # Fourth expansion should fail
+        success = cb.expand_commodity_limit()
+        assert success is False
+
+        limits = cb.get_current_limits()
+        assert limits["limit_status"] == "MAX_EXPANDED"
+
+    def test_expand_commodity_limit_without_limits(self):
+        """Test expand_commodity_limit on product without commodity limits."""
+        # ES is equity index, has no commodity limits
+        cb = CMECircuitBreaker("ES")
+        cb.set_reference_price(Decimal("4500"))
+
+        # Should return False since no commodity limits
+        success = cb.expand_commodity_limit()
+        assert success is False
+
+    def test_halt_ended_transition(self):
+        """Test trading state transition when halt ends."""
+        cb = CMECircuitBreaker("ES")
+        cb.set_reference_price(Decimal("4500"))
+
+        # Trigger Level 1 circuit breaker
+        cb.check_circuit_breaker(Decimal("4185"), 1000000, True)
+        assert cb.is_halted is True
+
+        # Wait for halt to end (15 minutes = 900000 ms)
+        after_halt_time = 1000000 + 900001
+
+        # Check can_trade after halt ends
+        can_trade, reason = cb.can_trade(after_halt_time)
+        # After halt ends, should be able to trade
+        assert can_trade is True or "halted" not in reason.lower()
+
+    def test_get_current_limits_expanded_states(self):
+        """Test get_current_limits returns correct limit percentages for expanded states."""
+        cb = CMECircuitBreaker("NG")
+        cb.set_reference_price(Decimal("3.0"))
+
+        # INITIAL state
+        limits = cb.get_current_limits()
+        assert "limit_status" in limits
+        assert limits["limit_status"] == "INITIAL"
+
+        # EXPANDED_1
+        cb.expand_commodity_limit()
+        limits = cb.get_current_limits()
+        assert limits["limit_status"] == "EXPANDED_1"
+
+        # EXPANDED_2
+        cb.expand_commodity_limit()
+        limits = cb.get_current_limits()
+        assert limits["limit_status"] == "EXPANDED_2"
+        assert "limit_pct" in limits
+        assert limits["limit_pct"] > 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

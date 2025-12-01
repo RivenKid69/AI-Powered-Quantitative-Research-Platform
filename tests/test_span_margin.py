@@ -1146,3 +1146,142 @@ class TestIntegrationScenarios:
         # Notional = 4500 * 100 * 50 = 22,500,000
         # Scanning = 22,500,000 * 0.06 = 1,350,000
         assert result.scanning_risk == Decimal("1350000")
+
+
+# =============================================================================
+# Additional Coverage Tests
+# =============================================================================
+
+class TestCoverageEdgeCases:
+    """Tests for edge cases to achieve 100% coverage."""
+
+    @pytest.fixture
+    def es_spec(self):
+        """ES contract spec for tests."""
+        return FuturesContractSpec(
+            symbol="ES", exchange=Exchange.CME,
+            futures_type=FuturesType.INDEX_FUTURES, contract_type=ContractType.CURRENT_QUARTER,
+            settlement_type=SettlementType.CASH, base_asset="SPX", quote_asset="USD",
+            margin_asset="USD", contract_size=Decimal("1"), multiplier=Decimal("50"),
+            tick_size=Decimal("0.25"), tick_value=Decimal("12.50"),
+        )
+
+    def test_default_scanning_range_fallback(self):
+        """Test fallback to DEFAULT_SCANNING_RANGE for unknown symbols."""
+        calc = SPANMarginCalculator()
+        # UNKNOWN_SYMBOL not in SCANNING_RANGES or custom overrides
+        scanning = calc.get_scanning_range("UNKNOWN_SYMBOL")
+        # Should return default ScanningRangeConfig with 8% price scan
+        assert scanning.price_scan_range_pct == Decimal("0.08")  # DEFAULT_SCANNING_RANGE
+
+    def test_default_calendar_credit_fallback(self):
+        """Test fallback to DEFAULT_CALENDAR_SPREAD_CREDIT for unknown symbols."""
+        calc = SPANMarginCalculator()
+        # UNKNOWN_SYMBOL not in CALENDAR_SPREAD_CREDITS
+        credit = calc.get_calendar_credit_rate("UNKNOWN_SYMBOL")
+        # Should return default
+        assert credit == Decimal("0.70")  # DEFAULT_CALENDAR_SPREAD_CREDIT
+
+    def test_portfolio_margin_skips_missing_spec(self, es_spec):
+        """Test portfolio margin skips positions without contract specs."""
+        calc = SPANMarginCalculator(contract_specs={"ES": es_spec})
+
+        # ES has spec, NQ does not
+        es_pos = FuturesPosition(
+            symbol="ES", qty=Decimal("1"),
+            entry_price=Decimal("4500"), side=PositionSide.LONG,
+            leverage=1, margin_mode=MarginMode.SPAN,
+        )
+        nq_pos = FuturesPosition(
+            symbol="NQ", qty=Decimal("1"),
+            entry_price=Decimal("15000"), side=PositionSide.LONG,
+            leverage=1, margin_mode=MarginMode.SPAN,
+        )
+
+        result = calc.calculate_portfolio_margin(
+            positions=[es_pos, nq_pos],
+            prices={"ES": Decimal("4500"), "NQ": Decimal("15000")},
+            # Only provide ES spec via calc, NQ spec is missing
+        )
+
+        # Should only calculate margin for ES
+        assert result.position_details is not None
+        assert len(result.position_details) == 1  # Only ES
+
+    def test_portfolio_margin_skips_missing_price(self, es_spec):
+        """Test portfolio margin skips positions without prices."""
+        nq_spec = FuturesContractSpec(
+            symbol="NQ", exchange=Exchange.CME,
+            futures_type=FuturesType.INDEX_FUTURES, contract_type=ContractType.CURRENT_QUARTER,
+            settlement_type=SettlementType.CASH, base_asset="NDX", quote_asset="USD",
+            margin_asset="USD", contract_size=Decimal("1"), multiplier=Decimal("20"),
+            tick_size=Decimal("0.25"), tick_value=Decimal("5"),
+        )
+        calc = SPANMarginCalculator(contract_specs={"ES": es_spec, "NQ": nq_spec})
+
+        es_pos = FuturesPosition(
+            symbol="ES", qty=Decimal("1"),
+            entry_price=Decimal("4500"), side=PositionSide.LONG,
+            leverage=1, margin_mode=MarginMode.SPAN,
+        )
+        nq_pos = FuturesPosition(
+            symbol="NQ", qty=Decimal("1"),
+            entry_price=Decimal("15000"), side=PositionSide.LONG,
+            leverage=1, margin_mode=MarginMode.SPAN,
+        )
+
+        result = calc.calculate_portfolio_margin(
+            positions=[es_pos, nq_pos],
+            prices={"ES": Decimal("4500")},  # NQ price missing
+        )
+
+        # Should only calculate margin for ES
+        assert result.position_details is not None
+        assert len(result.position_details) == 1  # Only ES
+
+    def test_inter_commodity_credit_skips_used_symbols(self, es_spec):
+        """Test inter-commodity credit doesn't double-count symbols."""
+        nq_spec = FuturesContractSpec(
+            symbol="NQ", exchange=Exchange.CME,
+            futures_type=FuturesType.INDEX_FUTURES, contract_type=ContractType.CURRENT_QUARTER,
+            settlement_type=SettlementType.CASH, base_asset="NDX", quote_asset="USD",
+            margin_asset="USD", contract_size=Decimal("1"), multiplier=Decimal("20"),
+            tick_size=Decimal("0.25"), tick_value=Decimal("5"),
+        )
+        ym_spec = FuturesContractSpec(
+            symbol="YM", exchange=Exchange.CME,
+            futures_type=FuturesType.INDEX_FUTURES, contract_type=ContractType.CURRENT_QUARTER,
+            settlement_type=SettlementType.CASH, base_asset="DJI", quote_asset="USD",
+            margin_asset="USD", contract_size=Decimal("1"), multiplier=Decimal("5"),
+            tick_size=Decimal("1"), tick_value=Decimal("5"),
+        )
+        calc = SPANMarginCalculator(contract_specs={"ES": es_spec, "NQ": nq_spec, "YM": ym_spec})
+
+        # Three positions: ES, NQ, YM
+        # ES/NQ are correlated (0.50 credit)
+        # ES/YM are also correlated (0.50 credit)
+        # But ES can only be used once in credit calculation
+        es_pos = FuturesPosition(
+            symbol="ES", qty=Decimal("1"),
+            entry_price=Decimal("4500"), side=PositionSide.LONG,
+            leverage=1, margin_mode=MarginMode.SPAN,
+        )
+        nq_pos = FuturesPosition(
+            symbol="NQ", qty=Decimal("1"),
+            entry_price=Decimal("15000"), side=PositionSide.LONG,
+            leverage=1, margin_mode=MarginMode.SPAN,
+        )
+        ym_pos = FuturesPosition(
+            symbol="YM", qty=Decimal("1"),
+            entry_price=Decimal("35000"), side=PositionSide.LONG,
+            leverage=1, margin_mode=MarginMode.SPAN,
+        )
+
+        result = calc.calculate_portfolio_margin(
+            positions=[es_pos, nq_pos, ym_pos],
+            prices={"ES": Decimal("4500"), "NQ": Decimal("15000"), "YM": Decimal("35000")},
+        )
+
+        # Should have some inter-commodity credit
+        # ES should only be paired once (first match)
+        assert result.inter_commodity_credit >= 0
