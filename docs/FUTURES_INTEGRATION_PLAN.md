@@ -314,7 +314,7 @@ class ExchangeVendor(str, Enum):
 | 4B | CME SPAN/Settlement | 1.5 weeks | Phase 3B | ✅ DONE |
 | 5A | Crypto L2/L3 | 1.5 weeks | Phase 4A | ✅ DONE |
 | 5B | CME L2/L3 | 1.5 weeks | Phase 4B | ✅ DONE |
-| 6A | Crypto Features | 1 week | Phase 5A | 📋 Pending |
+| 6A | Crypto Features | 1 week | Phase 5A | ✅ DONE |
 | 6B | CME Features | 1 week | Phase 5B | 📋 Pending |
 | 7 | Risk Management | 1.5 weeks | Phase 6A, 6B | 📋 Pending |
 | 8 | Training Pipeline | 2 weeks | Phase 7 | 📋 Pending |

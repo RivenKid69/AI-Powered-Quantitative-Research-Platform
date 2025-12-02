@@ -30,6 +30,7 @@ from collections import deque
 from collections.abc import Mapping as MappingABC
 from clock import now_ms
 from datetime import date
+from decimal import Decimal
 
 if TYPE_CHECKING:
     from core_contracts import RiskGuards
@@ -62,6 +63,14 @@ class RiskEvent(IntEnum):
     MARGIN_CALL = 6           # Margin requirement violation
     SHORT_SALE_RESTRICTED = 7  # Short sale restriction (uptick rule, HTB)
     CORPORATE_ACTION = 8      # Corporate action affecting position
+    # Futures-specific events (Phase 6A)
+    LEVERAGE_VIOLATION = 9    # Leverage exceeds maximum allowed
+    FUTURES_MARGIN_WARNING = 10  # Margin ratio below warning threshold
+    FUTURES_MARGIN_DANGER = 11   # Margin ratio critical - position reduction required
+    FUTURES_MARGIN_LIQUIDATION = 12  # Margin ratio at liquidation level
+    FUNDING_EXPOSURE = 13     # Funding rate exposure exceeds threshold
+    CONCENTRATION_LIMIT = 14  # Position concentration exceeds limits
+    ADL_RISK = 15             # Auto-deleveraging risk detected
 
 
 @dataclass
@@ -1433,4 +1442,669 @@ def create_combined_risk_guard(
         return risk_guard, stock_guard
 
     return risk_guard, None
+
+
+# =========================
+# Crypto Futures Risk Guard (Phase 6A)
+# =========================
+
+@dataclass
+class CryptoFuturesRiskConfig:
+    """Configuration for crypto futures risk management.
+
+    Reference: Binance USDT-M Futures risk management
+    Documentation: docs/FUTURES_INTEGRATION_PLAN.md (Phase 6A)
+    """
+
+    # Asset class detection
+    market_type: str = "CRYPTO_FUTURES"  # CRYPTO_FUTURES, CRYPTO_PERP
+
+    # Leverage settings
+    leverage_enabled: bool = True
+    max_account_leverage: float = 20.0  # Maximum account-wide leverage
+    default_leverage: int = 10  # Default leverage for new positions
+
+    # Margin settings
+    margin_enabled: bool = True
+    margin_warning_threshold: float = 2.0  # 200% margin ratio
+    margin_danger_threshold: float = 1.5   # 150% margin ratio
+    margin_critical_threshold: float = 1.2  # 120% margin ratio
+    margin_liquidation_threshold: float = 1.05  # 105% margin ratio
+
+    # Funding rate exposure
+    funding_enabled: bool = True
+    max_funding_exposure_pct: float = 0.1  # 10% of equity
+    funding_rate_warning_threshold: float = 0.001  # 0.1% per interval
+
+    # Concentration limits
+    concentration_enabled: bool = True
+    max_single_symbol_pct: float = 0.25  # 25% max in single symbol
+    max_correlated_group_pct: float = 0.40  # 40% in correlated assets
+
+    # ADL risk
+    adl_enabled: bool = True
+    adl_warning_percentile: float = 70.0  # Warn if above 70th percentile
+    adl_critical_percentile: float = 90.0  # Critical if above 90th percentile
+
+    # Notification settings
+    notification_enabled: bool = True
+    notification_cooldown_sec: float = 300.0  # 5 minutes between notifications
+    escalation_enabled: bool = True
+
+    # General settings
+    simulation_mode: bool = False  # Warn but don't block
+    strict_mode: bool = True  # Block vs warn
+
+    @classmethod
+    def from_mapping(cls, data: Mapping[str, Any]) -> "CryptoFuturesRiskConfig":
+        """Create config from mapping."""
+        return cls(
+            market_type=str(data.get("market_type", "CRYPTO_FUTURES")),
+            leverage_enabled=bool(data.get("leverage_enabled", True)),
+            max_account_leverage=float(data.get("max_account_leverage", 20.0)),
+            default_leverage=int(data.get("default_leverage", 10)),
+            margin_enabled=bool(data.get("margin_enabled", True)),
+            margin_warning_threshold=float(data.get("margin_warning_threshold", 2.0)),
+            margin_danger_threshold=float(data.get("margin_danger_threshold", 1.5)),
+            margin_critical_threshold=float(data.get("margin_critical_threshold", 1.2)),
+            margin_liquidation_threshold=float(data.get("margin_liquidation_threshold", 1.05)),
+            funding_enabled=bool(data.get("funding_enabled", True)),
+            max_funding_exposure_pct=float(data.get("max_funding_exposure_pct", 0.1)),
+            concentration_enabled=bool(data.get("concentration_enabled", True)),
+            max_single_symbol_pct=float(data.get("max_single_symbol_pct", 0.25)),
+            max_correlated_group_pct=float(data.get("max_correlated_group_pct", 0.40)),
+            adl_enabled=bool(data.get("adl_enabled", True)),
+            notification_enabled=bool(data.get("notification_enabled", True)),
+            notification_cooldown_sec=float(data.get("notification_cooldown_sec", 300.0)),
+            simulation_mode=bool(data.get("simulation_mode", False)),
+            strict_mode=bool(data.get("strict_mode", True)),
+        )
+
+    @property
+    def is_futures_trading(self) -> bool:
+        """Check if this is futures trading."""
+        return self.market_type.upper() in ("CRYPTO_FUTURES", "CRYPTO_PERP", "FUTURES")
+
+
+class CryptoFuturesRiskGuard:
+    """
+    Crypto futures risk management guard for Binance USDT-M Perpetuals.
+
+    Integrates:
+    1. Leverage Guard - Tiered bracket leverage limits
+    2. Margin Guard - Margin ratio monitoring with levels
+    3. Margin Call Notifier - Escalation and notification
+    4. Funding Exposure Guard - Funding rate risk management
+    5. Concentration Guard - Position concentration limits
+    6. ADL Risk Guard - Auto-deleveraging risk monitoring
+
+    BACKWARD COMPATIBLE: For spot trading, all checks are skipped
+    automatically based on market_type configuration.
+
+    Usage:
+        # For futures trading
+        futures_guard = CryptoFuturesRiskGuard(
+            CryptoFuturesRiskConfig(market_type="CRYPTO_FUTURES")
+        )
+
+        # Pre-trade check
+        event = futures_guard.check_trade(
+            symbol="BTCUSDT",
+            side="LONG",
+            quantity=0.1,
+            leverage=20,
+            mark_price=50000.0,
+        )
+
+        if event != RiskEvent.NONE:
+            reject_trade(event)
+
+        # Get comprehensive risk summary
+        summary = futures_guard.get_risk_summary()
+
+    For spot trading:
+        # All checks automatically disabled
+        spot_guard = CryptoFuturesRiskGuard(
+            CryptoFuturesRiskConfig(market_type="CRYPTO_SPOT")
+        )
+        event = spot_guard.check_trade(...)  # Always returns NONE
+
+    Reference:
+        - Binance Futures Risk Management: https://www.binance.com/en/support/faq/360033162192
+        - Margin and Leverage: https://www.binance.com/en/support/faq/360033162192
+        - ADL System: https://www.binance.com/en/support/faq/360033525271
+    """
+
+    def __init__(
+        self,
+        config: Optional[CryptoFuturesRiskConfig] = None,
+    ) -> None:
+        """
+        Initialize CryptoFuturesRiskGuard.
+
+        Args:
+            config: Crypto futures risk configuration
+        """
+        self._config = config or CryptoFuturesRiskConfig()
+        self._last_event: RiskEvent = RiskEvent.NONE
+        self._last_event_reason: str = ""
+
+        # Lazy initialization of sub-guards
+        self._leverage_guard = None
+        self._margin_guard = None
+        self._margin_notifier = None
+        self._funding_guard = None
+        self._concentration_guard = None
+        self._adl_guard = None
+        self._unified_guard = None
+
+        # Only initialize if this is futures trading
+        if self._config.is_futures_trading:
+            self._initialize_guards()
+
+        logger.debug(
+            f"CryptoFuturesRiskGuard initialized: market_type={self._config.market_type}, "
+            f"is_futures={self._config.is_futures_trading}"
+        )
+
+    def _initialize_guards(self) -> None:
+        """Initialize sub-guards for futures trading."""
+        try:
+            from services.futures_risk_guards import (
+                FuturesLeverageGuard,
+                FuturesMarginGuard,
+                MarginCallNotifier,
+                FundingExposureGuard,
+                ConcentrationGuard,
+                ADLRiskGuard,
+                FuturesRiskGuard as UnifiedFuturesGuard,
+                LeverageConfig,
+                MarginGuardConfig,
+                NotifierConfig,
+                FundingGuardConfig,
+                ConcentrationConfig,
+                ADLConfig,
+            )
+
+            # Leverage Guard
+            if self._config.leverage_enabled:
+                # If concentration is disabled, use 1.0 (100%) as limit to effectively disable it
+                concentration_limit = (
+                    self._config.max_single_symbol_pct
+                    if self._config.concentration_enabled
+                    else 1.0
+                )
+                correlated_limit = (
+                    self._config.max_correlated_group_pct
+                    if self._config.concentration_enabled
+                    else 1.0
+                )
+                self._leverage_guard = FuturesLeverageGuard(
+                    max_account_leverage=int(self._config.max_account_leverage),
+                    max_symbol_leverage=125,  # Default max symbol leverage
+                    concentration_limit=concentration_limit,
+                    correlated_limit=correlated_limit,
+                )
+
+            # Margin Guard
+            if self._config.margin_enabled:
+                self._margin_guard = FuturesMarginGuard(
+                    margin_calculator=None,  # Will be set when margin_calculator is available
+                    warning_level=Decimal(str(self._config.margin_warning_threshold)),
+                    danger_level=Decimal(str(self._config.margin_danger_threshold)),
+                    critical_level=Decimal(str(self._config.margin_critical_threshold)),
+                )
+
+            # Margin Call Notifier
+            if self._config.notification_enabled:
+                self._margin_notifier = MarginCallNotifier(
+                    cooldown_seconds=self._config.notification_cooldown_sec,
+                )
+
+            # Funding Exposure Guard
+            if self._config.funding_enabled:
+                self._funding_guard = FundingExposureGuard(
+                    warning_threshold=Decimal(str(self._config.funding_rate_warning_threshold)),
+                )
+
+            # Concentration Guard
+            if self._config.concentration_enabled:
+                self._concentration_guard = ConcentrationGuard(
+                    single_symbol_limit=self._config.max_single_symbol_pct,
+                    correlated_group_limit=self._config.max_correlated_group_pct,
+                )
+
+            # ADL Risk Guard
+            if self._config.adl_enabled:
+                self._adl_guard = ADLRiskGuard(
+                    warning_percentile=self._config.adl_warning_percentile,
+                    critical_percentile=self._config.adl_critical_percentile,
+                )
+
+            logger.info("CryptoFuturesRiskGuard: All sub-guards initialized")
+
+        except ImportError as e:
+            logger.warning(f"CryptoFuturesRiskGuard: Could not import sub-guards: {e}")
+
+    # =========================
+    # Properties
+    # =========================
+
+    @property
+    def config(self) -> CryptoFuturesRiskConfig:
+        """Get current configuration."""
+        return self._config
+
+    @property
+    def last_event(self) -> RiskEvent:
+        """Get last risk event."""
+        return self._last_event
+
+    @property
+    def last_event_reason(self) -> str:
+        """Get reason for last risk event."""
+        return self._last_event_reason
+
+    @property
+    def leverage_guard(self):
+        """Access leverage guard directly."""
+        return self._leverage_guard
+
+    @property
+    def margin_guard(self):
+        """Access margin guard directly."""
+        return self._margin_guard
+
+    @property
+    def funding_guard(self):
+        """Access funding guard directly."""
+        return self._funding_guard
+
+    @property
+    def concentration_guard(self):
+        """Access concentration guard directly."""
+        return self._concentration_guard
+
+    @property
+    def adl_guard(self):
+        """Access ADL guard directly."""
+        return self._adl_guard
+
+    # =========================
+    # Pre-Trade Checks
+    # =========================
+
+    def check_trade(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        leverage: int,
+        mark_price: float,
+        entry_price: Optional[float] = None,
+        position_notional: Optional[float] = None,
+        account_equity: Optional[float] = None,
+        total_margin_used: Optional[float] = None,
+        funding_rate: Optional[float] = None,
+        positions: Optional[List[Dict[str, Any]]] = None,
+        timestamp_ms: Optional[int] = None,
+    ) -> RiskEvent:
+        """
+        Check if a futures trade is allowed under risk rules.
+
+        Args:
+            symbol: Trading symbol (e.g., "BTCUSDT")
+            side: "LONG" or "SHORT"
+            quantity: Trade quantity in base currency
+            leverage: Position leverage
+            mark_price: Current mark price
+            entry_price: Entry price (default: mark_price)
+            position_notional: Total position notional (default: calculated)
+            account_equity: Account equity (default: None)
+            total_margin_used: Total margin used (default: None)
+            funding_rate: Current funding rate (default: None)
+            positions: List of current positions (default: None)
+            timestamp_ms: Current timestamp
+
+        Returns:
+            RiskEvent indicating any violation (NONE if OK)
+        """
+        # Skip all checks for non-futures trading
+        if not self._config.is_futures_trading:
+            self._last_event = RiskEvent.NONE
+            self._last_event_reason = "Not futures trading - checks skipped"
+            return RiskEvent.NONE
+
+        if timestamp_ms is None:
+            timestamp_ms = now_ms()
+
+        side = side.upper()
+        symbol = symbol.upper()
+
+        if entry_price is None:
+            entry_price = mark_price
+
+        if position_notional is None:
+            position_notional = quantity * mark_price
+
+        # 1. Leverage Check
+        if self._leverage_guard is not None:
+            # Create a position-like object for validation
+            from types import SimpleNamespace
+            proposed_position = SimpleNamespace(
+                symbol=symbol,
+                qty=Decimal(str(quantity)),
+                entry_price=Decimal(str(entry_price)),
+                leverage=leverage,
+            )
+            current_pos_list = positions if positions else []
+            result = self._leverage_guard.validate_new_position(
+                proposed_position=proposed_position,
+                current_positions=current_pos_list,
+                account_balance=Decimal(str(account_equity)) if account_equity else Decimal("0"),
+            )
+            if not result.is_valid:
+                self._last_event = RiskEvent.LEVERAGE_VIOLATION
+                self._last_event_reason = result.error_message or "Leverage violation"
+                eb.log_risk({
+                    "ts": timestamp_ms,
+                    "type": "LEVERAGE_VIOLATION",
+                    "symbol": symbol,
+                    "requested_leverage": leverage,
+                    "max_leverage": result.max_allowed_leverage,
+                    "reason": result.error_message,
+                })
+                if self._config.strict_mode and not self._config.simulation_mode:
+                    return RiskEvent.LEVERAGE_VIOLATION
+
+        # 2. Margin Check
+        if self._margin_guard is not None and account_equity is not None:
+            required_margin = position_notional / leverage if leverage > 0 else position_notional
+            margin_used = (total_margin_used or 0) + required_margin
+            margin_ratio = account_equity / margin_used if margin_used > 0 else float('inf')
+
+            result = self._margin_guard.check_margin_ratio(
+                margin_ratio=margin_ratio,
+                account_equity=account_equity,
+                total_margin_used=margin_used,
+                symbol=symbol,
+            )
+
+            # Map margin level to risk event
+            if result.requires_liquidation:
+                self._last_event = RiskEvent.FUTURES_MARGIN_LIQUIDATION
+                self._last_event_reason = f"Margin ratio {margin_ratio:.2%} at liquidation level"
+                eb.log_risk({
+                    "ts": timestamp_ms,
+                    "type": "FUTURES_MARGIN_LIQUIDATION",
+                    "symbol": symbol,
+                    "margin_ratio": margin_ratio,
+                    "level": result.level.value,
+                })
+                if self._config.strict_mode and not self._config.simulation_mode:
+                    return RiskEvent.FUTURES_MARGIN_LIQUIDATION
+
+            elif result.requires_reduction:
+                self._last_event = RiskEvent.FUTURES_MARGIN_DANGER
+                self._last_event_reason = f"Margin ratio {margin_ratio:.2%} requires position reduction"
+                eb.log_risk({
+                    "ts": timestamp_ms,
+                    "type": "FUTURES_MARGIN_DANGER",
+                    "symbol": symbol,
+                    "margin_ratio": margin_ratio,
+                    "level": result.level.value,
+                })
+                if self._config.strict_mode and not self._config.simulation_mode:
+                    return RiskEvent.FUTURES_MARGIN_DANGER
+
+            elif result.level.value in ("warning", "danger"):
+                self._last_event = RiskEvent.FUTURES_MARGIN_WARNING
+                self._last_event_reason = f"Margin ratio {margin_ratio:.2%} below warning threshold"
+                eb.log_risk({
+                    "ts": timestamp_ms,
+                    "type": "FUTURES_MARGIN_WARNING",
+                    "symbol": symbol,
+                    "margin_ratio": margin_ratio,
+                    "level": result.level.value,
+                })
+                # Don't block on warning, just log
+
+        # 3. Funding Exposure Check
+        if self._funding_guard is not None and funding_rate is not None and account_equity is not None:
+            result = self._funding_guard.check_funding_exposure(
+                funding_rate=funding_rate,
+                position_notional=position_notional,
+                account_equity=account_equity,
+                side=side,
+            )
+            if not result.is_acceptable:
+                self._last_event = RiskEvent.FUNDING_EXPOSURE
+                self._last_event_reason = f"Funding exposure {result.exposure_pct:.2%} exceeds limit"
+                eb.log_risk({
+                    "ts": timestamp_ms,
+                    "type": "FUNDING_EXPOSURE",
+                    "symbol": symbol,
+                    "funding_rate": funding_rate,
+                    "exposure_pct": result.exposure_pct,
+                    "level": result.level.value,
+                })
+                if self._config.strict_mode and not self._config.simulation_mode:
+                    return RiskEvent.FUNDING_EXPOSURE
+
+        # 4. Concentration Check
+        if self._concentration_guard is not None and positions is not None and account_equity is not None:
+            result = self._concentration_guard.check_concentration(
+                symbol=symbol,
+                position_notional=position_notional,
+                all_positions=positions,
+                account_equity=account_equity,
+            )
+            if not result.is_within_limits:
+                self._last_event = RiskEvent.CONCENTRATION_LIMIT
+                self._last_event_reason = f"Position concentration {result.symbol_concentration:.2%} exceeds limit"
+                eb.log_risk({
+                    "ts": timestamp_ms,
+                    "type": "CONCENTRATION_LIMIT",
+                    "symbol": symbol,
+                    "symbol_concentration": result.symbol_concentration,
+                    "group_concentration": result.group_concentration,
+                })
+                if self._config.strict_mode and not self._config.simulation_mode:
+                    return RiskEvent.CONCENTRATION_LIMIT
+
+        self._last_event = RiskEvent.NONE
+        self._last_event_reason = "All futures risk checks passed"
+        return RiskEvent.NONE
+
+    def check_adl_risk(
+        self,
+        pnl_percentile: float,
+        leverage_percentile: float,
+        timestamp_ms: Optional[int] = None,
+    ) -> RiskEvent:
+        """
+        Check ADL (Auto-Deleveraging) risk.
+
+        Args:
+            pnl_percentile: PnL percentile (0-100)
+            leverage_percentile: Leverage percentile (0-100)
+            timestamp_ms: Current timestamp
+
+        Returns:
+            RiskEvent indicating ADL risk level
+        """
+        if not self._config.is_futures_trading:
+            return RiskEvent.NONE
+
+        if self._adl_guard is None:
+            return RiskEvent.NONE
+
+        if timestamp_ms is None:
+            timestamp_ms = now_ms()
+
+        result = self._adl_guard.check_adl_risk(
+            pnl_percentile=pnl_percentile,
+            leverage_percentile=leverage_percentile,
+        )
+
+        if result.level.value in ("critical", "high"):
+            self._last_event = RiskEvent.ADL_RISK
+            self._last_event_reason = f"ADL risk {result.level.value}: score={result.adl_score:.2f}"
+            eb.log_risk({
+                "ts": timestamp_ms,
+                "type": "ADL_RISK",
+                "adl_score": result.adl_score,
+                "pnl_percentile": pnl_percentile,
+                "leverage_percentile": leverage_percentile,
+                "level": result.level.value,
+            })
+            return RiskEvent.ADL_RISK
+
+        return RiskEvent.NONE
+
+    # =========================
+    # Risk Summary
+    # =========================
+
+    def get_risk_summary(
+        self,
+        positions: Optional[List[Dict[str, Any]]] = None,
+        account_equity: Optional[float] = None,
+        total_margin_used: Optional[float] = None,
+        funding_rates: Optional[Dict[str, float]] = None,
+        timestamp_ms: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Get comprehensive risk summary.
+
+        Args:
+            positions: List of current positions
+            account_equity: Account equity
+            total_margin_used: Total margin used
+            funding_rates: Dict of symbol -> funding rate
+            timestamp_ms: Current timestamp
+
+        Returns:
+            Dict with risk summary information
+        """
+        if not self._config.is_futures_trading:
+            return {"enabled": False, "market_type": self._config.market_type}
+
+        if self._unified_guard is not None:
+            return self._unified_guard.get_risk_summary(
+                positions=positions,
+                account_equity=account_equity,
+                total_margin_used=total_margin_used,
+                funding_rates=funding_rates,
+                timestamp_ms=timestamp_ms,
+            ).to_dict()
+
+        return {
+            "enabled": True,
+            "market_type": self._config.market_type,
+            "leverage_guard": self._leverage_guard is not None,
+            "margin_guard": self._margin_guard is not None,
+            "funding_guard": self._funding_guard is not None,
+            "concentration_guard": self._concentration_guard is not None,
+            "adl_guard": self._adl_guard is not None,
+        }
+
+    def snapshot(self) -> Dict[str, Any]:
+        """Get status snapshot."""
+        return {
+            "market_type": self._config.market_type,
+            "is_futures_trading": self._config.is_futures_trading,
+            "last_event": self._last_event.name,
+            "last_event_reason": self._last_event_reason,
+            "leverage_enabled": self._leverage_guard is not None,
+            "margin_enabled": self._margin_guard is not None,
+            "funding_enabled": self._funding_guard is not None,
+            "concentration_enabled": self._concentration_guard is not None,
+            "adl_enabled": self._adl_guard is not None,
+            "notification_enabled": self._margin_notifier is not None,
+        }
+
+    # =========================
+    # Reset
+    # =========================
+
+    def reset(self) -> None:
+        """Reset all futures risk guards state."""
+        self._last_event = RiskEvent.NONE
+        self._last_event_reason = ""
+
+        if self._margin_notifier is not None:
+            self._margin_notifier.reset_cooldowns()
+
+        logger.debug("CryptoFuturesRiskGuard: State reset")
+
+
+# =========================
+# Crypto Futures Factory Functions
+# =========================
+
+def create_crypto_futures_risk_guard(
+    market_type: str = "CRYPTO_FUTURES",
+    max_account_leverage: float = 20.0,
+    simulation_mode: bool = False,
+    strict_mode: bool = True,
+) -> CryptoFuturesRiskGuard:
+    """
+    Create a CryptoFuturesRiskGuard with common defaults.
+
+    Args:
+        market_type: "CRYPTO_FUTURES", "CRYPTO_PERP", "CRYPTO_SPOT" (disabled)
+        max_account_leverage: Maximum account-wide leverage
+        simulation_mode: If True, warn but don't block
+        strict_mode: If True, enforce limits strictly
+
+    Returns:
+        Configured CryptoFuturesRiskGuard instance
+    """
+    config = CryptoFuturesRiskConfig(
+        market_type=market_type,
+        max_account_leverage=max_account_leverage,
+        simulation_mode=simulation_mode,
+        strict_mode=strict_mode,
+    )
+    return CryptoFuturesRiskGuard(config)
+
+
+def create_full_risk_guard(
+    risk_config: Optional[RiskConfig] = None,
+    stock_config: Optional[StockRiskConfig] = None,
+    futures_config: Optional[CryptoFuturesRiskConfig] = None,
+) -> Tuple[RiskGuard, Optional[StockRiskGuard], Optional[CryptoFuturesRiskGuard]]:
+    """
+    Create all risk guards (core, stock, futures).
+
+    Returns:
+        (RiskGuard, StockRiskGuard, CryptoFuturesRiskGuard) tuple
+        Asset-specific guards are None if market_type doesn't match
+
+    Usage:
+        # For crypto futures
+        risk_guard, _, futures_guard = create_full_risk_guard(
+            futures_config=CryptoFuturesRiskConfig(market_type="CRYPTO_FUTURES")
+        )
+
+        # For stocks
+        risk_guard, stock_guard, _ = create_full_risk_guard(
+            stock_config=StockRiskConfig(market_type="EQUITY")
+        )
+
+        # For crypto spot (core only)
+        risk_guard, _, _ = create_full_risk_guard()
+    """
+    risk_guard = RiskGuard(risk_config)
+
+    stock_guard = None
+    if stock_config is not None and stock_config.is_stock_trading:
+        stock_guard = StockRiskGuard(stock_config)
+
+    futures_guard = None
+    if futures_config is not None and futures_config.is_futures_trading:
+        futures_guard = CryptoFuturesRiskGuard(futures_config)
+
+    return risk_guard, stock_guard, futures_guard
 
