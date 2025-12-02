@@ -6575,6 +6575,7 @@ pytest tests/test_pbt*.py -v           # PBT
 
 | Категория | Файлы |
 |-----------|-------|
+| **Core Unit Tests** | `test_unit_train_model_multi_patch.py` (192 теста), `test_unit_trading_patchnew.py` (114 тестов), `test_unit_custom_policy_patch1.py` (106 тестов) |
 | Twin Critics | `test_twin_critics*.py` (49 тестов) |
 | UPGD | `test_upgd*.py` (119 тестов) |
 | VGS | `test_vgs*.py` (7 тестов) |
