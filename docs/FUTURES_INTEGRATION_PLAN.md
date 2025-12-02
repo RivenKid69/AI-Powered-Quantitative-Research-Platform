@@ -314,9 +314,9 @@ class ExchangeVendor(str, Enum):
 | 4B | CME SPAN/Settlement | 1.5 weeks | Phase 3B | ✅ DONE |
 | 5A | Crypto L2/L3 | 1.5 weeks | Phase 4A | ✅ DONE |
 | 5B | CME L2/L3 | 1.5 weeks | Phase 4B | ✅ DONE |
-| 6A | Crypto Features | 1 week | Phase 5A | ✅ DONE |
-| 6B | CME Features | 1 week | Phase 5B | 📋 Pending |
-| 7 | Risk Management | 1.5 weeks | Phase 6A, 6B | 📋 Pending |
+| 6A | Crypto Futures Risk | 1 week | Phase 5A | ✅ DONE |
+| 6B | CME Futures Risk | 1 week | Phase 5B | ✅ DONE |
+| 7 | Unified Risk Management | 1.5 weeks | Phase 6A, 6B | ✅ DONE |
 | 8 | Training Pipeline | 2 weeks | Phase 7 | 📋 Pending |
 | 9 | Live Trading | 1.5 weeks | Phase 8 | 📋 Pending |
 | 10 | Validation | 2 weeks | Phase 9 | 📋 Pending |
@@ -331,7 +331,10 @@ class ExchangeVendor(str, Enum):
 | 4A | 2025-12-02 | FuturesSlippageProvider | 54 |
 | 4B | 2025-12-02 | SPAN Margin, Circuit Breakers | 258 |
 | 5A | 2025-12-02 | Crypto L3 (Liquidation, ADL, Funding) | 100 |
-| **5B** | **2025-12-02** | **CME L3 (Globex, MWP, Stops, Settlement)** | **42** |
+| 5B | 2025-12-02 | CME L3 (Globex, MWP, Stops, Settlement) | 42 |
+| 6A | 2025-12-02 | Crypto Futures Risk Guards (Leverage, Margin, ADL, Funding, Concentration) | 101 |
+| 6B | 2025-12-02 | CME Risk Guards (SPAN, Position Limits, Circuit Breaker, Settlement, Rollover) | 130 |
+| **7** | **2025-12-02** | **Unified Risk Management (Multi-asset, Auto-delegation, Portfolio-level)** | **116** |
 
 ---
 

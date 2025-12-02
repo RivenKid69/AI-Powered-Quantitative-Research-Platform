@@ -85,6 +85,9 @@
 | **CME settlement risk** | `services/cme_risk_guards.py` | `pytest tests/test_cme_risk_guards.py::TestSettlementRiskGuard` |
 | **CME rollover guard** | `services/cme_risk_guards.py` | `pytest tests/test_cme_risk_guards.py::TestRolloverGuard` |
 | **CME unified risk** | `services/cme_risk_guards.py` | `pytest tests/test_cme_risk_guards.py::TestCMEFuturesRiskGuard` |
+| **Unified futures risk** | `services/unified_futures_risk.py` | `pytest tests/test_unified_futures_risk.py` |
+| **Asset type detection** | `services/unified_futures_risk.py` | `pytest tests/test_unified_futures_risk.py::TestAssetType` |
+| **Portfolio risk mgr** | `services/unified_futures_risk.py` | `pytest tests/test_unified_futures_risk.py::TestPortfolioRiskManager` |
 | **Futures LOB extensions** | `lob/futures_extensions.py` | `pytest tests/test_futures_l3_execution.py` |
 | **Liquidation cascade** | `lob/futures_extensions.py` | `pytest tests/test_futures_l3_execution.py::TestLiquidationCascadeSimulator` |
 | **Insurance fund** | `lob/futures_extensions.py` | `pytest tests/test_futures_l3_execution.py::TestInsuranceFundManager` |
@@ -2167,9 +2170,19 @@ OANDA_PRACTICE=true  # or false for live
 
 ---
 
-## 🔮 Futures Integration (Phase 3B: ✅ IB/CME | Phase 4A: ✅ Crypto L2 | Phase 4B: ✅ CME SPAN | Phase 5A: ✅ Crypto L3)
+## 🔮 Futures Integration (Phase 3B-7: ✅ COMPLETE | Phase 8-10: 📋 Pending)
 
-**Статус**: 🚧 In Progress | **Документация**: `docs/FUTURES_INTEGRATION_PLAN.md`
+**Статус**: ✅ Core Complete | **Документация**: `docs/FUTURES_INTEGRATION_PLAN.md`
+
+**Completed Phases**:
+- Phase 3B: ✅ IB/CME Adapters
+- Phase 4A: ✅ Crypto L2 Execution
+- Phase 4B: ✅ CME SPAN Margin
+- Phase 5A: ✅ Crypto L3 LOB
+- Phase 5B: ✅ CME L3 LOB
+- Phase 6A: ✅ Crypto Risk Guards
+- Phase 6B: ✅ CME Risk Guards
+- Phase 7: ✅ Unified Risk Management
 
 Интеграция всех типов фьючерсов:
 
@@ -4163,6 +4176,295 @@ roll_config = RolloverGuardConfig(
 
 ---
 
+## 🛡️ Phase 7: Unified Futures Risk Management (COMPLETED)
+
+**Статус**: ✅ Production Ready | **Тесты**: 116/116 (100% pass) | **Покрытие**: 98% | **Date**: 2025-12-02
+
+Phase 7 unifies crypto futures and CME futures risk management into a single interface with automatic asset type detection, portfolio-level risk aggregation, and cross-asset correlation handling.
+
+### Компоненты
+
+| Компонент | Файл | Описание |
+|-----------|------|----------|
+| **UnifiedFuturesRiskGuard** | `services/unified_futures_risk.py` | Main unified guard with auto-delegation |
+| **AssetType** | `services/unified_futures_risk.py` | Enum for asset classification |
+| **UnifiedRiskConfig** | `services/unified_futures_risk.py` | Pydantic config combining crypto/CME settings |
+| **UnifiedRiskEvent** | `services/unified_futures_risk.py` | Unified risk events across asset types |
+| **UnifiedMarginResult** | `services/unified_futures_risk.py` | Unified margin check results |
+| **PortfolioRiskManager** | `services/unified_futures_risk.py` | Portfolio-level risk aggregation |
+| **Тесты** | `tests/test_unified_futures_risk.py` | 116 comprehensive tests |
+| **Config** | `configs/unified_futures_risk.yaml` | YAML configuration with profiles |
+
+### Key Concepts
+
+#### 1. Asset Type Detection
+
+Automatic detection from symbol patterns:
+
+| Pattern | Asset Type | Examples |
+|---------|------------|----------|
+| `*USDT`, `*BUSD` | CRYPTO_PERPETUAL | BTCUSDT, ETHBUSD |
+| `*_YYMMDD` | CRYPTO_QUARTERLY | BTCUSDT_240329 |
+| `ES`, `NQ`, `YM`, `RTY` | CME_EQUITY_INDEX | ES, NQ, MES, MNQ |
+| `GC`, `SI`, `HG`, `MGC` | CME_METAL | Gold, Silver, Copper |
+| `CL`, `NG`, `RB`, `HO` | CME_ENERGY | Crude, NatGas |
+| `6E`, `6J`, `6B`, `6A` | CME_CURRENCY | Euro, Yen, Pound |
+| `ZN`, `ZB`, `ZT`, `ZF` | CME_BOND | 10Y, 30Y notes |
+| Other | UNKNOWN | Fallback |
+
+#### 2. Automatic Guard Delegation
+
+```python
+from services.unified_futures_risk import UnifiedFuturesRiskGuard
+
+guard = UnifiedFuturesRiskGuard()
+
+# Crypto symbols → Crypto guards
+event = guard.check_trade("BTCUSDT", "BUY", 0.1, ...)  # Uses crypto guards
+
+# CME symbols → CME guards
+event = guard.check_trade("ES", "BUY", 5, ...)  # Uses CME guards
+```
+
+#### 3. Unified Risk Events
+
+| Event | Description | Crypto | CME |
+|-------|-------------|--------|-----|
+| `MARGIN_WARNING` | Approaching margin limit | ✅ | ✅ |
+| `MARGIN_DANGER` | Low margin ratio | ✅ | ✅ |
+| `MARGIN_CRITICAL` | Critical margin | ✅ | ✅ |
+| `MARGIN_LIQUIDATION` | Liquidation risk | ✅ | ✅ |
+| `LEVERAGE_EXCEEDED` | Over leverage limit | ✅ | - |
+| `CONCENTRATION_EXCEEDED` | Position too large | ✅ | - |
+| `FUNDING_WARNING` | High funding rate | ✅ | - |
+| `FUNDING_EXCESSIVE` | Extreme funding | ✅ | - |
+| `ADL_WARNING` | ADL queue risk | ✅ | - |
+| `ADL_CRITICAL` | High ADL risk | ✅ | - |
+| `CIRCUIT_BREAKER_L1` | -7% decline | - | ✅ |
+| `CIRCUIT_BREAKER_L2` | -13% decline | - | ✅ |
+| `CIRCUIT_BREAKER_L3` | -20% decline | - | ✅ |
+| `VELOCITY_PAUSE` | Rapid price move | - | ✅ |
+| `POSITION_LIMIT_EXCEEDED` | Over spec limit | - | ✅ |
+| `SETTLEMENT_APPROACHING` | Near settlement | - | ✅ |
+| `ROLLOVER_WARNING` | Near expiry | - | ✅ |
+
+### Usage
+
+```python
+from services.unified_futures_risk import (
+    UnifiedFuturesRiskGuard,
+    UnifiedRiskConfig,
+    CryptoRiskConfig,
+    CMERiskConfig,
+    PortfolioRiskConfig,
+    create_unified_risk_guard,
+    load_config_from_yaml,
+)
+from decimal import Decimal
+
+# 1. Create with defaults
+guard = UnifiedFuturesRiskGuard()
+
+# 2. Create from YAML config
+config = load_config_from_yaml("configs/unified_futures_risk.yaml")
+guard = create_unified_risk_guard(config)
+
+# 3. Create with custom config
+config = UnifiedRiskConfig(
+    crypto=CryptoRiskConfig(
+        max_account_leverage=20.0,
+        max_symbol_leverage=125.0,
+        margin_warning_threshold=1.5,
+        margin_danger_threshold=1.2,
+        margin_critical_threshold=1.05,
+        max_single_symbol_pct=0.5,
+    ),
+    cme=CMERiskConfig(
+        margin_warning_ratio=1.5,
+        margin_danger_ratio=1.2,
+        margin_critical_ratio=1.05,
+        enforce_speculative_limits=True,
+        prevent_trades_on_halt=True,
+    ),
+    portfolio=PortfolioRiskConfig(
+        enable_correlation_tracking=True,
+        correlation_lookback_days=30,
+    ),
+)
+guard = UnifiedFuturesRiskGuard(config=config)
+
+# 4. Check trade (auto-delegates based on symbol)
+event = guard.check_trade(
+    symbol="BTCUSDT",
+    side="BUY",
+    quantity=0.5,
+    leverage=10,
+    account_equity=Decimal("50000"),
+    mark_price=Decimal("45000"),
+    funding_rate=Decimal("0.0001"),
+)
+
+if event != UnifiedRiskEvent.NONE:
+    print(f"Risk event: {event.value}")
+    print(f"Details: {guard.get_last_event_details()}")
+
+# 5. Check margin (crypto)
+margin_result = guard.check_margin(
+    symbol="ETHUSDT",
+    account_equity=Decimal("100000"),
+    positions=crypto_positions,
+    mark_prices={"ETHUSDT": Decimal("3000")},
+)
+print(f"Status: {margin_result.status}")
+print(f"Margin Ratio: {margin_result.margin_ratio}")
+
+# 6. Check margin (CME)
+margin_result = guard.check_margin(
+    symbol="ES",
+    account_equity=Decimal("500000"),
+    positions=cme_positions,
+    prices={"ES": Decimal("4500")},
+    contract_specs=es_spec,
+)
+print(f"Status: {margin_result.status}")
+print(f"Available Margin: ${margin_result.available_margin}")
+
+# 7. Get asset type
+asset_type = guard.get_asset_type("BTCUSDT")  # CRYPTO_PERPETUAL
+asset_type = guard.get_asset_type("ES")       # CME_EQUITY_INDEX
+asset_type = guard.get_asset_type("GC")       # CME_METAL
+
+# 8. Portfolio-level risk (cross-asset)
+portfolio_result = guard.check_portfolio_risk(
+    all_positions={"BTCUSDT": pos1, "ES": pos2, "GC": pos3},
+    account_equity=Decimal("1000000"),
+)
+print(f"Total Margin Used: ${portfolio_result.total_margin_used}")
+print(f"Cross-Asset Correlation: {portfolio_result.correlation_warning}")
+```
+
+### Configuration (YAML)
+
+```yaml
+# configs/unified_futures_risk.yaml
+crypto:
+  max_account_leverage: 20.0
+  max_symbol_leverage: 125.0
+  margin_warning_threshold: 1.5
+  margin_danger_threshold: 1.2
+  margin_critical_threshold: 1.05
+  max_single_symbol_pct: 0.5
+  max_correlated_group_pct: 0.7
+  funding_warning_threshold: 0.0001
+  funding_excessive_threshold: 0.0003
+  adl_warning_percentile: 75.0
+  adl_critical_percentile: 90.0
+  strict_mode: true
+
+cme:
+  margin_warning_ratio: 1.5
+  margin_danger_ratio: 1.2
+  margin_critical_ratio: 1.05
+  prevent_trades_on_halt: true
+  pre_cb_warning_pct: -0.05
+  settlement_warn_minutes: 60
+  settlement_critical_minutes: 30
+  rollover_warn_days: 8
+  rollover_critical_days: 3
+  enforce_speculative_limits: true
+  strict_mode: true
+
+portfolio:
+  enable_correlation_tracking: true
+  correlation_lookback_days: 30
+  correlation_spike_threshold: 0.8
+  aggregate_margin_across_types: true
+
+profiles:
+  conservative:
+    crypto:
+      max_account_leverage: 10.0
+      margin_warning_threshold: 2.0
+    cme:
+      margin_warning_ratio: 2.0
+  aggressive:
+    crypto:
+      max_account_leverage: 50.0
+      margin_warning_threshold: 1.2
+    cme:
+      margin_warning_ratio: 1.2
+```
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                  UnifiedFuturesRiskGuard                        │
+│  - Asset type detection                                         │
+│  - Automatic guard delegation                                   │
+│  - Unified event translation                                    │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+          ┌───────────────────┴───────────────────┐
+          ▼                                       ▼
+┌─────────────────────┐               ┌─────────────────────┐
+│  Crypto Guards      │               │  CME Guards         │
+│  ├─ LeverageGuard   │               │  ├─ SPANMarginGuard │
+│  ├─ MarginGuard     │               │  ├─ PositionLimits  │
+│  ├─ ConcentrationG  │               │  ├─ CircuitBreaker  │
+│  ├─ FundingGuard    │               │  ├─ SettlementRisk  │
+│  └─ ADLRiskGuard    │               │  └─ RolloverGuard   │
+└─────────────────────┘               └─────────────────────┘
+          │                                       │
+          └───────────────────┬───────────────────┘
+                              ▼
+                 ┌─────────────────────┐
+                 │  PortfolioRiskMgr   │
+                 │  - Cross-asset      │
+                 │  - Correlation      │
+                 │  - Aggregation      │
+                 └─────────────────────┘
+```
+
+### Тестирование
+
+```bash
+# All Phase 7 tests (116 tests)
+pytest tests/test_unified_futures_risk.py -v
+
+# By category
+pytest tests/test_unified_futures_risk.py::TestAssetType -v
+pytest tests/test_unified_futures_risk.py::TestUnifiedRiskEvent -v
+pytest tests/test_unified_futures_risk.py::TestUnifiedMarginResult -v
+pytest tests/test_unified_futures_risk.py::TestUnifiedRiskConfig -v
+pytest tests/test_unified_futures_risk.py::TestUnifiedFuturesRiskGuard -v
+pytest tests/test_unified_futures_risk.py::TestPortfolioRiskManager -v
+pytest tests/test_unified_futures_risk.py::TestFactoryFunctions -v
+pytest tests/test_unified_futures_risk.py::TestIntegration -v
+
+# Regression tests (Phase 6A + 6B)
+pytest tests/test_futures_risk_guards.py tests/test_cme_risk_guards.py -v  # 231 tests
+```
+
+**Coverage**: 116 Phase 7 tests + 231 regression tests = 347 total tests passing
+
+### Ключевые файлы
+
+| Файл | Описание |
+|------|----------|
+| `services/unified_futures_risk.py` | Unified risk management (~900 lines) |
+| `configs/unified_futures_risk.yaml` | Configuration with profiles |
+| `tests/test_unified_futures_risk.py` | 116 comprehensive tests |
+
+### Референсы
+
+- Phase 6A: Crypto Futures Risk Guards
+- Phase 6B: CME Futures Risk Guards
+- Portfolio theory: Markowitz (1952) mean-variance optimization
+- Risk aggregation: Basel III framework concepts
+
+---
+
 ## 🛡️ Критические правила (НЕ НАРУШАТЬ!)
 
 1. **ActionProto.volume_frac = TARGET position, НЕ DELTA!**
@@ -5961,8 +6263,24 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-12-02
-**Версия документации**: 11.4 (Phase 5B: L3 LOB for CME Futures)
-**Статус**: ✅ Production Ready (563 test files, все критические исправления применены)
+**Версия документации**: 11.5 (Phase 7: Unified Futures Risk Management)
+**Статус**: ✅ Production Ready (563+ test files, все критические исправления применены)
+
+### Изменения в 11.5:
+- **Добавлена полная документация Phase 7 (Unified Futures Risk Management)** — 290+ строк
+  - UnifiedFuturesRiskGuard с automatic asset type detection
+  - Asset type classification (Crypto Perpetual/Quarterly, CME Index/Metal/Energy/Currency/Bond)
+  - Automatic delegation to crypto or CME guards based on symbol
+  - UnifiedRiskEvent для унификации событий риска
+  - UnifiedMarginResult для унифицированных результатов проверки маржи
+  - PortfolioRiskManager для cross-asset correlation handling
+  - Configuration с profiles (conservative, aggressive)
+  - 116 тестов (100% pass rate)
+- Обновлена секция "Futures Integration" — Phase 7 теперь ✅ DONE
+- Добавлены Phase 7 entries в Quick Reference таблицу
+- Добавлены примеры использования UnifiedFuturesRiskGuard, config profiles
+- Обновлён FUTURES_INTEGRATION_PLAN.md с Phase 6A, 6B, 7 completion
+- Добавлены референсы на Phase 6A/6B, portfolio theory
 
 ### Изменения в 11.4:
 - **Добавлена полная документация Phase 5B (L3 LOB for CME Futures)** — 290+ строк
