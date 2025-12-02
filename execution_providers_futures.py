@@ -384,8 +384,25 @@ class FuturesFeeProvider:
             return fill.notional * Decimal(str(self._liquidation_fee_bps)) / Decimal("10000")
 
         # Regular trade: maker or taker
-        bps = self._maker_bps if fill.is_maker else self._taker_bps
-        return fill.notional * Decimal(str(bps)) / Decimal("10000")
+        # Check liquidity field (string "maker" or "taker") or metadata for is_maker
+        is_maker = False
+        if hasattr(fill, 'liquidity') and fill.liquidity == "maker":
+            is_maker = True
+        elif hasattr(fill, 'metadata') and fill.metadata:
+            is_maker = fill.metadata.get('is_maker', False)
+        elif hasattr(fill, 'is_maker'):
+            is_maker = fill.is_maker
+
+        bps = self._maker_bps if is_maker else self._taker_bps
+
+        # Get notional, with fallback to price * qty if notional is None
+        notional = fill.notional
+        if notional is None and hasattr(fill, 'price') and hasattr(fill, 'qty'):
+            notional = fill.price * fill.qty
+        if notional is None:
+            notional = 0
+
+        return float(notional) * float(bps) / 10000.0
 
     def compute_funding_payment(
         self,
