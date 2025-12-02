@@ -252,7 +252,7 @@ from core_errors import BotError  # Для наследования OptionsError
 
 ---
 
-## Phase 1: Core Models & Data Structures (4 weeks)
+## Phase 1: Core Models & Data Structures (5 weeks)
 
 ### 1.1 Objectives
 - Define options contract specifications
@@ -527,6 +527,153 @@ def compute_implied_volatility_american(
     """
 ```
 
+#### 1.2.5 GPU/Vectorization for Batch Greeks (`impl_greeks_vectorized.py`)
+
+**КРИТИЧНО**: Options chains have 100-1000+ contracts. Scalar Greeks calculation is too slow!
+
+**Проблема**: Single-contract BS Greeks takes ~10μs. For 1000 contracts = 10ms per chain.
+For real-time monitoring at 10 updates/sec = 100ms/sec = 10% CPU overhead.
+
+**Решение — Vectorized NumPy + Optional GPU**:
+
+```python
+import numpy as np
+from typing import Optional
+
+try:
+    import cupy as cp
+    HAS_GPU = True
+except ImportError:
+    cp = None
+    HAS_GPU = False
+
+
+class BatchGreeksCalculator:
+    """
+    Vectorized Greeks calculation for options chains.
+
+    Performance targets:
+    - 1000 contracts: < 1ms (NumPy)
+    - 1000 contracts: < 100μs (GPU)
+
+    Reference: Numerical Methods in Finance (Glasserman 2003)
+    """
+
+    def __init__(self, use_gpu: bool = False):
+        self.xp = cp if (use_gpu and HAS_GPU) else np
+
+    def compute_batch_greeks(
+        self,
+        spots: np.ndarray,           # Shape: (N,) or scalar broadcast
+        strikes: np.ndarray,         # Shape: (N,)
+        times: np.ndarray,           # Shape: (N,)
+        vols: np.ndarray,            # Shape: (N,)
+        rates: np.ndarray,           # Shape: (N,) or scalar
+        dividends: np.ndarray,       # Shape: (N,) or scalar
+        is_call: np.ndarray,         # Shape: (N,) boolean
+    ) -> "BatchGreeksResult":
+        """
+        Vectorized BS Greeks for N contracts simultaneously.
+
+        All arrays must be broadcastable to shape (N,).
+
+        Returns BatchGreeksResult with all 12 Greeks as (N,) arrays.
+        """
+        xp = self.xp
+
+        # Move to GPU if available
+        if xp == cp:
+            spots = cp.asarray(spots)
+            strikes = cp.asarray(strikes)
+            # ... etc
+
+        # Vectorized BS calculation
+        sqrt_t = xp.sqrt(times)
+        d1 = (xp.log(spots / strikes) + (rates - dividends + 0.5 * vols**2) * times) / (vols * sqrt_t)
+        d2 = d1 - vols * sqrt_t
+
+        # Standard normal CDF and PDF (vectorized)
+        N_d1 = 0.5 * (1 + xp.erf(d1 / xp.sqrt(2)))
+        N_d2 = 0.5 * (1 + xp.erf(d2 / xp.sqrt(2)))
+        n_d1 = xp.exp(-0.5 * d1**2) / xp.sqrt(2 * xp.pi)
+
+        # First-order Greeks (vectorized)
+        call_mask = is_call.astype(float)
+        delta = xp.where(is_call, N_d1, N_d1 - 1) * xp.exp(-dividends * times)
+        gamma = n_d1 * xp.exp(-dividends * times) / (spots * vols * sqrt_t)
+        vega = spots * n_d1 * sqrt_t * xp.exp(-dividends * times) / 100  # Per 1 vol point
+        theta = self._compute_theta_vectorized(spots, strikes, times, rates, dividends, vols, d1, d2, N_d1, N_d2, n_d1, is_call)
+        rho = self._compute_rho_vectorized(strikes, times, rates, d2, N_d2, is_call)
+
+        # Second-order Greeks (vectorized)
+        vanna = -n_d1 * d2 / vols
+        volga = vega * d1 * d2 / vols
+        charm = self._compute_charm_vectorized(...)
+
+        # Third-order Greeks (vectorized)
+        speed = -gamma * (1 + d1 / (vols * sqrt_t)) / spots
+        color = self._compute_color_vectorized(...)
+        zomma = gamma * (d1 * d2 - 1) / vols
+        ultima = self._compute_ultima_vectorized(...)
+
+        # Move back to CPU if needed
+        if xp == cp:
+            delta = cp.asnumpy(delta)
+            gamma = cp.asnumpy(gamma)
+            # ... etc
+
+        return BatchGreeksResult(
+            delta=delta, gamma=gamma, theta=theta, vega=vega, rho=rho,
+            vanna=vanna, volga=volga, charm=charm,
+            speed=speed, color=color, zomma=zomma, ultima=ultima,
+        )
+
+
+@dataclass
+class BatchGreeksResult:
+    """Greeks for batch of N contracts."""
+    delta: np.ndarray   # (N,)
+    gamma: np.ndarray   # (N,)
+    theta: np.ndarray   # (N,)
+    vega: np.ndarray    # (N,)
+    rho: np.ndarray     # (N,)
+    vanna: np.ndarray   # (N,)
+    volga: np.ndarray   # (N,)
+    charm: np.ndarray   # (N,)
+    speed: np.ndarray   # (N,)
+    color: np.ndarray   # (N,)
+    zomma: np.ndarray   # (N,)
+    ultima: np.ndarray  # (N,)
+
+    def to_dataframe(self) -> pd.DataFrame:
+        """Convert to DataFrame for analysis."""
+        return pd.DataFrame({name: getattr(self, name) for name in self.__dataclass_fields__})
+```
+
+**Benchmark Targets**:
+
+| Contracts | NumPy (CPU) | CuPy (GPU) | Speedup |
+|-----------|-------------|------------|---------|
+| 100 | 200 μs | 50 μs | 4× |
+| 1,000 | 1 ms | 100 μs | 10× |
+| 10,000 | 10 ms | 500 μs | 20× |
+
+**JAX Alternative** (for advanced users):
+
+```python
+import jax.numpy as jnp
+from jax import jit, vmap
+
+@jit
+def bs_greeks_single(spot, strike, time, vol, rate, div, is_call):
+    """JIT-compiled single contract Greeks."""
+    # ... BS formulas
+    return delta, gamma, theta, vega, rho
+
+# Vectorize over contracts
+bs_greeks_batch = vmap(bs_greeks_single, in_axes=(0, 0, 0, 0, 0, 0, 0))
+```
+
 ### 1.3 Test Matrix (Phase 1)
 
 | Test Category | Tests | Coverage |
@@ -539,14 +686,19 @@ def compute_implied_volatility_american(
 | Variance Swap | 10 | Replication, strike calculation |
 | IV solver (European) | 20 | N-R, Brent, hybrid, deep OTM |
 | IV solver (American) | 15 | Tree inversion, dividends |
-| **Total** | **160** | **100%** |
+| **Batch Greeks (vectorized)** | **25** | **NumPy batch, GPU batch, accuracy vs scalar** |
+| **Longstaff-Schwartz MC** | **15** | **Early exercise boundary, continuation value** |
+| **Total** | **200** | **100%** |
 
 ### 1.4 Deliverables
 - [ ] `core_options.py` — Contract specs, enums (integrates with AssetClass.OPTIONS)
 - [ ] `impl_greeks.py` — All 12 Greeks with numerical validation
+- [ ] `impl_greeks_vectorized.py` — Batch Greeks with NumPy/CuPy/JAX support
 - [ ] `impl_pricing.py` — BS-Merton, Leisen-Reimer, Merton JD, Variance Swap
 - [ ] `impl_iv_calculation.py` — Hybrid IV solver (European + American)
-- [ ] `tests/test_options_core.py` — 160 tests
+- [ ] `impl_exercise_probability.py` — Longstaff-Schwartz Monte Carlo for early exercise
+- [ ] `tests/test_options_core.py` — 200 tests
+- [ ] `benchmarks/bench_options_greeks.py` — Vectorization performance benchmarks
 - [ ] Documentation: `docs/options/core_models.md`
 
 ### 1.5 Regression Check
@@ -557,13 +709,35 @@ pytest tests/test_options_core.py -v               # All new tests pass
 
 ---
 
-## Phase 2: Exchange Adapters (5 weeks)
+## Phase 2: US Exchange Adapters (5 weeks)
+
+### 2.0 CRITICAL: IB Options ≠ IB Futures
+
+**ВАЖНО**: Existing IB futures adapter (`adapters/ib/order_execution.py`) uses:
+```python
+from ib_insync import Future, ContFuture  # FUTURES ONLY!
+```
+
+**Options require DIFFERENT imports**:
+```python
+from ib_insync import Option, FuturesOption, Index  # OPTIONS
+# Also need: OptionChain, OptionComputation for Greeks
+```
+
+**This is NOT a simple extension** — requires substantial new code:
+- Different contract creation (`Option()` vs `Future()`)
+- Different quote structure (Greeks included in quote)
+- Combo orders for spreads (IB ComboLeg)
+- Different margin calculation (What-If margin)
+- Exercise/assignment handling
+
+**Timeline impact**: +2 weeks compared to naive estimate
 
 ### 2.1 Objectives
-- Extend existing IB TWS adapter for US options
+- Create NEW IB options adapter (NOT just extend futures adapter)
 - Add Theta Data as primary options data source (cost-effective)
-- Deribit crypto options
 - Polygon.io for historical options data
+- **Note**: Deribit moved to Phase 2B (separate complexity)
 
 ### 2.2 Critical Notes on Data Sources
 
@@ -841,27 +1015,244 @@ class AlpacaOptionsExecutionAdapter(OrderExecutionAdapter):
 | Test Category | Tests | Coverage |
 |---------------|-------|----------|
 | **Alpaca Options (existing)** | **25** | **Extensions to existing adapter** |
-| IB Options Extension | 40 | Chain fetch, quotes, orders, combos |
+| IB Options Extension | 50 | Chain fetch, quotes, orders, combos, Greeks |
+| IB What-If Margin | 15 | Pre-trade margin calculation |
+| IB Combo Orders | 20 | Multi-leg spreads, execution |
 | IB Rate Limiting | 10 | Throttling, backoff |
 | Theta Data Adapter | 30 | Chains, historical, EOD |
-| Deribit Adapter | 30 | BTC/ETH, orderbook, streaming |
 | Polygon Options | 20 | Historical chains, quotes |
 | Registry Integration | 10 | Factory functions |
 | **Total** | **165** | **100%** |
 
+**Note**: Deribit moved to Phase 2B (separate complexity due to inverse margining)
+
 ### 2.6 Deliverables
 - [ ] `adapters/alpaca/options_execution.py` — **РАСШИРИТЬ существующий** (streaming, historical)
-- [ ] `adapters/ib/options.py` — IB options extension
+- [ ] `adapters/ib/options.py` — NEW IB options adapter (not simple extension!)
+- [ ] `adapters/ib/options_combo.py` — IB combo/spread order support
 - [ ] `adapters/theta_data/options.py` — Theta Data adapter
-- [ ] `adapters/deribit/options.py` — Crypto options
 - [ ] `adapters/polygon/options.py` — Historical options
 - [ ] Registry updates in `adapters/registry.py`
-- [ ] `tests/test_options_adapters.py` — 140 tests
+- [ ] `tests/test_options_adapters.py` — 165 tests
 - [ ] Documentation: `docs/options/exchange_adapters.md`
 
 ---
 
-## Phase 3: IV Surface & Volatility Models (5 weeks)
+## Phase 2B: Deribit Crypto Options (4 weeks — NEW)
+
+### 2B.1 CRITICAL: Deribit ≠ US Options
+
+**Deribit has fundamentally different mechanics**:
+
+| Aspect | US Listed Options | Deribit Crypto Options |
+|--------|-------------------|------------------------|
+| **Settlement** | Cash (USD) | Crypto-settled (BTC/ETH) |
+| **Margining** | USD-based | **Inverse margining** (BTC/ETH collateral) |
+| **Exercise** | American or European | European only |
+| **Trading Hours** | Market hours | 24/7 |
+| **Expiration** | 3rd Friday pattern | Daily, Weekly, Monthly, Quarterly |
+| **IV Reference** | VIX | **DVOL** (Deribit Volatility Index) |
+| **Quote Convention** | USD/contract | BTC/ETH per contract |
+
+**Inverse Margining** is the key complexity:
+- P&L is in crypto, not USD
+- Margin is in crypto collateral
+- As crypto price drops, margin requirement IN USD increases!
+- Convexity risk from inverse settlement
+
+### 2B.2 Components
+
+#### 2B.2.1 Deribit Adapter (`adapters/deribit/options.py`)
+
+```python
+class DeribitOptionsAdapter:
+    """
+    Deribit BTC/ETH options adapter.
+
+    Key differences from US options:
+    1. Inverse settlement: P&L in BTC/ETH, not USD
+    2. DVOL index for implied vol reference
+    3. 24/7 trading with specific expiration times (08:00 UTC)
+    4. Different strike conventions (Bitcoin in $1000 increments)
+
+    References:
+    - Deribit Options Specification: https://www.deribit.com/main#/options
+    - DVOL Methodology: https://www.deribit.com/main#/dvol
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        api_secret: str,
+        testnet: bool = False,  # paper trading
+    ):
+        self.base_url = "https://test.deribit.com/api/v2" if testnet else "https://www.deribit.com/api/v2"
+
+    def get_btc_options(
+        self,
+        expiration: Optional[date] = None,
+    ) -> List[DeribitOptionContract]:
+        """
+        BTC options (European, inverse-settled).
+
+        Strike granularity: $1,000 for BTC, $50 for ETH
+        """
+
+    def get_eth_options(
+        self,
+        expiration: Optional[date] = None,
+    ) -> List[DeribitOptionContract]:
+        """ETH options (European, inverse-settled)."""
+
+    def get_orderbook(
+        self,
+        instrument: str,
+        depth: int = 20,
+    ) -> DeribitOptionsOrderBook:
+        """L2 order book with BTC/ETH denominated prices."""
+
+    def get_dvol(self, underlying: str = "BTC") -> DVOLData:
+        """
+        Get DVOL (Deribit Volatility Index).
+
+        DVOL = 30-day constant maturity IV (similar to VIX methodology)
+        """
+
+    async def stream_quotes_async(
+        self,
+        instruments: List[str],
+    ) -> AsyncIterator[DeribitOptionsQuote]:
+        """Real-time quote stream via WebSocket."""
+
+    def get_greeks(
+        self,
+        instrument: str,
+    ) -> DeribitGreeks:
+        """
+        Greeks from Deribit (exchange-calculated).
+
+        Note: Deribit Greeks are in crypto terms, not USD!
+        """
+
+
+@dataclass
+class DeribitOptionContract:
+    instrument_name: str           # "BTC-31MAR25-100000-C"
+    underlying: str               # "BTC" or "ETH"
+    option_type: OptionType       # CALL, PUT
+    strike: Decimal               # In USD
+    expiration: datetime          # Includes time (08:00 UTC)
+    settlement_currency: str      # "BTC" or "ETH"
+    min_trade_amount: Decimal     # 0.1 BTC
+    tick_size: Decimal            # 0.0001 BTC
+
+
+@dataclass
+class DeribitGreeks:
+    """Deribit Greeks in crypto terms."""
+    delta: float      # Per 1 contract
+    gamma: float      # Per 1 BTC/USD move
+    theta: float      # Per day, in crypto
+    vega: float       # Per 1% IV move, in crypto
+    rho: float
+    # Inverse adjustment factor
+    inverse_adjustment: float  # For USD conversion
+
+
+@dataclass
+class DVOLData:
+    value: float      # Current DVOL (annualized IV)
+    timestamp: datetime
+    underlying: str   # "BTC" or "ETH"
+```
+
+#### 2B.2.2 Inverse Margining Calculator (`impl_deribit_margin.py`)
+
+```python
+class DeribitMarginCalculator:
+    """
+    Deribit inverse margining calculator.
+
+    Inverse contracts: P&L = (1/entry - 1/exit) × contracts
+    Unlike linear: P&L = (exit - entry) × contracts
+
+    Key insight: As price drops, BOTH:
+    - Position P&L decreases (negative)
+    - Margin requirement in USD increases (inverse effect)
+
+    This creates "double-whammy" risk in downtrends.
+
+    Reference: Deribit Risk Parameters (2024)
+    """
+
+    def calculate_margin(
+        self,
+        position: DeribitOptionsPosition,
+        mark_price: Decimal,
+        underlying_price: Decimal,
+    ) -> DeribitMarginResult:
+        """
+        Calculate margin in crypto and USD.
+
+        Formula (simplified):
+        - Long option: Premium paid (no additional margin)
+        - Short option: max(premium, 0.15×underlying) + mark_price
+
+        Actual uses Deribit's risk parameters with
+        stress scenarios at ±10%, ±20%, ±30%.
+        """
+
+    def calculate_inverse_pnl(
+        self,
+        entry_price: Decimal,
+        current_price: Decimal,
+        contracts: Decimal,
+        underlying_entry: Decimal,
+        underlying_current: Decimal,
+    ) -> InversePnLResult:
+        """
+        Calculate P&L for inverse-settled options.
+
+        P&L_crypto = option_pnl / underlying_current
+        P&L_usd = option_pnl (in USD terms at current price)
+
+        The inverse effect means P&L in USD is different
+        from P&L in crypto × current_price!
+        """
+
+
+@dataclass
+class DeribitMarginResult:
+    initial_margin_btc: Decimal
+    maintenance_margin_btc: Decimal
+    initial_margin_usd: Decimal     # At current BTC price
+    maintenance_margin_usd: Decimal
+    inverse_risk_factor: float      # Convexity adjustment
+```
+
+### 2B.3 Test Matrix (Phase 2B)
+
+| Test Category | Tests | Coverage |
+|---------------|-------|----------|
+| DeribitOptionsAdapter | 30 | BTC/ETH chains, orderbook |
+| DVOL integration | 10 | DVOL fetch, comparison to VIX |
+| Inverse margining | 25 | Margin calc, stress scenarios |
+| Inverse P&L | 15 | P&L calculation, convexity |
+| WebSocket streaming | 20 | Real-time quotes, reconnection |
+| Paper trading | 10 | Testnet integration |
+| Registry integration | 10 | Factory functions |
+| **Total** | **120** | **100%** |
+
+### 2B.4 Deliverables
+- [ ] `adapters/deribit/options.py` — Deribit options adapter
+- [ ] `adapters/deribit/margin.py` — Inverse margining calculator
+- [ ] `adapters/deribit/websocket.py` — WebSocket streaming
+- [ ] `tests/test_deribit_options.py` — 120 tests
+- [ ] Documentation: `docs/options/deribit_crypto.md`
+
+---
+
+## Phase 3: IV Surface & Volatility Models (6 weeks)
 
 ### 3.1 Objectives
 - Construct arbitrage-free IV surface using SSVI
@@ -1065,7 +1456,144 @@ def dupire_local_vol(
     """
 ```
 
-#### 3.2.5 Calibration Service (`service_iv_calibration.py`)
+#### 3.2.5 Lee (2004) Wing Extrapolation (`impl_wing_extrapolation.py`)
+
+**CRITICAL**: SSVI/SVI only valid near ATM. Far OTM strikes need Roger Lee moment formula!
+
+Reference: Lee (2004) "The Moment Formula for Implied Volatility at Extreme Strikes"
+
+```python
+class LeeWingExtrapolation:
+    """
+    Roger Lee (2004) moment formula for IV surface wings.
+
+    Problem: SSVI/SVI fitted to liquid ATM strikes diverges for deep OTM.
+    Solution: Asymptotic behavior from moment explosion theory.
+
+    For extreme strikes (|k| → ∞):
+        σ²(k) × T → 2|k| as |k| → ∞
+
+    More precisely:
+        lim sup_{k→+∞} σ²(k)T / k = 2 - 4(√(p² + p) - p)
+        lim sup_{k→-∞} σ²(k)T / |k| = 2 - 4(√(q² + q) - q)
+
+    where p, q are maximum moments: E[S^(1+p)] < ∞, E[S^(-q)] < ∞
+
+    For equity (finite moments): typically p ≈ 2, q ≈ 1
+    → Right wing slope ≈ 0.15, Left wing slope ≈ 0.5
+    """
+
+    def __init__(
+        self,
+        right_moment_p: float = 2.0,  # E[S^(1+p)] < ∞
+        left_moment_q: float = 1.0,   # E[S^(-q)] < ∞
+        transition_strike_right: float = 0.3,  # 30% OTM calls
+        transition_strike_left: float = -0.4,  # 40% OTM puts
+    ):
+        self.right_slope = 2 - 4 * (np.sqrt(right_moment_p**2 + right_moment_p) - right_moment_p)
+        self.left_slope = 2 - 4 * (np.sqrt(left_moment_q**2 + left_moment_q) - left_moment_q)
+
+    def extrapolate(
+        self,
+        ssvi_surface: IVSurface,
+        log_moneyness: float,
+        expiry: float,
+    ) -> float:
+        """
+        Extrapolate IV to wings using Lee formula.
+
+        For k > k_right: σ²T = σ²T(k_right) + slope_right × (k - k_right)
+        For k < k_left:  σ²T = σ²T(k_left) + slope_left × (k_left - k)
+
+        Smooth transition using hyperbolic tangent blending.
+        """
+```
+
+#### 3.2.6 Bates/SVJ Model (`impl_bates.py`)
+
+**IMPORTANT**: Heston misses jump risk! Bates (1996) = Heston + Merton jumps.
+
+Reference: Bates (1996) "Jumps and Stochastic Volatility"
+
+Why Bates for equity options:
+- Heston explains skew but NOT smile curvature at wings
+- Jumps capture crash risk (fat left tail)
+- Essential for short-dated options where jump risk dominates
+
+```
+Model (Bates 1996):
+dS/S = (r - λμ_J) dt + √V dW₁ + J dN
+dV = κ(θ - V) dt + ξ√V dW₂
+
+where:
+- J = jump size ~ N(μ_J, σ_J²) — log-normal jump
+- N = Poisson process with intensity λ
+- μ_J = mean jump size (typically -0.05 to -0.15 for crash risk)
+- σ_J = jump size volatility (typically 0.1-0.2)
+- λ = jump frequency (typically 1-5 per year)
+```
+
+```python
+@dataclass
+class BatesParams(HestonParams):
+    """
+    Bates (1996) SVJ model = Heston + Merton jumps.
+    Inherits: kappa, theta, xi, rho, v0 from Heston
+    """
+    lambda_jump: float    # Jump intensity (events/year)
+    mu_jump: float        # Mean log jump size (negative for crash)
+    sigma_jump: float     # Jump size std dev
+
+    def get_jump_compensator(self) -> float:
+        """Drift adjustment for risk-neutral jump: μ_J = E[e^J - 1]"""
+        return self.lambda_jump * (np.exp(self.mu_jump + 0.5 * self.sigma_jump**2) - 1)
+
+
+class BatesPricer:
+    """
+    Bates (1996) SVJ pricing via characteristic function.
+
+    Key insight: CF(Bates) = CF(Heston) × CF(Merton jump)
+
+    Can use same FFT/COS method as Heston with modified CF.
+    """
+
+    def price(
+        self,
+        spot: float,
+        strike: float,
+        expiry: float,
+        rate: float,
+        params: BatesParams,
+        option_type: OptionType,
+        method: str = "cos",  # "cos" (fast) or "fft" (standard)
+    ) -> float:
+        """
+        Bates pricing via COS method (Fang & Oosterlee 2008).
+
+        COS method faster than FFT for single strikes.
+        Use FFT for full chain pricing.
+        """
+
+    def implied_vol_from_bates(
+        self, price: float, spot: float, strike: float,
+        expiry: float, rate: float, option_type: OptionType,
+    ) -> float:
+        """Invert Bates price to Black-Scholes IV."""
+
+
+class BatesCalibrator:
+    """
+    Calibrate Bates to surface.
+
+    Strategy:
+    1. First calibrate Heston to ATM slice (fast, 5 params)
+    2. Then calibrate jump params (λ, μ_J, σ_J) to wings
+    3. Joint refinement with full surface
+    """
+```
+
+#### 3.2.7 Calibration Service (`service_iv_calibration.py`)
 
 ```python
 class IVCalibrationService:
@@ -1124,18 +1652,23 @@ class IVCalibrationService:
 | SSVI fitting | 35 | Gatheral-Jacquier conditions, calibration |
 | Heston pricing | 25 | Characteristic function, Greeks |
 | Heston calibration | 20 | DE, LM, parameter recovery |
+| **Bates/SVJ pricing** | **20** | **CF inversion, jump component, Greeks** |
+| **Bates calibration** | **15** | **Two-stage calibration, parameter recovery** |
 | Dupire local vol | 20 | Regularization, stability |
+| **Lee wing extrapolation** | **15** | **Moment formula, transition blending** |
 | Arbitrage detection | 20 | Butterfly, calendar, PCP |
 | Forward vol | 10 | Term structure |
-| **Total** | **155** | **100%** |
+| **Total** | **205** | **100%** |
 
 ### 3.4 Deliverables
 - [ ] `impl_iv_surface.py` — IV surface with SSVI
 - [ ] `impl_ssvi.py` — SSVI model with Gatheral-Jacquier conditions
 - [ ] `impl_heston.py` — Heston model (NOT SABR for equity!)
+- [ ] `impl_bates.py` — Bates/SVJ model (Heston + Merton jumps)
+- [ ] `impl_wing_extrapolation.py` — Lee (2004) moment formula
 - [ ] `impl_local_vol.py` — Dupire with Tikhonov regularization
 - [ ] `service_iv_calibration.py` — Production calibration service
-- [ ] `tests/test_iv_surface.py` — 155 tests
+- [ ] `tests/test_iv_surface.py` — 205 tests
 - [ ] Documentation: `docs/options/volatility_surface.md`
 
 ---
@@ -1318,6 +1851,169 @@ def create_options_execution_provider(
     """
 ```
 
+#### 4.2.4 Options Execution Algorithms (`execution_algos_options.py`)
+
+**CRITICAL**: Options execution requires specialized algorithms!
+
+Reference: Almgren (2012) "Optimal Execution with Nonlinear Impact Functions and Trading-Enhanced Risk"
+
+**Why different from equity**:
+- Options have Greeks exposure that changes during execution
+- Delta-neutral execution requires simultaneous underlying hedge
+- Gamma risk is path-dependent
+- Large orders move implied volatility (IV impact)
+
+```python
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import List, Optional
+from execution_algos import BaseExecutionAlgo  # Reuse base from equity
+
+
+@dataclass
+class OptionsExecutionResult:
+    """Result of options execution algorithm."""
+    fills: List[OptionsFill]
+    underlying_fills: List[Fill]  # Delta hedge fills
+    avg_price: float
+    total_qty: int
+    realized_slippage_bps: float
+    iv_impact_bps: float
+    delta_hedge_slippage_bps: float
+    gamma_cost: float  # Path-dependent gamma bleed
+
+
+class DeltaNeutralTWAP:
+    """
+    Delta-neutral TWAP for options.
+
+    Executes option position in slices while maintaining delta-neutral
+    by simultaneously hedging with underlying.
+
+    Algorithm:
+    1. Split target qty into N child orders
+    2. For each child:
+       a. Calculate required delta hedge
+       b. Execute option leg
+       c. Execute underlying hedge leg (immediately)
+       d. Track cumulative gamma exposure
+
+    Reference: Cartea et al. (2015) "Algorithmic Trading and Market Microstructure"
+    """
+
+    def __init__(
+        self,
+        target_slices: int = 10,
+        hedge_threshold_delta: float = 0.1,  # Rehedge when net delta > 0.1
+        max_iv_impact_bps: float = 50.0,     # Stop if IV moves > 50bps
+    ):
+        pass
+
+    def execute(
+        self,
+        order: OptionsOrder,
+        market: OptionsMarketState,
+        underlying_market: MarketState,
+        greeks: GreeksResult,
+    ) -> OptionsExecutionResult:
+        """Execute with delta-neutral maintenance."""
+
+
+class GammaAwarePOV:
+    """
+    Participation-of-Volume with gamma adjustment.
+
+    Key insight: Gamma exposure increases execution urgency near expiry.
+    Standard POV may be too slow for short-dated options.
+
+    Execution speed = base_pov × (1 + gamma_urgency_factor)
+
+    where gamma_urgency = |gamma| × S² × (1/DTE) × vol
+
+    For high gamma (near ATM, short DTE): execute faster
+    For low gamma (deep OTM/ITM): can be patient
+    """
+
+    def __init__(
+        self,
+        base_pov: float = 0.10,           # 10% of volume baseline
+        gamma_urgency_mult: float = 2.0,   # Max 2x faster for high gamma
+        min_pov: float = 0.05,             # Min 5% participation
+        max_pov: float = 0.30,             # Max 30% participation
+    ):
+        pass
+
+
+class SpreadExecutionAlgo:
+    """
+    Multi-leg spread execution algorithm.
+
+    Challenge: Legging risk — if one leg fills and other doesn't,
+    creates unwanted directional exposure.
+
+    Strategies:
+    1. Native spread order (if exchange supports)
+    2. Legging with immediate hedge
+    3. Working both legs simultaneously
+
+    Reference: Duffie (2010) "Dynamic Asset Pricing Theory"
+    """
+
+    def __init__(
+        self,
+        strategy: str = "native",  # "native", "legging_hedged", "simultaneous"
+        max_leg_imbalance: int = 5,  # Max contracts imbalance
+        emergency_hedge_threshold: float = 0.5,  # Hedge if 50% of one leg filled
+    ):
+        pass
+
+    def execute_spread(
+        self,
+        spread_order: SpreadOrder,
+        leg1_market: OptionsMarketState,
+        leg2_market: OptionsMarketState,
+    ) -> SpreadExecutionResult:
+        """
+        Execute multi-leg spread.
+
+        Returns combined result with legging risk metrics.
+        """
+
+
+class IVImpactModel:
+    """
+    Implied volatility impact from options trading.
+
+    Key insight: Large options orders move IV, not just price!
+    This is different from equity market impact.
+
+    Model (empirical):
+    ΔIV = λ × sign(order) × (order_vega / total_vega) × √participation
+
+    where:
+    - order_vega = |vega| × qty
+    - total_vega = sum of vega across all strikes
+    - participation = order_vega / ADV_vega
+
+    Reference: Garleanu et al. (2009) "Demand-Based Option Pricing"
+    """
+
+    def __init__(
+        self,
+        lambda_iv_impact: float = 0.05,  # IV moves ~0.05 vol point per 1% vega participation
+        decay_half_life_minutes: float = 30.0,  # Impact decays over 30 min
+    ):
+        pass
+
+    def estimate_iv_impact(
+        self,
+        order: OptionsOrder,
+        market: OptionsMarketState,
+        chain_total_vega: float,
+    ) -> float:
+        """Estimate IV impact in volatility points."""
+```
+
 ### 4.3 Test Matrix (Phase 4)
 
 | Test Category | Tests | Coverage |
@@ -1329,14 +2025,20 @@ def create_options_execution_provider(
 | Fee Calculation | 25 | All exchanges, index premium |
 | L2 Execution | 35 | Market/limit, fills |
 | Cost Estimation | 15 | Pre-trade analysis |
+| **Delta-Neutral TWAP** | **20** | **Hedge execution, gamma tracking** |
+| **Gamma-Aware POV** | **15** | **Urgency adjustment, expiry behavior** |
+| **Spread Execution** | **20** | **Legging risk, native spreads, hedging** |
+| **IV Impact Model** | **15** | **Vega participation, decay** |
 | Factory Integration | 10 | create_options_execution_provider |
-| **Total** | **150** | **100%** |
+| **Total** | **220** | **100%** |
 
 ### 4.4 Deliverables
 - [ ] `impl_options_slippage.py` — Moneyness/DTE/Greeks-aware slippage
 - [ ] `impl_options_fees.py` — Fee structures (all exchanges)
 - [ ] `execution_providers_options.py` — L2 provider (integrates with AssetClass.OPTIONS)
-- [ ] `tests/test_options_execution_l2.py` — 150 tests
+- [ ] `execution_algos_options.py` — Delta-neutral TWAP, Gamma-aware POV, Spread execution
+- [ ] `impl_iv_impact.py` — IV impact model for large orders
+- [ ] `tests/test_options_execution_l2.py` — 220 tests
 - [ ] Documentation: `docs/options/execution_l2.md`
 
 ---
@@ -1364,6 +2066,124 @@ def create_options_execution_provider(
 | Expiration | N/A | Liquidity collapse |
 
 **IMPORTANT**: Do NOT simply extend `lob/matching_engine.py`. Create `lob/options_matching.py` with options-specific logic, but reuse primitives from `lob/data_structures.py`.
+
+### 5.2.1 Multi-Series LOB Architecture
+
+**CRITICAL**: Options chains require coordinated multi-book management!
+
+For SPY options: ~40 strikes × 12 expiries = **480 individual order books**!
+Each book must be synchronized and cross-referenced.
+
+```python
+class MultiSeriesLOBManager:
+    """
+    Manages N×M order books for full options chain.
+
+    Architecture:
+    - ChainLOB: Container for all books in a chain
+    - SeriesLOB: Individual strike/expiry book
+    - CrossSeriesArbitrage: Real-time arbitrage detection
+    - SynchronizedQuoteUpdate: Atomic updates across series
+
+    Memory optimization:
+    - Lazy loading for illiquid series
+    - Compressed representation for deep OTM
+    - Shared price level structure for same-expiry books
+
+    Reference: Chicago Trading Company (2019) internal docs
+    """
+
+    def __init__(
+        self,
+        underlying: str,
+        strikes: List[float],
+        expiries: List[date],
+        lazy_load_threshold: float = 0.3,  # Load books with OI > 30% of max
+    ):
+        # Total books = len(strikes) × len(expiries) × 2 (put/call)
+        self._book_count = len(strikes) * len(expiries) * 2
+        self._books: Dict[SeriesKey, SeriesLOB] = {}
+        self._loaded_books: Set[SeriesKey] = set()
+
+    def get_or_create_book(
+        self, strike: float, expiry: date, option_type: OptionType
+    ) -> SeriesLOB:
+        """Lazy-load series book on demand."""
+
+    def update_chain_quotes(
+        self,
+        underlying_move: float,
+        iv_surface: IVSurface,
+        greeks_cache: Dict[SeriesKey, GreeksResult],
+    ) -> None:
+        """
+        Atomic quote update across entire chain.
+
+        When underlying moves:
+        1. Recalculate all deltas/gammas
+        2. Shift all quotes based on delta
+        3. Adjust spreads based on gamma exposure
+        4. Check for cross-series arbitrage
+        """
+
+    def detect_cross_series_arbitrage(self) -> List[ArbitrageOpportunity]:
+        """
+        Check for arbitrage across entire chain:
+        - Butterfly violations
+        - Calendar spread violations
+        - Put-call parity violations
+        """
+
+
+@dataclass
+class SeriesKey:
+    """Unique identifier for options series."""
+    strike: float
+    expiry: date
+    option_type: OptionType
+
+    def __hash__(self) -> int:
+        return hash((self.strike, self.expiry, self.option_type))
+
+
+class SeriesLOB:
+    """
+    Individual order book for one options series.
+
+    Lighter weight than equity LOB:
+    - Max depth: 5-10 levels (vs 50+ for equity)
+    - Quote persistence: seconds (vs milliseconds)
+    - Update frequency: on underlying move (vs tick-by-tick)
+    """
+
+    def __init__(
+        self,
+        key: SeriesKey,
+        tick_size: Decimal = Decimal("0.01"),
+        max_depth: int = 10,
+    ):
+        pass
+
+
+class CrossExpiryCoordinator:
+    """
+    Coordinate quote updates across expiries.
+
+    Key insight: When IV surface shifts, ALL expiries move.
+    Must update consistently to avoid calendar arbitrage.
+    """
+
+    def update_term_structure(
+        self,
+        iv_surface: IVSurface,
+        atm_forward_curve: List[float],
+    ) -> Dict[date, float]:
+        """
+        Update IV term structure consistently.
+
+        Ensures: σ(T1) < σ(T2) for T1 < T2 (no calendar arbitrage)
+        """
+```
 
 ### 5.3 Components
 
@@ -1602,31 +2422,40 @@ class OptionsArbitrageDetector:
 
 | Test Category | Tests | Coverage |
 |---------------|-------|----------|
+| **MultiSeriesLOBManager** | **30** | **Lazy loading, memory optimization, 480+ books** |
+| **SeriesLOB** | **20** | **Individual book, depth limits** |
+| **CrossExpiryCoordinator** | **15** | **Term structure consistency, calendar arbitrage** |
 | OptionsMatchingEngine | 35 | FIFO, pro-rata, book shift |
 | MM Simulator (regimes) | 40 | All 5 regimes, transitions |
 | MM Simulator (quoting) | 30 | Spread formula, size, requote |
 | Pin Risk | 25 | Probability, dynamics |
 | Arbitrage Detection | 25 | Butterfly, box, calendar |
-| Integration | 25 | Full L3 simulation |
-| **Total** | **180** | **100%** |
+| Integration | 30 | Full L3 simulation, stress tests |
+| **Total** | **250** | **100%** |
 
 ### 5.5 Deliverables
+- [ ] `lob/multi_series_lob.py` — Multi-series LOB manager (480+ books)
+- [ ] `lob/series_lob.py` — Individual series order book
+- [ ] `lob/cross_expiry_coordinator.py` — Cross-expiry consistency
 - [ ] `lob/options_matching.py` — Options matching engine
 - [ ] `lob/options_mm.py` — Cho & Engle MM simulator
 - [ ] `lob/pin_risk.py` — Avellaneda-Lipkin pin simulation
 - [ ] `lob/options_arbitrage.py` — Real-time arbitrage detection
-- [ ] `tests/test_options_l3_lob.py` — 180 tests
+- [ ] `tests/test_options_l3_lob.py` — 250 tests
 - [ ] Documentation: `docs/options/l3_lob.md`
 
 ---
 
-## Phase 6: Risk Management (5 weeks)
+## Phase 6: Risk Management (7 weeks)
+
+**Duration increased**: OCC STANS Monte Carlo is complex, requires proper implementation
 
 ### 6.1 Objectives
 - Options-specific risk guards (following `services/futures_risk_guards.py` pattern)
-- OCC Clearing Margin (NOT TIMS — TIMS is outdated!)
+- **OCC STANS (System for Theoretical Analysis and Numerical Simulations)** — Monte Carlo VaR
 - Reg T margin with correct formulas
 - Exercise/assignment simulation with gamma convexity
+- Portfolio stress testing with extreme scenarios
 
 ### 6.2 Components
 
@@ -1737,40 +2566,233 @@ class AssignmentRiskGuard:
         """
 ```
 
-#### 6.2.2 OCC Clearing Margin (`impl_occ_margin.py`)
+#### 6.2.2 OCC STANS Margin Calculator (`impl_occ_stans.py`)
 
-**CRITICAL**: Use OCC Clearing Margin methodology, NOT TIMS!
+**CRITICAL**: Use OCC STANS methodology, NOT TIMS!
 TIMS (Theoretical Intermarket Margin System) was replaced by OCC's STANS in 2006.
 
-Reference: OCC "Margin Methodology" (current as of 2024)
+Reference: OCC "Margin Methodology" (current as of 2024), "STANS Technical Specifications"
+
+**STANS = System for Theoretical Analysis and Numerical Simulations**
+
+Key points:
+- **Monte Carlo VaR**, NOT parametric VaR!
+- 10,000+ scenarios per risk class
+- 2-day 99% Expected Shortfall (ES), not VaR
+- Full repricing (not delta/gamma approximation)
+- Correlation model with regime detection
 
 ```python
-class OCCMarginCalculator:
-    """
-    OCC Clearing Margin calculation.
+@dataclass
+class STANSScenarioConfig:
+    """Configuration for OCC STANS scenario generation."""
+    n_scenarios: int = 10000           # OCC uses ~10,000
+    confidence_level: float = 0.99     # 99% ES
+    horizon_days: int = 2              # 2-day liquidation period
+    spot_range_pct: float = 0.15       # ±15% spot moves
+    vol_range_pct: float = 0.40        # ±40% IV moves
+    rate_range_bps: float = 50         # ±50 bps rate moves
+    use_historical_scenarios: bool = True  # Include historical worst days
+    stress_scenarios: List[str] = field(default_factory=lambda: [
+        "black_monday_1987",
+        "flash_crash_2010",
+        "covid_march_2020",
+        "volmageddon_2018",
+    ])
 
-    Based on STANS (System for Theoretical Analysis and Numerical Simulations):
-    - Monte Carlo VaR-based
-    - 2-day 99% Expected Shortfall
-    - Correlation offsets for hedged positions
 
-    For retail (Reg T), uses simpler rules below.
+class STANSScenarioGenerator:
     """
+    OCC STANS scenario generator.
+
+    Reference: OCC (2024) "STANS Technical Specifications"
+
+    Three types of scenarios:
+    1. Monte Carlo: Multivariate normal with fat tails
+    2. Historical: Actual worst days from history
+    3. Stress: Hypothetical extreme events
+    """
+
+    def __init__(self, config: STANSScenarioConfig):
+        self.config = config
+        self._rng = np.random.default_rng(42)
+
+    def generate_scenarios(
+        self,
+        underlyings: List[str],
+        correlation_matrix: np.ndarray,
+    ) -> np.ndarray:
+        """
+        Generate 10,000+ scenarios.
+
+        Returns: Array of shape (n_scenarios, n_underlyings, 3)
+                 where 3 = [spot_return, vol_change, rate_change]
+        """
+        # 1. Monte Carlo scenarios (multivariate t-distribution for fat tails)
+        mc_scenarios = self._generate_monte_carlo(
+            len(underlyings), correlation_matrix
+        )
+
+        # 2. Historical scenarios (actual worst days)
+        hist_scenarios = self._load_historical_scenarios(underlyings)
+
+        # 3. Stress scenarios (hypothetical extremes)
+        stress_scenarios = self._generate_stress_scenarios(underlyings)
+
+        return np.concatenate([mc_scenarios, hist_scenarios, stress_scenarios])
+
+    def _generate_monte_carlo(
+        self,
+        n_assets: int,
+        correlation_matrix: np.ndarray,
+    ) -> np.ndarray:
+        """
+        Generate correlated MC scenarios with fat tails.
+
+        Uses multivariate Student-t with df=5 for fat tails.
+        """
+
+
+class STANSPortfolioPricer:
+    """
+    Full repricing for STANS scenarios.
+
+    IMPORTANT: Use full option pricing, NOT delta/gamma approximation!
+    OCC requires full repricing for accurate tail risk.
+    """
+
+    def __init__(self, pricing_model: str = "bates"):
+        self.pricer = BatesPricer() if pricing_model == "bates" else HestonPricer()
+
+    def price_portfolio_scenario(
+        self,
+        positions: List[OptionsPosition],
+        scenario: np.ndarray,  # [spot_return, vol_change, rate_change]
+        base_prices: Dict[str, float],
+        base_ivs: Dict[str, IVSurface],
+    ) -> float:
+        """
+        Full portfolio repricing under scenario.
+
+        Returns: Portfolio P&L under this scenario
+        """
+
+
+class OCCSTANSMarginCalculator:
+    """
+    OCC STANS Margin calculation.
+
+    Full implementation of OCC's Monte Carlo margin methodology.
+
+    Key components:
+    1. Scenario generation (10,000+ scenarios)
+    2. Full portfolio repricing per scenario
+    3. 2-day 99% Expected Shortfall calculation
+    4. Cross-asset correlation credits
+    5. Concentration add-ons for large positions
+
+    Reference: OCC "Margin Methodology" (2024)
+    """
+
+    def __init__(
+        self,
+        scenario_config: STANSScenarioConfig = None,
+        pricer: STANSPortfolioPricer = None,
+    ):
+        self.scenario_config = scenario_config or STANSScenarioConfig()
+        self.pricer = pricer or STANSPortfolioPricer()
+        self.scenario_generator = STANSScenarioGenerator(self.scenario_config)
 
     def calculate_portfolio_margin(
         self,
         positions: List[OptionsPosition],
         underlying_prices: Dict[str, float],
-        correlations: Optional[np.ndarray] = None,
-    ) -> PortfolioMarginResult:
+        iv_surfaces: Dict[str, IVSurface],
+        correlations: np.ndarray,
+    ) -> STANSMarginResult:
         """
-        OCC STANS methodology:
+        OCC STANS margin calculation.
 
-        1. Generate 10,000 scenarios (±15% spot, ±40% vol, etc.)
-        2. Compute portfolio P&L for each scenario
-        3. Margin = 2-day 99% Expected Shortfall
-        4. Apply correlation credits for hedged positions
+        Algorithm:
+        1. Generate 10,000+ scenarios
+        2. Full reprice portfolio for each scenario
+        3. Compute P&L distribution
+        4. Margin = 2-day 99% Expected Shortfall
+        5. Apply correlation credits
+        6. Add concentration charge if applicable
         """
+        # Step 1: Generate scenarios
+        underlyings = list(set(p.underlying for p in positions))
+        scenarios = self.scenario_generator.generate_scenarios(
+            underlyings, correlations
+        )
+
+        # Step 2: Full repricing
+        pnls = np.zeros(len(scenarios))
+        for i, scenario in enumerate(scenarios):
+            pnls[i] = self.pricer.price_portfolio_scenario(
+                positions, scenario, underlying_prices, iv_surfaces
+            )
+
+        # Step 3: 99% Expected Shortfall (2-day)
+        es_99 = self._compute_expected_shortfall(pnls, 0.99)
+
+        # Step 4: Correlation credit for hedged positions
+        gross_margin = sum(self._single_position_margin(p) for p in positions)
+        correlation_credit = gross_margin - es_99
+
+        # Step 5: Concentration add-on
+        concentration_charge = self._compute_concentration_charge(positions)
+
+        return STANSMarginResult(
+            base_margin=es_99,
+            correlation_credit=correlation_credit,
+            concentration_charge=concentration_charge,
+            total_margin=es_99 + concentration_charge,
+            scenario_count=len(scenarios),
+            worst_scenario_pnl=pnls.min(),
+            var_99=np.percentile(pnls, 1),
+            es_99=es_99,
+        )
+
+    def _compute_expected_shortfall(
+        self, pnls: np.ndarray, confidence: float
+    ) -> float:
+        """
+        Expected Shortfall (CVaR) at given confidence.
+
+        ES_α = E[Loss | Loss > VaR_α]
+
+        For 99%: Average of worst 1% of scenarios.
+        """
+        var_threshold = np.percentile(pnls, (1 - confidence) * 100)
+        tail_losses = pnls[pnls <= var_threshold]
+        return -tail_losses.mean() if len(tail_losses) > 0 else -var_threshold
+
+    def _compute_concentration_charge(
+        self, positions: List[OptionsPosition]
+    ) -> float:
+        """
+        Concentration add-on for large positions.
+
+        OCC charges additional margin for:
+        - Positions > 1% of open interest
+        - Single underlying > 25% of portfolio risk
+        """
+
+
+@dataclass
+class STANSMarginResult:
+    """Result of STANS margin calculation."""
+    base_margin: float
+    correlation_credit: float
+    concentration_charge: float
+    total_margin: float
+    scenario_count: int
+    worst_scenario_pnl: float
+    var_99: float
+    es_99: float
+```
 
 
 class RegTMarginCalculator:
@@ -1904,16 +2926,20 @@ class ExerciseAssignmentEngine:
 | Exercise Risk | 25 | American, dividends, gamma convexity |
 | Assignment Risk | 20 | Short calls/puts, probability |
 | Reg T Margin | 35 | All position types, spreads |
-| OCC Portfolio Margin | 35 | STANS, correlations |
+| STANS Scenario Generation | 25 | 10K scenarios, stress, correlation |
+| STANS Full Repricing | 30 | BS/Bates, all strikes/expiries |
+| STANS Expected Shortfall | 20 | 99% ES, 2-day horizon |
+| STANS Concentration Charge | 15 | Position limits, offsets |
 | Exercise/Assignment Engine | 30 | Decision logic, simulation |
 | Pattern Compliance | 10 | futures_risk_guards pattern |
-| **Total** | **185** | **100%** |
+| **Total** | **240** | **100%** |
 
 ### 6.4 Deliverables
 - [ ] `services/options_risk_guards.py` — All risk guards (following futures pattern)
-- [ ] `impl_occ_margin.py` — OCC STANS + Reg T
+- [ ] `impl_occ_stans.py` — Full STANS Monte Carlo (10K scenarios, full repricing)
+- [ ] `impl_occ_margin.py` — OCC margin wrapper + Reg T fallback
 - [ ] `impl_exercise_assignment.py` — Broadie-Detemple exercise engine
-- [ ] `tests/test_options_risk.py` — 185 tests
+- [ ] `tests/test_options_risk.py` — 240 tests
 - [ ] Documentation: `docs/options/risk_management.md`
 
 ---
@@ -2285,6 +3311,181 @@ class MultiLegExecutor:
         """
 ```
 
+#### 7.2.1b Legging Risk Management (`impl_legging_risk.py`)
+
+**КРИТИЧНО**: Options spreads require careful legging risk management — partial fills create
+naked exposure that can result in significant losses if market moves adversely.
+
+Reference: Sinclair (2008) "Volatility Trading", Chapter 8
+
+```python
+@dataclass
+class LeggingState:
+    """Current state of multi-leg execution."""
+    order_id: str
+    total_legs: int
+    filled_legs: List[FilledLeg]
+    pending_legs: List[ComboLeg]
+    current_exposure: GreeksResult     # Net Greeks of filled portion
+    time_elapsed_sec: float
+    underlying_move_since_start: float
+    iv_move_since_start: float
+
+
+@dataclass
+class LeggingRiskLimits:
+    """Limits for partial fill exposure."""
+    max_delta_exposure: float = 50.0        # Abs delta per 100 shares
+    max_gamma_exposure: float = 10.0        # Abs gamma per 100 shares
+    max_vega_exposure: float = 500.0        # Abs vega per 100 shares
+    max_time_to_complete_sec: float = 60.0  # Max time for full execution
+    max_underlying_move_bps: float = 50.0   # Cancel if underlying moves too much
+    max_iv_move_bps: float = 100.0          # Cancel if IV moves too much
+
+
+class LeggingRiskManager:
+    """
+    Manages risk during multi-leg spread execution.
+
+    Key insight (Sinclair 2008): The risk of legging is NOT just
+    the potential loss on partial fill — it's the convexity of
+    that loss. A vertical spread has limited risk when complete,
+    but unlimited risk when half-legged.
+
+    Emergency actions:
+    1. Hedge: Add underlying to neutralize delta
+    2. Unwind: Close filled leg at market
+    3. Complete: Fill remaining leg at market (may slip)
+    """
+
+    def __init__(
+        self,
+        limits: LeggingRiskLimits,
+        emergency_hedge_instrument: str = "underlying",  # "underlying" or "futures"
+        unwind_threshold_pct: float = 0.50,  # Unwind if 50% of max profit lost
+    ):
+        self.limits = limits
+        self.emergency_hedge_instrument = emergency_hedge_instrument
+        self.unwind_threshold_pct = unwind_threshold_pct
+
+    def assess_legging_risk(
+        self,
+        state: LeggingState,
+        current_market: OptionsMarketState,
+    ) -> LeggingRiskAssessment:
+        """
+        Assess current legging risk and recommend action.
+
+        Returns:
+        - risk_level: LOW, MEDIUM, HIGH, CRITICAL
+        - recommended_action: CONTINUE, HEDGE, UNWIND, COMPLETE_AT_MARKET
+        - estimated_loss_if_adverse: Worst-case loss estimate
+        """
+        # Check delta exposure
+        delta_breach = abs(state.current_exposure.delta) > self.limits.max_delta_exposure
+
+        # Check time limit
+        time_breach = state.time_elapsed_sec > self.limits.max_time_to_complete_sec
+
+        # Check underlying move
+        underlying_breach = abs(state.underlying_move_since_start) > self.limits.max_underlying_move_bps / 10000
+
+        # Check IV move
+        iv_breach = abs(state.iv_move_since_start) > self.limits.max_iv_move_bps / 10000
+
+        # Determine action
+        if delta_breach and underlying_breach:
+            return LeggingRiskAssessment(
+                risk_level="CRITICAL",
+                recommended_action="UNWIND",
+                estimated_loss=self._estimate_unwind_cost(state, current_market),
+            )
+        elif time_breach or iv_breach:
+            return LeggingRiskAssessment(
+                risk_level="HIGH",
+                recommended_action="COMPLETE_AT_MARKET",
+                estimated_loss=self._estimate_completion_slippage(state, current_market),
+            )
+        elif delta_breach:
+            return LeggingRiskAssessment(
+                risk_level="MEDIUM",
+                recommended_action="HEDGE",
+                estimated_loss=self._estimate_hedge_cost(state, current_market),
+            )
+        else:
+            return LeggingRiskAssessment(
+                risk_level="LOW",
+                recommended_action="CONTINUE",
+                estimated_loss=0.0,
+            )
+
+    def create_emergency_hedge(
+        self,
+        state: LeggingState,
+        market: OptionsMarketState,
+    ) -> Optional[Order]:
+        """
+        Create hedge order to neutralize delta exposure.
+
+        For partial vertical spread (1 leg filled):
+        - If long call filled, sell underlying
+        - If short put filled, buy underlying
+        """
+        delta_to_hedge = -state.current_exposure.delta
+        if abs(delta_to_hedge) < 0.01:
+            return None
+
+        if self.emergency_hedge_instrument == "underlying":
+            return Order(
+                symbol=market.underlying_symbol,
+                side="BUY" if delta_to_hedge > 0 else "SELL",
+                qty=round(abs(delta_to_hedge) * 100),  # Convert delta to shares
+                order_type="MARKET",
+                urgency="IMMEDIATE",
+            )
+        else:
+            # Use futures (1 contract = 100 delta usually)
+            return Order(
+                symbol=market.futures_symbol,
+                side="BUY" if delta_to_hedge > 0 else "SELL",
+                qty=round(abs(delta_to_hedge)),
+                order_type="MARKET",
+                urgency="IMMEDIATE",
+            )
+
+    def monitor_legging_exposure(
+        self,
+        state: LeggingState,
+        market_stream: Iterator[OptionsMarketState],
+    ) -> Iterator[LeggingRiskAssessment]:
+        """
+        Continuous monitoring of legging exposure.
+
+        Yields risk assessments as market updates arrive.
+        Caller should act on HEDGE/UNWIND recommendations.
+        """
+        for market_update in market_stream:
+            # Update state with new market
+            state.underlying_move_since_start = (
+                market_update.underlying_price - state.initial_underlying_price
+            ) / state.initial_underlying_price
+            state.iv_move_since_start = (
+                market_update.atm_iv - state.initial_atm_iv
+            ) / state.initial_atm_iv
+            state.time_elapsed_sec += market_update.time_since_last_sec
+
+            yield self.assess_legging_risk(state, market_update)
+
+
+@dataclass
+class LeggingRiskAssessment:
+    risk_level: str       # LOW, MEDIUM, HIGH, CRITICAL
+    recommended_action: str  # CONTINUE, HEDGE, UNWIND, COMPLETE_AT_MARKET
+    estimated_loss: float
+    breached_limits: List[str] = None
+    hedge_order: Optional[Order] = None
+```
+
 #### 7.2.2 Delta Hedging (`impl_delta_hedge.py`)
 
 ```python
@@ -2408,18 +3609,21 @@ class VolatilityTrader:
 |---------------|-------|----------|
 | ComboOrder creation | 25 | All spread types |
 | Multi-leg execution | 35 | Atomic, legging, Greeks netting |
-| Legging risk | 20 | Simulation, exposure |
+| LeggingRiskManager | 30 | Limits, assessment, actions |
+| Emergency hedge creation | 15 | Delta neutralization |
+| Legging monitoring | 15 | Real-time exposure tracking |
 | Delta hedging | 30 | All frequencies, instruments |
 | Hedge P&L simulation | 25 | Realized vol, costs |
 | Variance swap | 20 | Replication, pricing |
 | Vol strategies | 25 | Identification, construction |
-| **Total** | **180** | **100%** |
+| **Total** | **220** | **100%** |
 
 ### 7.4 Deliverables
 - [ ] `impl_multi_leg.py` — Multi-leg execution with Greeks netting
+- [ ] `impl_legging_risk.py` — Legging risk manager (Sinclair 2008)
 - [ ] `impl_delta_hedge.py` — Delta hedging strategies
 - [ ] `strategies/vol_trading.py` — Vol strategies (variance swaps, gamma trades)
-- [ ] `tests/test_options_complex.py` — 180 tests
+- [ ] `tests/test_options_complex.py` — 220 tests
 - [ ] Documentation: `docs/options/complex_orders.md`
 
 ---
@@ -2544,12 +3748,24 @@ class OptionsEnvConfig:
 | `iv_skew_25d` | 25Δ put - 25Δ call | Z-score | IV surface |
 | `term_slope` | Front/back IV ratio | Z-score | Term structure |
 | `rv_iv_spread` | IV - RV (20d) | Z-score | Historical |
+| `vrp_zscore` | VRP (IV - Realized) normalized | Z-score | Goyal-Saretto (2009) |
+| `vrp_term_structure` | Front VRP - Back VRP | Z-score | Term structure |
+| `vrp_momentum` | 5d change in VRP | Z-score | Momentum signal |
 | `gamma_exposure` | Market GEX (normalized) | Z-score | OI × gamma |
 | `put_call_ratio` | Put/call volume | Log transform | Volume |
 | `put_call_oi_ratio` | Put/call OI | Log transform | Open interest |
 | `max_pain` | Max pain strike (normalized) | [0, 1] | OI analysis |
 | `vanna_exposure` | Market vanna | Z-score | Dealer positioning |
 | `charm_exposure` | Market charm | Z-score | Time decay of delta |
+
+**VRP Features — Critical for Vol Trading (Goyal & Saretto 2009)**:
+
+The Volatility Risk Premium (VRP = IV - RV) is the most consistent alpha source in options:
+- **Positive VRP**: Short vol profitable (most of the time)
+- **VRP term structure**: Front VRP > Back VRP indicates near-term fear
+- **VRP momentum**: Rising VRP = increasing fear, falling VRP = complacency
+
+Reference: Goyal & Saretto (2009) "Cross-section of option returns and volatility"
 
 ```python
 class OptionsFeatureExtractor:
@@ -2637,19 +3853,20 @@ class OptionsRewardConfig:
 | OptionsEnvWrapper | 40 | Lifecycle, actions, Greeks tracking |
 | Margin integration | 20 | Reg T, PM, blocking |
 | Expiration handling | 15 | Exercise, expire worthless |
-| Feature extraction | 30 | All 11 features |
+| Feature extraction | 35 | All 14 features |
+| VRP features | 20 | VRP, term structure, momentum |
 | GEX/vanna calculation | 15 | Dealer positioning |
 | Reward shaping | 25 | All penalties/bonuses |
 | Training loop | 25 | Convergence, stability |
 | Pattern compliance | 10 | futures_env.py pattern |
-| **Total** | **180** | **100%** |
+| **Total** | **205** | **100%** |
 
 ### 8.4 Deliverables
 - [ ] `wrappers/options_env.py` — Training environment (follows futures_env pattern)
-- [ ] `options_features.py` — Feature extraction (11 features)
+- [ ] `options_features.py` — Feature extraction (14 features, including VRP)
 - [ ] `impl_options_reward.py` — Greeks-aware reward shaping
 - [ ] `configs/config_train_options.yaml` — Training config
-- [ ] `tests/test_options_training.py` — 180 tests
+- [ ] `tests/test_options_training.py` — 205 tests
 - [ ] Documentation: `docs/options/training.md`
 
 ---
@@ -2956,69 +4173,98 @@ pytest tests/test_options_*.py -v
 
 ### Test Count by Phase
 
-| Phase | Tests | Cumulative |
-|-------|-------|------------|
-| 1: Core Models | 160 | 160 |
-| 2: Exchange Adapters | 140 | 300 |
-| 3: IV Surface | 155 | 455 |
-| 4: L2 Execution | 150 | 605 |
-| 5: L3 LOB | 180 | 785 |
-| 6: Risk Management | 185 | 970 |
-| 7: Complex Orders | 180 | 1,150 |
-| 8: Training | 180 | 1,330 |
-| 9: Live Trading | 165 | 1,495 |
-| 10: Validation | 280 | **1,775** |
+| Phase | Tests | Cumulative | Key Additions |
+|-------|-------|------------|---------------|
+| 1: Core Models | 200 | 200 | 12 Greeks, jump diffusion, GPU |
+| 2: Exchange Adapters (US) | 165 | 365 | IB Options, Theta Data |
+| 2B: Deribit Crypto Options | 120 | 485 | DVOL, inverse margining |
+| 3: IV Surface | **205** | **690** | +SSVI, Bates/SVJ, Lee wing |
+| 4: L2 Execution | **220** | **910** | +Delta-neutral algos, IV impact |
+| 5: L3 LOB (Multi-Series) | **250** | **1,160** | +480+ coordinated books |
+| 6: Risk Management | **240** | **1,400** | +STANS Monte Carlo (10K scenarios) |
+| 7: Complex Orders | **220** | **1,620** | +Legging risk manager |
+| 8: Training | **205** | **1,825** | +VRP features (14 total) |
+| 9: Live Trading | 165 | 1,990 | Greeks monitor, exercise mgmt |
+| 10: Validation | 280 | **2,270** | Greeks accuracy, benchmarks |
 
-**Buffer for edge cases**: +225 tests
-**Total**: **~2,000 tests**
+**Conceptual Additions**: +100 tests (Greeks validation, portfolio offsets)
 
-### Timeline (Revised v3.0)
+**Buffer for edge cases**: +330 tests
 
-| Phase | Duration | Dependencies | Notes | Reuse Savings |
-|-------|----------|--------------|-------|---------------|
-| 1 | 4 weeks | None | 12 Greeks, jump diffusion, import from Alpaca | -0.5 week (OptionType exists) |
-| 2 | **3 weeks** | Phase 1 | **Extend existing Alpaca adapter (1065 lines!)** | **-2 weeks** |
-| 3 | 5 weeks | Phase 1 | SSVI, Heston | None |
-| 4 | **3 weeks** | Phases 1-3 | **Protocol inheritance exists** | **-1 week** |
-| 5 | **4 weeks** | Phases 1-4 | **LOB module exists (24 files, v8.0.0)** | **-2 weeks** |
-| 6 | 5 weeks | Phases 1-5 | OCC margin, gamma convexity | None |
-| 7 | 5 weeks | Phases 1-6 | Variance swaps | None |
-| 8 | 5 weeks | Phases 1-7 | 11 features, futures_env pattern exists | -0.5 week |
-| 9 | 5 weeks | Phases 1-8 | Roll management | None |
-| 10 | 4 weeks | All | 12 Greeks validation | None |
+**Total**: **~2,700 tests**
+
+### Timeline (Revised v4.0)
+
+| Phase | Duration | Dependencies | Notes | Complexity Adjustment |
+|-------|----------|--------------|-------|----------------------|
+| 1 | 5 weeks | None | 12 Greeks, jump diffusion, GPU vectorization | +1 week (vectorization) |
+| 2 | **5 weeks** | Phase 1 | **IB Options requires different imports (Option, FuturesOption)** | **+2 weeks (IB complexity)** |
+| 2B | **4 weeks** | Phase 1 | **Deribit crypto options (inverse margining, DVOL)** | **NEW SUB-PHASE** |
+| 3 | 6 weeks | Phase 1 | SSVI, Heston, Bates/SVJ, Lee extrapolation | +1 week (advanced models) |
+| 4 | 4 weeks | Phases 1-3 | **Protocol inheritance exists, options execution algos** | None |
+| 5 | **6 weeks** | Phases 1-4 | **Options LOB ≠ Equity LOB: multi-series architecture** | **+2 weeks (architecture)** |
+| 6 | 7 weeks | Phases 1-5 | OCC STANS Monte Carlo (10k scenarios), gamma convexity | +2 weeks (MC VaR) |
+| 7 | 6 weeks | Phases 1-6 | Variance swaps, legging risk | +1 week (risk) |
+| 8 | 6 weeks | Phases 1-7 | 14 features incl VRP, futures_env pattern exists | +1 week (VRP) |
+| 9 | 6 weeks | Phases 1-8 | Roll management, assignment handling | +1 week |
+| 10 | 5 weeks | All | 12 Greeks validation, performance benchmarks | +1 week |
 
 **Component Reuse Summary**:
-- `adapters/alpaca/options_execution.py` (1065 lines): OptionType, OptionStrategy, OptionContract → Phase 2 saves 2 weeks
-- `lob/` module (24 files, v8.0.0): MatchingEngine, OrderBook, Queue models → Phase 5 saves 2 weeks
-- `execution_providers.py` (Protocol classes): SlippageProvider, FeeProvider → Phase 4 saves 1 week
-- `wrappers/futures_env.py` pattern: Env wrapper template → Phase 8 saves 0.5 week
+- `adapters/alpaca/options_execution.py` (1065 lines): OptionType, OptionStrategy, OptionContract
+- `lob/` module (24 files, v8.0.0): MatchingEngine base, OrderBook patterns
+- `execution_providers.py` (Protocol classes): SlippageProvider, FeeProvider
+- `wrappers/futures_env.py` pattern: Env wrapper template
+
+**Critical Complexity Adjustments (v4.0)**:
+1. **IB Options ≠ IB Futures**: Requires `from ib_insync import Option, FuturesOption, Index` (not `Future, ContFuture`)
+2. **Options LOB Multi-Series**: Single underlying with N strikes × M expiries = N×M order books coordinated
+3. **OCC STANS Monte Carlo**: 10,000 scenarios VaR, not analytical formulas
+4. **Deribit Inverse Margining**: BTC-settled, not USD-settled (separate sub-phase required)
+5. **GPU Acceleration**: Batch Greeks for 1000+ contracts requires vectorization
 
 **Original (v2.0)**: 51 weeks
 
-**With Reuse Savings (v3.0)**: 51 - 6 = **45 weeks (~11 months)**
+**With Complexity Adjustments (v4.0)**: **60 weeks (~14 months)**
 
-**Buffer**: 10% contingency = 4.5 weeks
+**Buffer**: 15% contingency = 9 weeks (increased from 10% due to options complexity)
 
-**Final Estimate**: **~50 weeks (~12 months)** (down from 56 weeks)
+**Final Estimate**: **~69 weeks (~16 months)** for production-quality L3 options integration
 
 ### Key References
 
-**Academic**:
+**Academic — Pricing & Volatility**:
 - Black & Scholes (1973): "The Pricing of Options and Corporate Liabilities"
 - Merton (1973): "Theory of Rational Option Pricing" (dividends)
 - Merton (1976): "Option pricing when underlying stock returns are discontinuous" (jumps)
+- Heston (1993): "A Closed-Form Solution for Options with Stochastic Volatility"
+- Dupire (1994): "Pricing with a Smile" (local vol)
+- **Bates (1996)**: "Jumps and Stochastic Volatility" (SVJ model = Heston + jumps)
+- Gatheral & Jacquier (2014): "Arbitrage-free SVI volatility surfaces" (SSVI)
+- **Lee (2004)**: "The Moment Formula for Implied Volatility at Extreme Strikes" (wing extrapolation)
+- **Fang & Oosterlee (2008)**: "A Novel Pricing Method for European Options Based on Fourier-Cosine Series" (COS method)
+
+**Academic — Numerical Methods**:
 - Leisen & Reimer (1996): "Binomial models for option valuation - examining and improving convergence"
 - Brenner & Subrahmanyam (1994): "A simple approach to option valuation and hedging" (IV seed)
 - Jäckel (2015): "Let's Be Rational" (robust IV solver)
-- Gatheral & Jacquier (2014): "Arbitrage-free SVI volatility surfaces" (SSVI)
-- Heston (1993): "A Closed-Form Solution for Options with Stochastic Volatility"
-- Dupire (1994): "Pricing with a Smile" (local vol)
 - Broadie & Detemple (1996): "American Option Valuation" (gamma convexity)
-- Carr & Madan (1998): "Towards a theory of volatility trading" (variance swaps)
-- Avellaneda & Lipkin (2003): "A market-induced mechanism for stock pinning"
+
+**Academic — Execution & Market Microstructure**:
 - Cho & Engle (2022): "Market Maker Quotes in Options Markets" (regime-dependent MM)
 - Muravyev & Pearson (2020): "Options Trading Costs Are Lower Than You Think" (PFOF)
-- Hull (2017): "Options, Futures, and Other Derivatives" (textbook reference)
+- Avellaneda & Lipkin (2003): "A market-induced mechanism for stock pinning"
+- **Almgren (2012)**: "Optimal Trading with Stochastic Liquidity and Volatility" (execution algos)
+- **Cartea, Jaimungal & Penalva (2015)**: "Algorithmic and High-Frequency Trading" (textbook)
+- **Garleanu, Pedersen & Poteshman (2009)**: "Demand-Based Option Pricing" (IV impact)
+
+**Academic — Volatility Trading**:
+- Carr & Madan (1998): "Towards a theory of volatility trading" (variance swaps)
+- **Goyal & Saretto (2009)**: "Cross-section of option returns and volatility" (VRP alpha)
+- **Sinclair (2008)**: "Volatility Trading" (practical guide, legging risk)
+
+**Textbooks**:
+- Hull (2017): "Options, Futures, and Other Derivatives" (reference)
+- Taleb (1997): "Dynamic Hedging" (Greeks intuition)
 
 **Industry**:
 - OCC: Options Clearing Corporation — STANS margin methodology
@@ -3037,31 +4283,88 @@ pytest tests/test_options_*.py -v
 | IV solver (American) | `impl_iv_calculation.py` | `pytest tests/test_options_core.py::TestAmericanIV` |
 | SSVI surface | `impl_ssvi.py` | `pytest tests/test_iv_surface.py::TestSSVI` |
 | Heston calibration | `impl_heston.py` | `pytest tests/test_iv_surface.py::TestHeston` |
+| **Bates/SVJ model** | `impl_bates.py` | `pytest tests/test_iv_surface.py::TestBates` |
+| **Lee wing extrapolation** | `impl_wing_extrapolation.py` | `pytest tests/test_iv_surface.py::TestLeeWing` |
 | IB options adapter | `adapters/ib/options.py` | `pytest tests/test_options_adapters.py::TestIB` |
 | Theta Data adapter | `adapters/theta_data/options.py` | `pytest tests/test_options_adapters.py::TestThetaData` |
 | Deribit adapter | `adapters/deribit/options.py` | `pytest tests/test_options_adapters.py::TestDeribit` |
 | Options L2 execution | `execution_providers_options.py` | `pytest tests/test_options_execution_l2.py` |
+| **Options execution algos** | `execution_algos_options.py` | `pytest tests/test_options_execution_l2.py::TestAlgos` |
+| **IV impact model** | `impl_iv_impact.py` | `pytest tests/test_options_execution_l2.py::TestIVImpact` |
 | Options L3 LOB | `lob/options_matching.py` | `pytest tests/test_options_l3_lob.py` |
+| **Multi-series LOB** | `lob/multi_series_lob.py` | `pytest tests/test_options_l3_lob.py::TestMultiSeries` |
 | Options MM simulator | `lob/options_mm.py` | `pytest tests/test_options_l3_lob.py::TestMM` |
 | Pin risk | `lob/pin_risk.py` | `pytest tests/test_options_l3_lob.py::TestPinRisk` |
 | Options risk guards | `services/options_risk_guards.py` | `pytest tests/test_options_risk.py` |
-| OCC margin | `impl_occ_margin.py` | `pytest tests/test_options_risk.py::TestMargin` |
+| **OCC STANS margin** | `impl_occ_stans.py` | `pytest tests/test_options_risk.py::TestSTANS` |
+| OCC margin (Reg T) | `impl_occ_margin.py` | `pytest tests/test_options_risk.py::TestRegT` |
 | Exercise engine | `impl_exercise_assignment.py` | `pytest tests/test_options_risk.py::TestExercise` |
 | Multi-leg orders | `impl_multi_leg.py` | `pytest tests/test_options_complex.py` |
+| **Legging risk mgr** | `impl_legging_risk.py` | `pytest tests/test_options_complex.py::TestLegging` |
 | Delta hedging | `impl_delta_hedge.py` | `pytest tests/test_options_complex.py::TestHedge` |
 | Vol strategies | `strategies/vol_trading.py` | `pytest tests/test_options_complex.py::TestVol` |
 | Options env wrapper | `wrappers/options_env.py` | `pytest tests/test_options_training.py` |
-| Options features | `options_features.py` | `pytest tests/test_options_training.py::TestFeatures` |
+| Options features (14) | `options_features.py` | `pytest tests/test_options_training.py::TestFeatures` |
+| **VRP features** | `options_features.py` | `pytest tests/test_options_training.py::TestVRP` |
 | Options live runner | `services/options_live.py` | `pytest tests/test_options_live.py` |
 | Greeks monitor | `services/greeks_monitor.py` | `pytest tests/test_options_live.py::TestMonitor` |
 | Exercise manager | `services/exercise_mgr.py` | `pytest tests/test_options_live.py::TestExercise` |
 
 ---
 
-**Document Version**: 3.0
+**Document Version**: 4.0
 **Created**: 2025-12-03
 **Last Updated**: 2025-12-03
 **Author**: Claude Code
+
+### Changelog v4.0 (2025-12-03) — Complete Fixes for All Issues
+
+**v4.0 Additions — Addressed ALL 13+ Critical Issues**:
+
+**Phase 3 (IV Surface)**:
+- Added **Lee (2004) Wing Extrapolation** — SSVI diverges at extreme strikes, Lee formula fixes
+- Added **Bates (1996) SVJ Model** — Heston misses jump risk, critical for options pricing
+- Added `impl_bates.py`, `impl_wing_extrapolation.py` to deliverables
+- Test count: 155 → 205 (+50 tests)
+
+**Phase 4 (Execution)**:
+- Added **Options Execution Algorithms** — Delta-Neutral TWAP, Gamma-Aware POV, Spread Execution
+- Added **IV Impact Model** — large options orders move IV (Garleanu et al. 2009)
+- Added `execution_algos_options.py`, `impl_iv_impact.py` to deliverables
+- Test count: 150 → 220 (+70 tests)
+
+**Phase 5 (L3 LOB)**:
+- Added **Multi-Series LOB Architecture** — 480+ coordinated books for SPY chain
+- Added `MultiSeriesLOBManager`, `SeriesLOB`, `CrossExpiryCoordinator` classes
+- Added `lob/multi_series_lob.py`, `lob/series_lob.py`, `lob/cross_expiry_coordinator.py`
+- Test count: 180 → 250 (+70 tests)
+
+**Phase 6 (Risk Management)**:
+- Replaced simple `OCCMarginCalculator` with **full OCC STANS Monte Carlo**
+- Added 10,000+ scenario generation, full repricing, 2-day 99% Expected Shortfall
+- Added `impl_occ_stans.py` with `STANSScenarioGenerator`, `STANSPortfolioPricer`
+- Test count: 185 → 240 (+55 tests)
+
+**Phase 7 (Complex Orders)**:
+- Added **LeggingRiskManager** — Sinclair (2008) approach to partial fill exposure
+- Added `LeggingState`, `LeggingRiskLimits`, `LeggingRiskAssessment` classes
+- Added emergency hedge creation, real-time monitoring
+- Test count: 180 → 220 (+40 tests)
+
+**Phase 8 (Training)**:
+- Added **VRP Features** (Goyal & Saretto 2009) — 3 new features
+- Features: `vrp_zscore`, `vrp_term_structure`, `vrp_momentum`
+- Total features: 11 → 14
+- Test count: 180 → 205 (+25 tests)
+
+**References Added**:
+- Lee (2004), Bates (1996), Fang & Oosterlee (2008)
+- Almgren (2012), Cartea et al. (2015), Garleanu et al. (2009)
+- Goyal & Saretto (2009), Sinclair (2008), Taleb (1997)
+
+**Total Test Count**: 2,200 → **2,700** tests (+500)
+
+---
 
 ### Changelog v3.0 (2025-12-03) — Architectural Fixes & Conceptual Additions
 
