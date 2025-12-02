@@ -42,6 +42,20 @@ ARCHITECTURE:
 - EV Reserve Sampling: Prioritization of rare/high-value events
 - No-Trade Mask Support: Blocks trading in specified windows
 
+REFACTORING (2025-12):
+The train() method (~4000 lines) has been partially refactored for maintainability:
+
+Extracted Static Methods:
+  - _concat_tensor_batches(batches): Concatenate tensors, filtering None/empty
+  - _concat_string_keys(keys_batches): Flatten string key sequences
+
+Extracted Instance Methods:
+  - _prepare_minibatch_iterator(microbatch_size, effective_batch_size, grad_accum_steps):
+    Prepare grouped micro-batch iterator for gradient accumulation
+
+Test Coverage:
+  - tests/test_distributional_ppo_extracted_helpers.py (28 tests)
+
 See CLAUDE.md "КРИТИЧЕСКИЕ ИСПРАВЛЕНИЯ" section for full details and migration guide.
 """
 import copy
@@ -2170,6 +2184,102 @@ class DistributionalPPO(RecurrentPPO):
             return tuple(states.pi)
 
         return tuple(states)
+
+    @staticmethod
+    def _concat_tensor_batches(
+        batches: Sequence[Optional[torch.Tensor]],
+    ) -> Optional[torch.Tensor]:
+        """Concatenate a sequence of tensors, filtering out None and empty entries.
+
+        This is a utility for aggregating batched data collected during training
+        (e.g., value predictions, targets) into a single tensor for metrics.
+
+        Args:
+            batches: Sequence of tensors to concatenate. May contain None or
+                empty tensors which are filtered out.
+
+        Returns:
+            Concatenated tensor of shape (N, 1) where N is total elements,
+            or None if no valid tensors remain after filtering.
+        """
+        filtered: list[torch.Tensor] = []
+        for tensor in batches:
+            if tensor is None or tensor.numel() == 0:
+                continue
+            filtered.append(tensor.reshape(-1, 1))
+        if not filtered:
+            return None
+        return torch.cat(filtered, dim=0)
+
+    @staticmethod
+    def _concat_string_keys(
+        keys_batches: Sequence[Sequence[str]],
+    ) -> Optional[list[str]]:
+        """Flatten a sequence of string key batches into a single list.
+
+        Used for aggregating group keys (e.g., symbol names) collected during
+        training for explained variance computation.
+
+        Args:
+            keys_batches: Sequence of string sequences to flatten.
+
+        Returns:
+            Flattened list of all keys, or None if empty.
+        """
+        combined: list[str] = []
+        for batch_keys in keys_batches:
+            if not batch_keys:
+                continue
+            combined.extend(str(item) for item in batch_keys)
+        return combined or None
+
+    def _prepare_minibatch_iterator(
+        self,
+        microbatch_size: int,
+        effective_batch_size: int,
+        grad_accum_steps: int,
+    ) -> tuple[Optional[Iterable[tuple[Any, ...]]], int]:
+        """Prepare an iterator over grouped micro-batches for a training epoch.
+
+        This method fetches micro-batches from the rollout buffer and groups them
+        according to the gradient accumulation steps. Each group represents one
+        optimizer step's worth of data.
+
+        Args:
+            microbatch_size: Size of each micro-batch from the rollout buffer.
+            effective_batch_size: Fallback batch size if buffer is empty.
+            grad_accum_steps: Number of micro-batches to group for gradient
+                accumulation (each group = one optimizer step).
+
+        Returns:
+            Tuple of (grouped micro-batch iterator, expected batch size).
+            Iterator is None if rollout buffer is empty.
+
+        Raises:
+            RuntimeError: If micro-batch count is not divisible by grad_accum_steps,
+                indicating a configuration mismatch.
+
+        Example:
+            If rollout buffer has 16 micro-batches and grad_accum_steps=4,
+            the iterator yields 4 groups of 4 micro-batches each.
+        """
+        microbatches = list(self.rollout_buffer.get(microbatch_size))
+        if not microbatches:
+            return None, effective_batch_size
+
+        total_micro = len(microbatches)
+        if total_micro % grad_accum_steps != 0:
+            raise RuntimeError(
+                "Rollout buffer produced incomplete micro-batch bucket; "
+                "ensure n_steps * n_envs is divisible by batch_size and microbatch_size"
+            )
+
+        def _grouped_microbatches() -> Iterable[tuple[Any, ...]]:
+            for start_idx in range(0, total_micro, grad_accum_steps):
+                yield tuple(microbatches[start_idx : start_idx + grad_accum_steps])
+
+        expected_batch = microbatch_size * grad_accum_steps
+        return _grouped_microbatches(), expected_batch
 
     def _reset_lstm_states_for_done_envs(
         self,
@@ -5136,23 +5246,11 @@ class DistributionalPPO(RecurrentPPO):
     ]:
         """Select explained-variance tensors from primary or reserve caches."""
 
-        def _concat(batches: Sequence[torch.Tensor]) -> Optional[torch.Tensor]:
-            filtered: list[torch.Tensor] = []
-            for tensor in batches:
-                if tensor is None or tensor.numel() == 0:
-                    continue
-                filtered.append(tensor.reshape(-1, 1))
-            if not filtered:
-                return None
-            return torch.cat(filtered, dim=0)
-
-        def _concat_keys(groups: Sequence[Sequence[str]]) -> Optional[list[str]]:  # FIX
-            combined: list[str] = []  # FIX
-            for batch_keys in groups:  # FIX
-                if not batch_keys:  # FIX
-                    continue  # FIX
-                combined.extend(str(item) for item in batch_keys)  # FIX
-            return combined or None  # FIX
+        # NOTE: Nested _concat and _concat_keys moved to class static methods:
+        # - self._concat_tensor_batches()
+        # - self._concat_string_keys()
+        _concat = self._concat_tensor_batches
+        _concat_keys = self._concat_string_keys
 
         def _ensure_mask_alignment(
             mask: Optional[torch.Tensor], target: Optional[torch.Tensor]
@@ -9845,25 +9943,15 @@ class DistributionalPPO(RecurrentPPO):
                 "Configured batch_size must be divisible by microbatch_size; adjust n_steps, n_envs, or microbatch_size"
             )
 
-        def _prepare_minibatch_iterator() -> tuple[Optional[Iterable[tuple[Any, ...]]], int]:
-            microbatches = list(self.rollout_buffer.get(microbatch_size_effective))
-            if not microbatches:
-                return None, effective_batch_size
-            total_micro = len(microbatches)
-            if total_micro % grad_accum_steps != 0:
-                raise RuntimeError(
-                    "Rollout buffer produced incomplete micro-batch bucket; ensure n_steps * n_envs is divisible by batch_size and microbatch_size"
-                )
-
-            def _grouped_microbatches() -> Iterable[tuple[Any, ...]]:
-                for start_idx in range(0, total_micro, grad_accum_steps):
-                    yield tuple(microbatches[start_idx:start_idx + grad_accum_steps])
-
-            expected_batch = microbatch_size_effective * grad_accum_steps
-            return _grouped_microbatches(), expected_batch
+        # NOTE: _prepare_minibatch_iterator moved to class method.
+        # See self._prepare_minibatch_iterator() for grouped micro-batch iteration.
 
         for _ in range(effective_n_epochs):
-            minibatch_iterator, expected_batch_size = _prepare_minibatch_iterator()
+            minibatch_iterator, expected_batch_size = self._prepare_minibatch_iterator(
+                microbatch_size_effective,
+                effective_batch_size,
+                grad_accum_steps,
+            )
             if minibatch_iterator is None:
                 self.logger.record("warn/empty_rollout_buffer", 1.0)
                 break
@@ -12141,23 +12229,10 @@ class DistributionalPPO(RecurrentPPO):
         mask_tensor_for_ev: Optional[torch.Tensor] = None
         y_true_tensor_raw: Optional[torch.Tensor] = None
 
-        def _concat_batches(batches: Sequence[torch.Tensor]) -> Optional[torch.Tensor]:
-            filtered: list[torch.Tensor] = []
-            for tensor in batches:
-                if tensor is None or tensor.numel() == 0:
-                    continue
-                filtered.append(tensor.reshape(-1, 1))
-            if not filtered:
-                return None
-            return torch.cat(filtered, dim=0)
-
-        def _concat_keys(keys_batches: Sequence[Sequence[str]]) -> Optional[list[str]]:  # FIX
-            combined: list[str] = []  # FIX
-            for batch_keys in keys_batches:  # FIX
-                if not batch_keys:  # FIX
-                    continue  # FIX
-                combined.extend(str(item) for item in batch_keys)  # FIX
-            return combined or None  # FIX
+        # NOTE: _concat_batches and _concat_keys moved to class static methods:
+        # - self._concat_tensor_batches()
+        # - self._concat_string_keys()
+        # See refactoring commit for details.
 
         if value_eval_primary_cache or value_eval_reserve_cache:
             (
@@ -12215,11 +12290,11 @@ class DistributionalPPO(RecurrentPPO):
             ev_reserve_group_keys,
         )
 
-        primary_true_tensor = _concat_batches(ev_primary_targets)
-        primary_pred_tensor = _concat_batches(ev_primary_preds)
-        primary_raw_tensor = _concat_batches(ev_primary_raw)
-        primary_mask_tensor = _concat_batches(ev_primary_weights)
-        primary_group_keys = _concat_keys(ev_primary_group_keys)  # FIX
+        primary_true_tensor = self._concat_tensor_batches(ev_primary_targets)
+        primary_pred_tensor = self._concat_tensor_batches(ev_primary_preds)
+        primary_raw_tensor = self._concat_tensor_batches(ev_primary_raw)
+        primary_mask_tensor = self._concat_tensor_batches(ev_primary_weights)
+        primary_group_keys = self._concat_string_keys(ev_primary_group_keys)
         if primary_true_tensor is not None and primary_pred_tensor is not None:
             (
                 train_ev_value,
