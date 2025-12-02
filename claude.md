@@ -85,6 +85,12 @@
 | **ADL queue** | `lob/futures_extensions.py` | `pytest tests/test_futures_l3_execution.py::TestADLQueueManager` |
 | **Funding dynamics** | `lob/futures_extensions.py` | `pytest tests/test_futures_l3_execution.py::TestFundingPeriodDynamics` |
 | **Futures L3 execution** | `execution_providers_futures_l3.py` | `pytest tests/test_futures_l3_execution.py::TestFuturesL3ExecutionProvider` |
+| **CME Globex matching** | `lob/cme_matching.py` | `pytest tests/test_cme_l3_execution.py::TestGlobexMatchingEngineBasic` |
+| **CME MWP orders** | `lob/cme_matching.py` | `pytest tests/test_cme_l3_execution.py::TestGlobexMatchingEngineMWP` |
+| **CME stop orders** | `lob/cme_matching.py` | `pytest tests/test_cme_l3_execution.py::TestGlobexMatchingEngineStops` |
+| **CME L3 execution** | `execution_providers_cme_l3.py` | `pytest tests/test_cme_l3_execution.py::TestCMEL3ExecutionProvider` |
+| **CME session detection** | `execution_providers_cme_l3.py` | `pytest tests/test_cme_l3_execution.py::TestSessionDetection` |
+| **CME daily settlement** | `execution_providers_cme_l3.py` | `pytest tests/test_cme_l3_execution.py::TestDailySettlementSimulator` |
 
 ### 🔍 Quick File Reference
 
@@ -2534,8 +2540,8 @@ exec_adapter = create_order_execution_adapter("ib", {"port": 7497})
 - ✅ Phase 4A: L2 Execution Provider (Crypto Futures Slippage) — DONE
 - ✅ Phase 4B: CME SPAN Margin & Slippage — DONE
 - ✅ Phase 5A: L3 LOB Integration for Crypto Futures — DONE
-- 📋 Phase 5B: Binance Futures Adapters (Perpetual + Quarterly)
-- 📋 Phase 6: L3 LOB for CME Futures
+- ✅ Phase 5B: L3 LOB for CME Futures — DONE
+- 📋 Phase 6: Binance Futures Adapters (Perpetual + Quarterly)
 - 📋 Phase 7: Training & Backtesting Integration
 
 ---
@@ -3313,6 +3319,298 @@ pytest tests/test_futures_l3_execution.py::TestIntegration -v
 - Binance: "Liquidation Protocol" — Insurance fund and ADL mechanics
 - Binance: "Funding Rate" — 8-hour funding periods
 - FTX Research: "Liquidation Cascades" — Cascade dynamics (pre-collapse research)
+
+---
+
+## 📊 Phase 5B: L3 LOB for CME Futures (COMPLETED)
+
+**Статус**: ✅ Production Ready | **Тесты**: 42/42 (100% pass) | **Date**: 2025-12-02
+
+Phase 5B implements L3 Limit Order Book simulation for CME Group futures, including Globex-style FIFO matching, Market with Protection (MWP) orders, stop orders with velocity logic, and daily settlement simulation.
+
+### Компоненты
+
+| Компонент | Файл | Описание |
+|-----------|------|----------|
+| **GlobexMatchingEngine** | `lob/cme_matching.py` | CME Globex-style FIFO matching engine |
+| **CMEL3SlippageProvider** | `execution_providers_cme_l3.py` | L3 slippage with LOB walk-through |
+| **CMEL3FillProvider** | `execution_providers_cme_l3.py` | L3 fill logic with matching engine |
+| **CMEL3ExecutionProvider** | `execution_providers_cme_l3.py` | Combined L3 CME execution provider |
+| **DailySettlementSimulator** | `execution_providers_cme_l3.py` | Daily variation margin simulation |
+| **Тесты** | `tests/test_cme_l3_execution.py` | 42 comprehensive tests |
+
+### Key Concepts
+
+#### 1. Globex-Style FIFO Matching
+
+CME Globex uses strict Price-Time Priority (FIFO) matching:
+
+```
+BUY orders sorted: price DESC, time ASC (best price first, oldest first)
+SELL orders sorted: price ASC, time ASC (best price first, oldest first)
+```
+
+**Usage**:
+```python
+from lob.cme_matching import GlobexMatchingEngine, StopOrder
+from lob.data_structures import LimitOrder, Side, OrderType
+
+# Create engine for ES (E-mini S&P 500)
+engine = GlobexMatchingEngine(symbol="ES", tick_size=0.25, protection_points=6)
+
+# Add resting order
+resting = LimitOrder(
+    order_id="rest_1",
+    price=4500.0,
+    qty=10.0,
+    remaining_qty=10.0,
+    timestamp_ns=0,
+    side=Side.BUY,
+    order_type=OrderType.LIMIT,
+)
+engine.add_resting_order(resting)
+
+# Match aggressive order
+aggressive = LimitOrder(
+    order_id="aggr_1",
+    price=4500.0,
+    qty=5.0,
+    remaining_qty=5.0,
+    timestamp_ns=1000,
+    side=Side.SELL,
+    order_type=OrderType.MARKET,
+)
+result = engine.match(aggressive)
+print(f"Filled: {result.total_filled_qty} @ {result.avg_fill_price}")
+```
+
+#### 2. Market with Protection (MWP) Orders
+
+CME uses implicit price limits on market orders to prevent runaway fills:
+
+| Product | Protection Points | Tick Size | Max Deviation |
+|---------|-------------------|-----------|---------------|
+| ES | 6 | 0.25 | 1.5 points |
+| NQ | 10 | 0.25 | 2.5 points |
+| GC | 50 | 0.10 | 5.0 points |
+| CL | 100 | 0.01 | 1.0 point |
+
+**MWP Behavior**:
+- BUY MWP: Limit at best_ask + (protection_points × tick_size)
+- SELL MWP: Limit at best_bid - (protection_points × tick_size)
+- Unfilled portion is cancelled (not rested)
+
+**Usage**:
+```python
+result = engine.match_with_protection(
+    order=market_order,
+    protection_points=6,  # Optional override
+)
+if result.cancelled_orders:
+    print("Unfilled portion cancelled due to protection limit")
+```
+
+#### 3. Stop Orders with Velocity Logic
+
+Stop orders trigger when price crosses the stop price, with CME velocity logic protection:
+
+| Product | Velocity Threshold (ticks) | Pause Duration |
+|---------|---------------------------|----------------|
+| ES | 12 | 2 seconds |
+| NQ | 20 | 2 seconds |
+| GC | 50 | 2 seconds |
+| CL | 100 | 2 seconds |
+
+**Stop Order Types**:
+- **Stop-Market**: Converts to MWP when triggered
+- **Stop-Limit**: Converts to limit order when triggered
+
+**Usage**:
+```python
+stop = StopOrder(
+    order_id="stop_1",
+    symbol="ES",
+    side=Side.SELL,
+    qty=5.0,
+    stop_price=4490.0,
+    limit_price=None,  # Stop-market
+    use_protection=True,
+)
+engine.submit_stop_order(stop)
+
+# Check and trigger stops
+results = engine.check_stop_triggers(
+    last_trade_price=4489.0,
+    bid=4488.5,
+    ask=4489.5,
+    timestamp_ns=int(time.time() * 1e9),
+)
+```
+
+#### 4. Session Detection
+
+RTH (Regular Trading Hours) vs ETH (Electronic Trading Hours):
+
+| Session | Hours (ET) | Spread Multiplier |
+|---------|------------|-------------------|
+| RTH | 9:30 - 16:15 | 1.0x |
+| ETH | 18:00 - 9:30 | 1.5x |
+| Pre-Open | 8:30 - 9:30 | 1.25x |
+| Maintenance | 16:15 - 16:30 | N/A (closed) |
+
+**Usage**:
+```python
+from execution_providers_cme_l3 import (
+    detect_cme_session,
+    is_rth_session,
+    get_minutes_to_settlement,
+    CMESession,
+)
+
+session = detect_cme_session(timestamp_ms)
+if session == CMESession.RTH:
+    print("Regular trading hours - tightest spreads")
+elif session == CMESession.ETH:
+    print("Electronic hours - wider spreads")
+elif session == CMESession.MAINTENANCE:
+    print("Market closed for daily maintenance")
+
+# Check if RTH
+if is_rth_session(timestamp_ms):
+    spread_mult = 1.0
+
+# Minutes until settlement
+minutes = get_minutes_to_settlement(timestamp_ms, "ES")
+if minutes and minutes < 30:
+    print(f"Settlement approaching in {minutes} minutes")
+```
+
+#### 5. Daily Settlement Simulation
+
+CME futures settle daily with variation margin:
+
+**Settlement Times (Eastern Time)**:
+
+| Product | Settlement Time | Notes |
+|---------|-----------------|-------|
+| ES, NQ, YM, RTY | 16:00 ET | Equity index |
+| GC, SI, HG | 13:30 ET | Metals (COMEX) |
+| CL, NG | 14:30 ET | Energy (NYMEX) |
+| 6E, 6J, 6B | 15:00 ET | Currencies |
+
+**Variation Margin Formula**:
+```
+VM = (Settlement_t - Settlement_t-1) × Qty × Multiplier
+```
+
+**Usage**:
+```python
+from execution_providers_cme_l3 import DailySettlementSimulator
+from decimal import Decimal
+
+simulator = DailySettlementSimulator(
+    symbol="ES",
+    contract_multiplier=Decimal("50"),
+)
+
+# Process settlement
+simulator.process_settlement(
+    timestamp_ms=settlement_time_ms,
+    settlement_price=Decimal("4520.00"),
+    position_qty=Decimal("2"),
+)
+
+# Get variation margin
+vm = simulator.get_pending_variation_margin()
+print(f"Variation Margin: ${vm}")
+
+# Get last settlement price
+last_price = simulator.get_last_settlement_price()
+```
+
+### Configuration
+
+```python
+from execution_providers_cme_l3 import (
+    CMEL3ExecutionProvider,
+    create_cme_l3_execution_provider,
+    CMEL3Config,
+)
+
+# Create with default config
+provider = create_cme_l3_execution_provider(symbol="ES")
+
+# Create with profile
+provider = create_cme_l3_execution_provider(
+    symbol="ES",
+    profile="conservative",
+)
+
+# Custom configuration
+config = CMEL3Config(
+    spread_bps=0.5,
+    eth_spread_multiplier=1.5,
+    settlement_premium=1.3,
+    impact_coef=0.03,
+)
+provider = CMEL3ExecutionProvider(symbol="ES", config=config)
+```
+
+### Presets
+
+| Preset | Spread (bps) | ETH Mult | Settlement Mult | Impact Coef |
+|--------|--------------|----------|-----------------|-------------|
+| `default` | 0.5 | 1.5 | 1.3 | 0.03 |
+| `conservative` | 0.75 | 1.75 | 1.5 | 0.05 |
+| `aggressive` | 0.35 | 1.25 | 1.15 | 0.02 |
+
+### Тестирование
+
+```bash
+# All Phase 5B tests (42 tests)
+pytest tests/test_cme_l3_execution.py -v
+
+# By category
+pytest tests/test_cme_l3_execution.py::TestGlobexMatchingEngineBasic -v
+pytest tests/test_cme_l3_execution.py::TestGlobexMatchingEngineMWP -v
+pytest tests/test_cme_l3_execution.py::TestGlobexMatchingEngineStops -v
+pytest tests/test_cme_l3_execution.py::TestSessionDetection -v
+pytest tests/test_cme_l3_execution.py::TestDailySettlementSimulator -v
+pytest tests/test_cme_l3_execution.py::TestCMEL3SlippageProvider -v
+pytest tests/test_cme_l3_execution.py::TestCMEL3FillProvider -v
+pytest tests/test_cme_l3_execution.py::TestIntegration -v
+```
+
+**Coverage**: 42 tests (100% pass rate)
+
+| Category | Tests | Coverage |
+|----------|-------|----------|
+| GlobexMatchingEngine Basic | 8 | FIFO matching, best bid/ask |
+| MWP Orders | 3 | Protection limits, unfilled cancellation |
+| Stop Orders | 5 | Trigger logic, stop-limit, velocity |
+| Session Detection | 5 | RTH/ETH, settlement time |
+| Daily Settlement | 7 | VM calculation, long/short positions |
+| Slippage Provider | 4 | LOB walk, ETH multiplier, settlement |
+| Fill Provider | 2 | Market order fills |
+| Factory Functions | 3 | Profiles, creation |
+| Edge Cases | 3 | Empty book, zero qty, various symbols |
+| Integration | 2 | Full execution flow, settlement |
+
+### Ключевые файлы
+
+| Файл | Описание |
+|------|----------|
+| `lob/cme_matching.py` | GlobexMatchingEngine with MWP, stops, velocity (~800 lines) |
+| `execution_providers_cme_l3.py` | L3 CME execution provider (~700 lines) |
+| `tests/test_cme_l3_execution.py` | 42 comprehensive tests |
+
+### Референсы
+
+- CME Group: "Globex Matching Algorithm" — FIFO Price-Time Priority
+- CME Group: "Market with Protection Orders" — MWP order handling
+- CME Group: "Stop Spike Logic" — Velocity logic protection
+- CME Group: "Daily Settlement Procedures" — Variation margin
+- CME Group: "Globex Trading Hours" — RTH/ETH session definitions
 
 ---
 
@@ -5114,8 +5412,22 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-12-02
-**Версия документации**: 11.3 (Phase 5A: L3 LOB for Crypto Futures)
-**Статус**: ✅ Production Ready (561 test files, все критические исправления применены)
+**Версия документации**: 11.4 (Phase 5B: L3 LOB for CME Futures)
+**Статус**: ✅ Production Ready (563 test files, все критические исправления применены)
+
+### Изменения в 11.4:
+- **Добавлена полная документация Phase 5B (L3 LOB for CME Futures)** — 290+ строк
+  - GlobexMatchingEngine с FIFO Price-Time Priority matching
+  - Market with Protection (MWP) orders with protection points
+  - Stop orders с velocity logic protection
+  - Session detection (RTH vs ETH) with spread multipliers
+  - DailySettlementSimulator с variation margin calculation
+  - CMEL3ExecutionProvider combining all L3 CME components
+  - 42 тестов (100% pass rate)
+- Обновлена секция "Futures Integration" — Phase 5B теперь ✅ DONE
+- Добавлены примеры использования GlobexMatchingEngine, MWP, stop orders
+- Добавлены референсы на CME Group Globex documentation
+- Добавлены Phase 5B entries в Quick Reference таблицу
 
 ### Изменения в 11.3:
 - **Добавлена полная документация Phase 5A (L3 LOB for Crypto Futures)** — 280+ строк
