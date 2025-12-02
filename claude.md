@@ -107,6 +107,9 @@
 | **Concentration guard** | `services/futures_risk_guards.py` | `pytest tests/test_futures_risk_guards.py::TestConcentrationGuard` |
 | **ADL risk guard** | `services/futures_risk_guards.py` | `pytest tests/test_futures_risk_guards.py::TestADLRiskGuard` |
 | **Crypto futures risk** | `risk_guard.py` | `pytest tests/test_futures_risk_guards.py::TestCryptoFuturesRiskGuard` |
+| **Futures env wrapper** | `wrappers/futures_env.py` | `pytest tests/test_futures_training.py::TestFuturesEnvWrapper` |
+| **Futures feature flags** | `services/futures_feature_flags.py` | `pytest tests/test_futures_feature_flags.py` |
+| **Futures training config** | `configs/config_train_futures.yaml` | `pytest tests/test_futures_training.py::TestFuturesTrainingConfig` |
 
 ### 🔍 Quick File Reference
 
@@ -2170,9 +2173,9 @@ OANDA_PRACTICE=true  # or false for live
 
 ---
 
-## 🔮 Futures Integration (Phase 3B-7: ✅ COMPLETE | Phase 8-10: 📋 Pending)
+## 🔮 Futures Integration (Phase 3B-8: ✅ COMPLETE | Phase 9-10: 📋 Pending)
 
-**Статус**: ✅ Core Complete | **Документация**: `docs/FUTURES_INTEGRATION_PLAN.md`
+**Статус**: ✅ Training Ready | **Документация**: `docs/FUTURES_INTEGRATION_PLAN.md`
 
 **Completed Phases**:
 - Phase 3B: ✅ IB/CME Adapters
@@ -2183,6 +2186,7 @@ OANDA_PRACTICE=true  # or false for live
 - Phase 6A: ✅ Crypto Risk Guards
 - Phase 6B: ✅ CME Risk Guards
 - Phase 7: ✅ Unified Risk Management
+- Phase 8: ✅ Multi-Futures Training Pipeline
 
 Интеграция всех типов фьючерсов:
 
@@ -6263,8 +6267,23 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-12-02
-**Версия документации**: 11.5 (Phase 7: Unified Futures Risk Management)
-**Статус**: ✅ Production Ready (563+ test files, все критические исправления применены)
+**Версия документации**: 11.6 (Phase 8: Multi-Futures Training Pipeline)
+**Статус**: ✅ Production Ready (564+ test files, все критические исправления применены)
+
+### Изменения в 11.6:
+- **Добавлена полная документация Phase 8 (Multi-Futures Training Pipeline)** — 131 тестов
+  - FuturesTradingEnv wrapper с leverage, margin tracking, liquidation handling
+  - FuturesFeatureFlags system с RolloutStage (DISABLED, SHADOW, CANARY, PRODUCTION)
+  - Thread-safe feature flag operations с symbol filtering для CANARY stage
+  - configs/config_train_futures.yaml — Futures training configuration
+  - configs/config_futures_unified.yaml — Unified futures config template
+  - configs/feature_flags_futures.yaml — Feature flags configuration
+  - Integration с train_model_multi_patch.py через create_futures_env()
+  - 131 тестов (100% pass rate)
+- Обновлена секция "Futures Integration" — Phase 8 теперь ✅ DONE
+- Добавлены Phase 8 entries в Quick Reference таблицу
+- Обновлён FUTURES_INTEGRATION_PLAN.md с Phase 8 completion
+- Status изменён с "Core Complete" на "Training Ready"
 
 ### Изменения в 11.5:
 - **Добавлена полная документация Phase 7 (Unified Futures Risk Management)** — 290+ строк

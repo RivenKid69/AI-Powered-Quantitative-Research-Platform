@@ -905,6 +905,18 @@ torch.backends.cudnn.benchmark = True
 from trading_patchnew import TradingEnv, DecisionTiming
 from gymnasium import spaces
 from wrappers.action_space import LongOnlyActionWrapper, ScoreActionWrapper
+from wrappers.futures_env import (
+    FuturesTradingEnv,
+    FuturesEnvConfig,
+    create_futures_env,
+    create_cme_futures_env,
+)
+from services.futures_feature_flags import (
+    get_global_flags,
+    is_feature_enabled,
+    FuturesFeature,
+    load_feature_flags,
+)
 from custom_policy_patch1 import CustomActorCriticPolicy
 from fetch_all_data_patch import load_all_data
 # --- ИЗМЕНЕНИЕ: Импортируем быструю Cython-функцию оценки ---
@@ -973,6 +985,78 @@ def _wrap_action_space_if_needed(
     if not isinstance(final_space, spaces.Box) or tuple(final_space.shape) != (1,):
         raise RuntimeError("Score action space wrapper failed to enforce Box(1)")
     return wrapped_env
+
+
+# ==========================================================================
+# FUTURES ENVIRONMENT WRAPPER (Phase 8)
+# ==========================================================================
+def _wrap_futures_env_if_needed(
+    env,
+    *,
+    asset_class: str,
+    futures_config: Optional[Dict[str, Any]] = None,
+    funding_data: Optional[Dict[str, Any]] = None,
+) -> Any:
+    """Wrap environment with FuturesTradingEnv if asset class is futures.
+
+    Args:
+        env: Base trading environment
+        asset_class: Asset class string (crypto_futures, index_futures, etc.)
+        futures_config: Futures-specific configuration from YAML
+        funding_data: Pre-loaded funding rate data (symbol -> DataFrame)
+
+    Returns:
+        Wrapped environment (FuturesTradingEnv) or original env
+    """
+    # Only wrap for futures asset classes
+    futures_asset_classes = {
+        "crypto_futures", "futures", "crypto_perp", "crypto_perpetual",
+        "crypto_quarterly", "index_futures", "commodity_futures",
+        "currency_futures", "bond_futures", "cme_futures"
+    }
+
+    if asset_class.lower() not in futures_asset_classes:
+        return env
+
+    # Check feature flag
+    if not is_feature_enabled(FuturesFeature.FUTURES_ENV_WRAPPER):
+        logger.debug("Futures env wrapper disabled by feature flag")
+        return env
+
+    # Build configuration from YAML or defaults
+    config = futures_config or {}
+
+    # Determine futures type
+    futures_type = config.get("futures_type", asset_class)
+    is_cme = futures_type.lower() in {"index_futures", "commodity_futures",
+                                       "currency_futures", "bond_futures", "cme_futures"}
+
+    try:
+        if is_cme:
+            # CME-style futures (no funding, SPAN margin)
+            wrapped = create_cme_futures_env(
+                base_env=env,
+                config=config,
+                initial_leverage=config.get("initial_leverage", 10),
+                max_leverage=config.get("max_leverage", 20),
+            )
+        else:
+            # Crypto perpetual/quarterly futures
+            wrapped = create_futures_env(
+                base_env=env,
+                config=config,
+                initial_leverage=config.get("initial_leverage", 10),
+                max_leverage=config.get("max_leverage", 50),
+                margin_mode=config.get("margin_mode", "cross"),
+                include_funding_in_reward=config.get("include_funding_in_reward", True),
+                liquidation_penalty=config.get("liquidation_penalty", -10.0),
+                funding_data=funding_data,
+            )
+        logger.debug("Wrapped env with FuturesTradingEnv (type=%s)", futures_type)
+        return wrapped
+    except Exception as e:
+        logger.warning("Failed to wrap with FuturesTradingEnv: %s", e)
+        return env
 
 
 def _assign_nested(target: dict[str, Any], dotted_key: str, value: Any) -> None:
@@ -1864,6 +1948,22 @@ def objective(trial: optuna.Trial,
             "[WARN] Test data provided to HPO objective function but will NOT be used "
             "for hyperparameter optimization (correct behavior). Test data should "
             "only be used for final evaluation after HPO is complete."
+        )
+
+    # ==========================================================================
+    # EXTRACT FUTURES CONFIG FROM SIM_CONFIG (Phase 8)
+    # ==========================================================================
+    futures_is_futures: bool = sim_config.get("is_futures", False)
+    futures_asset_class: str = sim_config.get("asset_class", "crypto")
+    futures_config_dict: Optional[Dict[str, Any]] = sim_config.get("futures_config")
+    futures_funding_data: Optional[Dict[str, Any]] = sim_config.get("funding_data")
+
+    if futures_is_futures:
+        logger.info(
+            "Futures training enabled: asset_class=%s, has_config=%s, has_funding=%s",
+            futures_asset_class,
+            futures_config_dict is not None,
+            futures_funding_data is not None,
         )
 
     def _extract_bins_vol_from_cfg(cfg, default=EXPECTED_VOLUME_BINS):
@@ -3487,6 +3587,21 @@ def objective(trial: optuna.Trial,
                     reward_robust_clip_fraction_value
                 )
             setattr(env, "selected_symbol", symbol)
+
+            # ==========================================================================
+            # WRAP WITH FUTURES ENV IF NEEDED (Phase 8)
+            # ==========================================================================
+            # Futures wrapper must be applied BEFORE action space wrapper
+            # because it wraps the base TradingEnv with futures-specific logic
+            # (leverage, margin, funding, liquidation)
+            if futures_is_futures:
+                env = _wrap_futures_env_if_needed(
+                    env,
+                    asset_class=futures_asset_class,
+                    futures_config=futures_config_dict,
+                    funding_data=futures_funding_data,
+                )
+
             env = _wrap_action_space_if_needed(
                 env,
                 bins_vol=bins_vol,
@@ -3575,6 +3690,16 @@ def objective(trial: optuna.Trial,
             seed=base_seed,
         )
         setattr(env, "selected_symbol", symbol)
+
+        # Wrap with futures env if needed (Phase 8)
+        if futures_is_futures:
+            env = _wrap_futures_env_if_needed(
+                env,
+                asset_class=futures_asset_class,
+                futures_config=futures_config_dict,
+                funding_data=futures_funding_data,
+            )
+
         env = _wrap_action_space_if_needed(
             env,
             bins_vol=bins_vol,
@@ -4549,17 +4674,75 @@ def main():
     os.makedirs(trials_dir, exist_ok=True)
 
     # ==========================================================================
-    # ASSET CLASS DETECTION (Phase 11: Stock Training Integration)
+    # ASSET CLASS DETECTION (Phase 8 & 11: Futures + Stock Training Integration)
     # ==========================================================================
     # Determine asset_class from config. Default is "crypto" for backward compatibility.
-    # When asset_class="equity", data is loaded from config.data.paths and stock
-    # features (VIX, RS, sector momentum) are automatically added.
+    # Supported asset classes:
+    #   - crypto: Spot crypto trading (default)
+    #   - equity: US equities via Alpaca/Polygon
+    #   - crypto_futures: Crypto perpetual/quarterly futures (Binance USDT-M)
+    #   - index_futures: CME equity index futures (ES, NQ, etc.)
+    #   - commodity_futures: CME commodity futures (GC, CL, etc.)
+    #   - currency_futures: CME currency futures (6E, 6J, etc.)
     # ==========================================================================
     asset_class = (
         getattr(cfg, "asset_class", None)
         or getattr(cfg.data, "asset_class", None)
         or "crypto"
     ).lower()
+
+    # Check if this is a futures asset class
+    futures_asset_classes = {
+        "crypto_futures", "futures", "crypto_perp", "crypto_perpetual",
+        "crypto_quarterly", "index_futures", "commodity_futures",
+        "currency_futures", "bond_futures", "cme_futures"
+    }
+    is_futures = asset_class in futures_asset_classes
+
+    # Get futures-specific config if applicable
+    futures_config: Optional[Dict[str, Any]] = None
+    funding_data: Optional[Dict[str, Any]] = None
+
+    if is_futures:
+        # Load futures config section
+        futures_config = {}
+        cfg_futures = getattr(cfg, "futures", None)
+        if cfg_futures:
+            futures_config = {
+                "initial_leverage": getattr(cfg_futures, "initial_leverage", 10),
+                "max_leverage": getattr(cfg_futures, "max_leverage", 50),
+                "margin_mode": getattr(cfg_futures, "margin_mode", "cross"),
+                "include_funding_in_reward": getattr(cfg_futures, "include_funding_in_reward", True),
+                "liquidation_penalty": getattr(cfg_futures, "liquidation_penalty", -10.0),
+                "futures_type": asset_class,
+            }
+
+            # Leverage brackets if specified
+            leverage_brackets = getattr(cfg_futures, "leverage_brackets", None)
+            if leverage_brackets:
+                futures_config["leverage_brackets"] = leverage_brackets
+
+        # Load funding config if applicable
+        cfg_funding = getattr(cfg, "funding", None)
+        if cfg_funding:
+            futures_config["funding"] = {
+                "enabled": getattr(cfg_funding, "enabled", True),
+                "interval_hours": getattr(cfg_funding, "interval_hours", 8),
+                "times_utc": getattr(cfg_funding, "times_utc", ["00:00", "08:00", "16:00"]),
+                "include_in_reward": getattr(cfg_funding, "include_in_reward", True),
+            }
+
+        # Load feature flags if path is specified
+        feature_flags_path = getattr(cfg, "feature_flags_path", None)
+        if feature_flags_path and os.path.exists(feature_flags_path):
+            try:
+                load_feature_flags(feature_flags_path)
+                logger.info("Loaded futures feature flags from %s", feature_flags_path)
+            except Exception as e:
+                logger.warning("Failed to load feature flags from %s: %s", feature_flags_path, e)
+
+        print(f"Futures mode enabled: leverage={futures_config.get('initial_leverage', 10)}x, "
+              f"margin={futures_config.get('margin_mode', 'cross')}")
 
     # Get timeframe for equity data processing
     data_timeframe = getattr(cfg.data, "timeframe", "4h")
@@ -4607,6 +4790,64 @@ def main():
             raise FileNotFoundError(error_msg)
 
         print(f"Looking for stock data files in: {data_paths}")
+    elif is_futures:
+        # FUTURES: Load from config.data.paths or default futures directory
+        data_paths = getattr(cfg.data, "paths", None) or []
+        if not data_paths:
+            data_paths = [
+                "data/futures/*.parquet",
+                "data/futures/*.feather",
+                os.path.join(processed_data_dir, "*.parquet"),
+                os.path.join(processed_data_dir, "*.feather"),
+            ]
+
+        all_data_files = []
+        for pattern in data_paths:
+            all_data_files.extend(glob.glob(pattern))
+
+        # Remove duplicates while preserving order
+        seen = set()
+        all_feather_files = []
+        for f in all_data_files:
+            if f not in seen:
+                seen.add(f)
+                all_feather_files.append(f)
+
+        if not all_feather_files:
+            error_msg = (
+                f"\n{'='*80}\n"
+                f"ERROR: No futures training data found!\n"
+                f"{'='*80}\n\n"
+                f"No .feather/.parquet files found in paths:\n"
+                f"  {data_paths}\n\n"
+                f"Prepare Futures Data:\n"
+                f"  1. Download futures OHLCV data to data/futures/\n"
+                f"  2. Download funding rate history to data/futures/*_funding.parquet\n"
+                f"  3. Download mark price data to data/futures/*_mark_*.parquet (optional)\n\n"
+                f"Then re-run training.\n"
+                f"{'='*80}\n"
+            )
+            raise FileNotFoundError(error_msg)
+
+        # Load funding rate data if available
+        funding_paths = getattr(cfg.data, "funding_paths", None) or ["data/futures/*_funding.parquet"]
+        for pattern in funding_paths:
+            funding_files = glob.glob(pattern)
+            if funding_files:
+                funding_data = {}
+                for fpath in funding_files:
+                    try:
+                        symbol = os.path.basename(fpath).replace("_funding.parquet", "").replace("_funding.feather", "")
+                        df = pd.read_parquet(fpath) if fpath.endswith(".parquet") else pd.read_feather(fpath)
+                        funding_data[symbol] = df
+                        logger.info("Loaded funding data for %s (%d rows)", symbol, len(df))
+                    except Exception as e:
+                        logger.warning("Failed to load funding data from %s: %s", fpath, e)
+                break
+
+        print(f"Looking for futures data files in: {data_paths}")
+        if funding_data:
+            print(f"Loaded funding data for {len(funding_data)} symbols")
     else:
         # CRYPTO (default): Original behavior - look in processed_data_dir
         print(f"Looking for feather files in: {processed_data_dir}")
@@ -4630,6 +4871,16 @@ def main():
                 f"{'='*80}\n"
             )
             raise FileNotFoundError(error_msg)
+
+    # ==========================================================================
+    # ADD FUTURES CONFIG TO SIM_CONFIG (for passing to objective function)
+    # ==========================================================================
+    sim_config["is_futures"] = is_futures
+    sim_config["asset_class"] = asset_class
+    if futures_config:
+        sim_config["futures_config"] = futures_config
+    if funding_data:
+        sim_config["funding_data"] = funding_data
 
     print(f"Found {len(all_feather_files)} data files:")
     for fpath in sorted(all_feather_files):

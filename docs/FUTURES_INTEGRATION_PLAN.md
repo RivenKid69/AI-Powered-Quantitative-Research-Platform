@@ -4,7 +4,7 @@
 
 **Версия**: 2.1
 **Дата**: 2025-12-02
-**Статус**: IN PROGRESS (Phase 5B Completed)
+**Статус**: IN PROGRESS (Phase 8 Completed)
 **Целевой реализм симуляции**: 95%+
 
 ---
@@ -317,7 +317,7 @@ class ExchangeVendor(str, Enum):
 | 6A | Crypto Futures Risk | 1 week | Phase 5A | ✅ DONE |
 | 6B | CME Futures Risk | 1 week | Phase 5B | ✅ DONE |
 | 7 | Unified Risk Management | 1.5 weeks | Phase 6A, 6B | ✅ DONE |
-| 8 | Training Pipeline | 2 weeks | Phase 7 | 📋 Pending |
+| 8 | Training Pipeline | 2 weeks | Phase 7 | ✅ DONE |
 | 9 | Live Trading | 1.5 weeks | Phase 8 | 📋 Pending |
 | 10 | Validation | 2 weeks | Phase 9 | 📋 Pending |
 
@@ -335,6 +335,7 @@ class ExchangeVendor(str, Enum):
 | 6A | 2025-12-02 | Crypto Futures Risk Guards (Leverage, Margin, ADL, Funding, Concentration) | 101 |
 | 6B | 2025-12-02 | CME Risk Guards (SPAN, Position Limits, Circuit Breaker, Settlement, Rollover) | 130 |
 | **7** | **2025-12-02** | **Unified Risk Management (Multi-asset, Auto-delegation, Portfolio-level)** | **116** |
+| **8** | **2025-12-02** | **Multi-Futures Training Pipeline (FuturesEnv, Feature Flags, Training Config)** | **131** |
 
 ---
 
