@@ -110,6 +110,11 @@
 | **Futures env wrapper** | `wrappers/futures_env.py` | `pytest tests/test_futures_training.py::TestFuturesEnvWrapper` |
 | **Futures feature flags** | `services/futures_feature_flags.py` | `pytest tests/test_futures_feature_flags.py` |
 | **Futures training config** | `configs/config_train_futures.yaml` | `pytest tests/test_futures_training.py::TestFuturesTrainingConfig` |
+| **Futures live runner** | `services/futures_live_runner.py` | `pytest tests/test_futures_live_trading.py::TestFuturesLiveRunner` |
+| **Futures position sync** | `services/futures_position_sync.py` | `pytest tests/test_futures_live_trading.py::TestFuturesPositionSynchronizer` |
+| **Futures margin monitor** | `services/futures_margin_monitor.py` | `pytest tests/test_futures_live_trading.py::TestFuturesMarginMonitor` |
+| **Futures funding tracker** | `services/futures_funding_tracker.py` | `pytest tests/test_futures_live_trading.py::TestFuturesFundingTracker` |
+| **Futures live config** | `configs/config_live_futures.yaml` | `pytest tests/test_futures_live_trading.py::TestFuturesLiveConfig` |
 
 ### 🔍 Quick File Reference
 
@@ -2173,9 +2178,9 @@ OANDA_PRACTICE=true  # or false for live
 
 ---
 
-## 🔮 Futures Integration (Phase 3B-8: ✅ COMPLETE | Phase 9-10: 📋 Pending)
+## 🔮 Futures Integration (Phase 3B-9: ✅ COMPLETE | Phase 10: 📋 Pending)
 
-**Статус**: ✅ Training Ready | **Документация**: `docs/FUTURES_INTEGRATION_PLAN.md`
+**Статус**: ✅ Live Ready | **Документация**: `docs/FUTURES_INTEGRATION_PLAN.md`
 
 **Completed Phases**:
 - Phase 3B: ✅ IB/CME Adapters
@@ -2187,6 +2192,7 @@ OANDA_PRACTICE=true  # or false for live
 - Phase 6B: ✅ CME Risk Guards
 - Phase 7: ✅ Unified Risk Management
 - Phase 8: ✅ Multi-Futures Training Pipeline
+- Phase 9: ✅ Unified Futures Live Trading
 
 Интеграция всех типов фьючерсов:
 
@@ -4469,6 +4475,285 @@ pytest tests/test_futures_risk_guards.py tests/test_cme_risk_guards.py -v  # 231
 
 ---
 
+## 🔴 Phase 9: Unified Futures Live Trading (COMPLETED)
+
+**Статус**: ✅ Production Ready | **Тесты**: 81/81 (100% pass) | **Date**: 2025-12-02
+
+Phase 9 implements unified live trading infrastructure for futures, including position synchronization, margin monitoring, funding rate tracking, and a coordinated live runner.
+
+### Компоненты
+
+| Компонент | Файл | Описание |
+|-----------|------|----------|
+| **FuturesLiveRunner** | `services/futures_live_runner.py` | Main live trading coordinator |
+| **FuturesPositionSynchronizer** | `services/futures_position_sync.py` | Position sync with exchange |
+| **FuturesMarginMonitor** | `services/futures_margin_monitor.py` | Real-time margin monitoring |
+| **FuturesFundingTracker** | `services/futures_funding_tracker.py` | Funding rate tracking & predictions |
+| **Live Config** | `configs/config_live_futures.yaml` | Live trading configuration |
+| **Tests** | `tests/test_futures_live_trading.py` | 81 comprehensive tests |
+
+### Key Concepts
+
+#### 1. Position Synchronization
+
+Real-time position sync between local state and exchange:
+
+```python
+from services.futures_position_sync import (
+    FuturesPositionSynchronizer,
+    FuturesSyncConfig,
+    FuturesSyncEventType,
+)
+
+config = FuturesSyncConfig(
+    exchange=Exchange.BINANCE,
+    futures_type=FuturesType.CRYPTO_PERPETUAL,
+    sync_interval_sec=10.0,       # Sync every 10 seconds
+    qty_tolerance_pct=0.001,      # 0.1% tolerance
+    auto_reconcile=False,         # Manual reconciliation
+)
+
+sync = FuturesPositionSynchronizer(
+    position_provider=position_provider,
+    account_provider=account_provider,
+    local_state_getter=get_local_positions,
+    config=config,
+    on_event=handle_sync_event,
+)
+
+# Start background sync
+await sync.start_async()
+
+# Or sync once
+events = await sync.sync_once()
+for event in events:
+    if event.event_type == FuturesSyncEventType.QTY_MISMATCH:
+        print(f"Position mismatch: {event.symbol}")
+```
+
+#### 2. Sync Event Types
+
+| Event Type | Description |
+|------------|-------------|
+| `POSITION_OPENED` | New position detected on exchange |
+| `POSITION_CLOSED` | Position closed on exchange |
+| `POSITION_MODIFIED` | Position size changed |
+| `QTY_MISMATCH` | Local vs exchange quantity differs |
+| `LEVERAGE_MISMATCH` | Leverage setting differs |
+| `LIQUIDATION_DETECTED` | Position liquidated |
+| `ADL_DETECTED` | Auto-deleveraging occurred |
+| `FUNDING_RECEIVED` | Funding payment received |
+| `FUNDING_PAID` | Funding payment made |
+| `SETTLEMENT_OCCURRED` | Daily settlement (CME) |
+| `MARGIN_CALL` | Margin call triggered |
+| `MARGIN_RATIO_LOW` | Margin ratio below threshold |
+
+#### 3. Margin Monitoring
+
+Real-time margin ratio tracking with alerts:
+
+```python
+from services.futures_margin_monitor import (
+    FuturesMarginMonitor,
+    MarginMonitorConfig,
+    MarginStatus,
+)
+
+config = MarginMonitorConfig(
+    check_interval_sec=5.0,
+    warning_ratio=1.5,    # 150%
+    danger_ratio=1.2,     # 120%
+    critical_ratio=1.05,  # 105%
+)
+
+monitor = FuturesMarginMonitor(
+    account_provider=account_provider,
+    position_provider=position_provider,
+    config=config,
+    on_status_change=handle_margin_alert,
+)
+
+# Check current status
+status = await monitor.check_margin()
+print(f"Margin ratio: {status.margin_ratio:.2f}")
+print(f"Status: {status.status}")  # HEALTHY, WARNING, DANGER, CRITICAL
+```
+
+#### 4. Funding Rate Tracking
+
+Historical tracking and prediction for crypto perpetuals:
+
+```python
+from services.futures_funding_tracker import (
+    FuturesFundingTracker,
+    FundingTrackerConfig,
+    FundingRateInfo,
+)
+
+config = FundingTrackerConfig(
+    data_dir="data/futures",
+    prediction_method="ewma",    # last, avg, ewma
+    cache_ttl_sec=300,
+)
+
+tracker = FuturesFundingTracker(
+    funding_provider=funding_provider,
+    config=config,
+)
+
+# Get current funding info
+info = await tracker.get_funding_info("BTCUSDT")
+print(f"Current rate: {info.funding_rate:.4%}")
+print(f"Next funding: {info.next_funding_time}")
+print(f"Predicted rate: {info.predicted_rate:.4%}")
+
+# Get funding statistics
+stats = tracker.get_funding_stats("BTCUSDT", lookback_days=30)
+print(f"Avg rate: {stats.avg_rate:.4%}")
+print(f"Annualized: {stats.annualized_rate:.2%}")
+```
+
+#### 5. Live Runner
+
+Coordinates all components for unified live trading:
+
+```python
+from services.futures_live_runner import (
+    FuturesLiveRunner,
+    FuturesLiveConfig,
+    create_futures_live_runner,
+)
+
+# Load from YAML
+config = FuturesLiveConfig.from_yaml("configs/config_live_futures.yaml")
+
+# Create runner
+runner = create_futures_live_runner(config)
+
+# Start live trading
+await runner.start()
+
+# Runner coordinates:
+# - Position sync (every 5-10 sec)
+# - Margin monitoring (every 5 sec)
+# - Funding tracking (every 60 sec)
+# - Signal generation (main loop)
+# - Order execution
+# - Risk management
+```
+
+### Configuration
+
+```yaml
+# configs/config_live_futures.yaml
+futures_type: "CRYPTO_PERPETUAL"
+exchange: "binance"
+symbols:
+  - "BTCUSDT"
+  - "ETHUSDT"
+
+paper_trading: true
+
+# Timing
+main_loop_interval_sec: 1.0
+position_sync_interval_sec: 5.0
+margin_check_interval_sec: 10.0
+funding_check_interval_sec: 60.0
+
+# Feature flags
+enable_position_sync: true
+enable_margin_monitoring: true
+enable_funding_tracking: true
+enable_adl_monitoring: true
+
+# Risk settings
+strict_mode: true
+max_leverage: 10
+max_position_value: 100000
+max_total_exposure: 500000
+
+# Margin thresholds
+margin:
+  warning_ratio: 1.5
+  danger_ratio: 1.2
+  critical_ratio: 1.1
+  alert_cooldown_sec: 300
+
+# Position sync settings
+position_sync:
+  interval_sec: 5.0
+  tolerance: 0.01
+  auto_reconcile: false
+
+# Funding tracking
+funding:
+  data_dir: "data/futures"
+  prediction_method: "ewma"
+  cache_ttl_sec: 300
+```
+
+### ADL Risk Levels
+
+| Level | Description | Action |
+|-------|-------------|--------|
+| `SAFE` | Low ADL risk | Normal trading |
+| `WARNING` | Moderate ADL risk | Monitor closely |
+| `DANGER` | High ADL risk | Consider reducing |
+| `CRITICAL` | Imminent ADL risk | Reduce immediately |
+
+### Тестирование
+
+```bash
+# All Phase 9 tests (81 tests)
+pytest tests/test_futures_live_trading.py -v
+
+# By category
+pytest tests/test_futures_live_trading.py::TestFuturesLiveConfig -v
+pytest tests/test_futures_live_trading.py::TestFuturesSyncConfig -v
+pytest tests/test_futures_live_trading.py::TestFuturesSyncEventType -v
+pytest tests/test_futures_live_trading.py::TestFuturesPositionSynchronizer -v
+pytest tests/test_futures_live_trading.py::TestFuturesMarginMonitor -v
+pytest tests/test_futures_live_trading.py::TestFuturesFundingTracker -v
+pytest tests/test_futures_live_trading.py::TestFuturesLiveRunner -v
+```
+
+**Coverage**: 81 tests (100% pass rate)
+
+| Category | Tests | Coverage |
+|----------|-------|----------|
+| FuturesLiveConfig | 10 | Config loading, validation, defaults |
+| FuturesSyncConfig | 6 | Sync config defaults, custom values |
+| FuturesSyncEventType | 8 | All event types |
+| FundingRateInfo | 4 | Funding rate data model |
+| MarginStatus | 5 | Margin status levels |
+| ADLRiskLevel | 4 | ADL risk classification |
+| FuturesPositionSynchronizer | 15 | Position sync workflow |
+| FuturesMarginMonitor | 10 | Margin monitoring |
+| FuturesFundingTracker | 8 | Funding tracking & prediction |
+| FuturesLiveRunner | 7 | Live runner coordination |
+| Integration | 4 | End-to-end scenarios |
+
+### Ключевые файлы
+
+| Файл | Описание |
+|------|----------|
+| `services/futures_live_runner.py` | Main live trading coordinator (~500 lines) |
+| `services/futures_position_sync.py` | Position synchronization (~600 lines) |
+| `services/futures_margin_monitor.py` | Margin monitoring (~400 lines) |
+| `services/futures_funding_tracker.py` | Funding rate tracking (~450 lines) |
+| `configs/config_live_futures.yaml` | Live trading configuration |
+| `tests/test_futures_live_trading.py` | 81 comprehensive tests |
+
+### Референсы
+
+- Phase 8: Multi-Futures Training Pipeline (prerequisite)
+- Phase 6A/6B: Crypto/CME Risk Guards (integrated)
+- Phase 7: Unified Risk Management (integrated)
+- Binance Futures API: Position, Account, Funding Rate endpoints
+- CME Group: Daily settlement procedures
+
+---
+
 ## 🛡️ Критические правила (НЕ НАРУШАТЬ!)
 
 1. **ActionProto.volume_frac = TARGET position, НЕ DELTA!**
@@ -6267,8 +6552,24 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-12-02
-**Версия документации**: 11.6 (Phase 8: Multi-Futures Training Pipeline)
-**Статус**: ✅ Production Ready (564+ test files, все критические исправления применены)
+**Версия документации**: 11.7 (Phase 9: Unified Futures Live Trading)
+**Статус**: ✅ Live Ready (565+ test files, все критические исправления применены)
+
+### Изменения в 11.7:
+- **Добавлена полная документация Phase 9 (Unified Futures Live Trading)** — 81 тестов
+  - FuturesLiveRunner — Main live trading coordinator
+  - FuturesPositionSynchronizer — Position sync with exchange
+  - FuturesMarginMonitor — Real-time margin monitoring
+  - FuturesFundingTracker — Funding rate tracking & predictions
+  - FuturesSyncConfig — Configuration with exchange, futures_type, sync_interval_sec, qty_tolerance_pct
+  - FuturesSyncEventType — 12 event types for position changes, margin calls, ADL
+  - ADLRiskLevel — SAFE, WARNING, DANGER, CRITICAL levels
+  - configs/config_live_futures.yaml — Live trading configuration
+  - 81 тестов (100% pass rate)
+- Обновлена секция "Futures Integration" — Phase 9 теперь ✅ DONE
+- Добавлены Phase 9 entries в Quick Reference таблицу
+- Обновлён FUTURES_INTEGRATION_PLAN.md с Phase 9 completion
+- Status изменён с "Training Ready" на "Live Ready"
 
 ### Изменения в 11.6:
 - **Добавлена полная документация Phase 8 (Multi-Futures Training Pipeline)** — 131 тестов
