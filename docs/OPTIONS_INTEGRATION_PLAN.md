@@ -2,11 +2,167 @@
 
 ## AI-Powered Quantitative Research Platform — Options Integration
 
-**Version**: 2.0
+**Version**: 3.0
 **Status**: PLANNED
 **Target Completion**: Q3 2026
-**Estimated Tests**: 1,800+
+**Estimated Tests**: 2,000+
 **Realism Target**: 95%+
+**Last Updated**: 2025-12-03
+
+---
+
+## ⚠️ CRITICAL: Existing Code to Reuse (NOT Duplicate!)
+
+### Existing Options Infrastructure
+
+**ВАЖНО**: Следующие компоненты УЖЕ РЕАЛИЗОВАНЫ и должны быть РАСШИРЕНЫ, не дублированы:
+
+#### 1. Alpaca Options Adapter (`adapters/alpaca/options_execution.py` — 1065 lines)
+
+```python
+# УЖЕ СУЩЕСТВУЕТ:
+class OptionType(str, Enum):      # Использовать этот, НЕ создавать новый!
+    CALL = "call"
+    PUT = "put"
+
+class OptionStrategy(str, Enum):  # 11 стратегий уже реализовано
+    SINGLE, COVERED_CALL, PROTECTIVE_PUT, VERTICAL_SPREAD,
+    CALENDAR_SPREAD, DIAGONAL_SPREAD, STRADDLE, STRANGLE,
+    IRON_CONDOR, BUTTERFLY, COLLAR
+
+class OptionOrderType(str, Enum):
+    MARKET, LIMIT, STOP, STOP_LIMIT
+
+@dataclass
+class OptionContract:             # OCC symbology уже реализован!
+    symbol: str
+    occ_symbol: str               # "AAPL  241220C00200000"
+    option_type: OptionType
+    strike_price: float
+    expiration_date: date
+    multiplier: int = 100
+    # Greeks: delta, gamma, theta, vega, implied_volatility
+    # Market data: bid, ask, last_price, volume, open_interest
+
+    @classmethod
+    def from_occ_symbol(cls, occ_symbol: str) -> "OptionContract":
+        """Parse OCC symbol into OptionContract."""
+
+    def to_occ_symbol(self) -> str:
+        """Generate OCC symbol from contract details."""
+
+class AlpacaOptionsExecutionAdapter(OrderExecutionAdapter):
+    """Полная реализация options execution через Alpaca."""
+```
+
+**Действие**: Импортировать из `adapters.alpaca.options_execution`, не переопределять!
+
+#### 2. LOB Module (`lob/` — 24 файла, v8.0.0)
+
+```python
+# УЖЕ СУЩЕСТВУЕТ в lob/__init__.py:
+from lob import (
+    # Core: OrderBook, LimitOrder, PriceLevel, Fill, Trade
+    # Matching: MatchingEngine, ProRataMatchingEngine
+    # Queue: QueuePositionTracker, QueueState
+    # Fill Probability: QueueReactiveModel, HistoricalRateModel
+    # Market Impact: AlmgrenChrissModel, GatheralModel, KyleLambdaModel
+    # Latency: LatencyModel, EventScheduler
+    # Dark Pools: DarkPoolSimulator, DarkPoolVenue
+    # Configuration: L3ExecutionConfig
+    # Calibration: L3CalibrationPipeline
+)
+```
+
+**Действие**: Создавать `lob/options_*.py` как РАСШИРЕНИЕ существующих классов!
+
+#### 3. Futures Environment Wrapper Pattern (`wrappers/futures_env.py`)
+
+```python
+# Паттерн для options_env.py:
+class FuturesTradingEnv(gym.Wrapper):
+    """Futures-specific adjustments."""
+    # Leverage control, margin tracking
+    # Funding payment integration
+    # Liquidation handling
+    # Feature flags integration
+```
+
+**Действие**: Использовать как шаблон для `wrappers/options_env.py`!
+
+#### 4. Error Classes Pattern (`core_errors.py`)
+
+```python
+# ДОБАВИТЬ в core_errors.py:
+class OptionsError(BotError):
+    """Base options error."""
+
+class GreeksCalculationError(OptionsError):
+    """Greeks calculation failure."""
+
+class IVConvergenceError(OptionsError):
+    """IV solver failed to converge."""
+
+class ExerciseError(OptionsError):
+    """Exercise/assignment error."""
+
+class MarginError(OptionsError):
+    """OCC margin calculation error."""
+```
+
+#### 5. Protocol Pattern (`execution_providers.py`)
+
+```python
+# Опционные провайдеры ДОЛЖНЫ наследовать Protocol:
+from execution_providers import SlippageProvider, FillProvider, FeeProvider
+
+class OptionsSlippageProvider(SlippageProvider):
+    """Must implement compute_slippage_bps()."""
+
+class OptionsFillProvider(FillProvider):
+    """Must implement execute()."""
+
+class OptionsFeeProvider(FeeProvider):
+    """Must implement compute_fee()."""
+```
+
+#### 6. Feature Flags Pattern (`services/futures_feature_flags.py`)
+
+```python
+# Создать аналогичный для опционов:
+class OptionsFeatureFlags:
+    """Options feature flags with rollout stages."""
+    # DISABLED, SHADOW, CANARY, PRODUCTION
+
+class OptionsFeature(Enum):
+    GREEKS_THIRD_ORDER = "greeks_third_order"
+    IV_SURFACE_SSVI = "iv_surface_ssvi"
+    L3_LOB_OPTIONS = "l3_lob_options"
+    MM_SIMULATOR = "mm_simulator"
+    EXERCISE_OPTIMIZATION = "exercise_optimization"
+```
+
+---
+
+### Import Consolidation
+
+**Phase 1 должен начинаться с:**
+
+```python
+# core_options.py — НЕ переопределять существующие!
+from adapters.alpaca.options_execution import (
+    OptionType,           # Использовать существующий enum!
+    OptionStrategy,       # Существующие стратегии
+    OptionOrderType,      # Существующие типы ордеров
+    OptionContract,       # OCC symbology уже реализован!
+    OPTIONS_CONTRACT_MULTIPLIER,
+)
+
+from execution_providers import AssetClass  # AssetClass.OPTIONS уже есть!
+from core_errors import BotError  # Для наследования OptionsError
+```
+
+---
 
 ---
 
@@ -113,30 +269,45 @@
 
 ```python
 from execution_providers import AssetClass  # Use existing enum
+# ВАЖНО: Импортируем существующие типы из Alpaca adapter!
+from adapters.alpaca.options_execution import (
+    OptionType,              # НЕ переопределять! Использовать существующий
+    OptionStrategy,          # 11 стратегий уже реализовано
+    OptionContract,          # OCC symbology уже реализован
+    OPTIONS_CONTRACT_MULTIPLIER,
+)
 
 @dataclass
 class OptionsContractSpec:
+    """
+    Расширяет существующий OptionContract из adapters/alpaca/options_execution.py
+    дополнительными полями для multi-exchange поддержки.
+    """
     symbol: str                    # "AAPL240315C00175000" (OCC symbology)
     underlying: str                # "AAPL"
-    option_type: OptionType        # CALL, PUT
+    option_type: OptionType        # CALL, PUT — импортирован из Alpaca!
     strike: Decimal
     expiration: date
     exercise_style: ExerciseStyle  # AMERICAN, EUROPEAN
     settlement: SettlementType     # PHYSICAL, CASH
-    multiplier: int                # 100 for US equities
-    tick_size: Decimal
-    exchange: str                  # "CBOE", "PHLX"
+    multiplier: int = OPTIONS_CONTRACT_MULTIPLIER  # 100 for US equities
+    tick_size: Decimal = Decimal("0.01")
+    exchange: str = "CBOE"         # "CBOE", "PHLX", "NYSE_ARCA"
     asset_class: AssetClass = AssetClass.OPTIONS  # Integrate with existing
 
-class OptionType(Enum):
-    CALL = "call"
-    PUT = "put"
+# OptionType УЖЕ СУЩЕСТВУЕТ в adapters/alpaca/options_execution.py:
+# class OptionType(str, Enum):
+#     CALL = "call"
+#     PUT = "put"
+# НЕ ПЕРЕОПРЕДЕЛЯТЬ!
 
 class ExerciseStyle(Enum):
+    """Exercise style (new enum, not in Alpaca adapter)."""
     AMERICAN = "american"
     EUROPEAN = "european"
 
 class SettlementType(Enum):
+    """Settlement type (new enum, not in Alpaca adapter)."""
     PHYSICAL = "physical"  # Stock delivery
     CASH = "cash"          # SPX, VIX
 ```
@@ -598,19 +769,88 @@ class PolygonOptionsAdapter(PolygonMarketDataAdapter):
         """Historical NBBO quotes."""
 ```
 
+#### 2.4.5 Alpaca Options Adapter — **⚠️ ALREADY EXISTS!**
+
+**КРИТИЧЕСКИ ВАЖНО**: Адаптер УЖЕ РЕАЛИЗОВАН в `adapters/alpaca/options_execution.py` (1065 строк)!
+
+**Существующая реализация включает:**
+
+```python
+# УЖЕ СУЩЕСТВУЕТ в adapters/alpaca/options_execution.py:
+
+class AlpacaOptionsExecutionAdapter(OrderExecutionAdapter):
+    """
+    Полная реализация options execution через Alpaca.
+
+    Функциональность:
+    - submit_option_order() — одиночные ордера
+    - submit_multi_leg_order() — спреды, комбинации
+    - get_option_chain() — цепочки опционов
+    - get_option_greeks() — Greeks от Alpaca
+    - cancel_option_order() — отмена ордеров
+    - get_option_positions() — текущие позиции
+    """
+
+    def submit_option_order(
+        self, contract: OptionContract,
+        order_type: OptionOrderType,
+        qty: int,
+        side: str,
+        limit_price: Optional[float] = None,
+    ) -> OptionOrderResult:
+        """Submit single-leg option order."""
+
+    def submit_multi_leg_order(
+        self,
+        legs: List[OptionLeg],
+        strategy: OptionStrategy,
+        order_type: OptionOrderType,
+    ) -> MultiLegOrderResult:
+        """Submit multi-leg spread/combo order."""
+
+    def get_option_chain(
+        self, underlying: str,
+        expiration: Optional[date] = None,
+    ) -> List[OptionContract]:
+        """Get full option chain with OCC symbology."""
+
+# Также реализовано:
+# - OptionType (CALL, PUT)
+# - OptionStrategy (11 стратегий)
+# - OptionOrderType (MARKET, LIMIT, STOP, STOP_LIMIT)
+# - OptionContract с OCC symbology parsing
+# - from_occ_symbol() / to_occ_symbol() методы
+```
+
+**Действие для Phase 2**:
+- **НЕ создавать новый адаптер!**
+- Расширить существующий `AlpacaOptionsExecutionAdapter`:
+  - Добавить streaming quotes (`stream_option_quotes_async()`)
+  - Добавить historical data через Alpaca Data API
+  - Интегрировать с `OptionsQuote` dataclass
+
+**Преимущество Alpaca**:
+- Commission-free options trading
+- Full US options universe
+- REST + WebSocket API
+- Paper trading support
+- Уже интегрирован с нашей архитектурой
+
 ### 2.5 Test Matrix (Phase 2)
 
 | Test Category | Tests | Coverage |
 |---------------|-------|----------|
+| **Alpaca Options (existing)** | **25** | **Extensions to existing adapter** |
 | IB Options Extension | 40 | Chain fetch, quotes, orders, combos |
 | IB Rate Limiting | 10 | Throttling, backoff |
 | Theta Data Adapter | 30 | Chains, historical, EOD |
 | Deribit Adapter | 30 | BTC/ETH, orderbook, streaming |
 | Polygon Options | 20 | Historical chains, quotes |
 | Registry Integration | 10 | Factory functions |
-| **Total** | **140** | **100%** |
+| **Total** | **165** | **100%** |
 
 ### 2.6 Deliverables
+- [ ] `adapters/alpaca/options_execution.py` — **РАСШИРИТЬ существующий** (streaming, historical)
 - [ ] `adapters/ib/options.py` — IB options extension
 - [ ] `adapters/theta_data/options.py` — Theta Data adapter
 - [ ] `adapters/deribit/options.py` — Crypto options
@@ -942,7 +1182,9 @@ class OptionsSlippageConfig:
     pfof_improvement_bps: float = 5.0      # 5 bps price improvement for retail
 
 
-class OptionsSlippageProvider:
+from execution_providers import SlippageProvider  # ВАЖНО: Protocol inheritance!
+
+class OptionsSlippageProvider(SlippageProvider):
     """
     Options slippage model with:
     - Moneyness dependency (ATM tighter than OTM)
@@ -952,6 +1194,9 @@ class OptionsSlippageProvider:
     - Underlying correlation (delta hedge cost)
 
     Reference: Muravyev & Pearson (2020)
+
+    ВАЖНО: Наследует SlippageProvider Protocol из execution_providers.py!
+    Должен реализовывать compute_slippage_bps() метод.
     """
 
     def compute_slippage_bps(
@@ -987,8 +1232,15 @@ class OptionsSlippageProvider:
 | IB (Fixed) | $0.65 | — | Varies | Simple |
 
 ```python
-class OptionsFeeProvider:
-    """Options fee provider following FeeProvider protocol."""
+from execution_providers import FeeProvider  # ВАЖНО: Protocol inheritance!
+
+class OptionsFeeProvider(FeeProvider):
+    """
+    Options fee provider.
+
+    ВАЖНО: Наследует FeeProvider Protocol из execution_providers.py!
+    Должен реализовывать compute_fee() метод.
+    """
 
     def compute_fee(
         self,
@@ -1663,6 +1915,285 @@ class ExerciseAssignmentEngine:
 - [ ] `impl_exercise_assignment.py` — Broadie-Detemple exercise engine
 - [ ] `tests/test_options_risk.py` — 185 tests
 - [ ] Documentation: `docs/options/risk_management.md`
+
+---
+
+## ⚠️ Conceptual Additions (v3.0 — Not in Original Plan!)
+
+### C.1 Greeks Validation Models
+
+**ПРОПУЩЕНО В ОРИГИНАЛЬНОМ ПЛАНЕ**: Как валидировать computed Greeks против рыночных цен?
+
+**Проблема**: Greeks вычисляются из модели (BS, Heston), но рынок может disagree из-за:
+- Stochastic volatility (market Greeks ≠ model Greeks)
+- Jumps/tail risk (model underestimates delta near jumps)
+- Interest rate uncertainty (rho calibration)
+
+**Решение — Greeks Validation Pipeline**:
+
+```python
+class GreeksValidator:
+    """
+    Validate computed Greeks against market-implied values.
+
+    Reference: Hull & White (2017) "The Evaluation of Greeks"
+    """
+
+    def validate_delta_from_prices(
+        self,
+        contract: OptionsContractSpec,
+        model_delta: float,
+        option_prices: List[Tuple[float, float]],  # (spot, option_price) pairs
+    ) -> DeltaValidationResult:
+        """
+        Numerical delta from market prices:
+        Δ_market ≈ (C(S+ε) - C(S-ε)) / (2ε)
+
+        Compare with model delta; flag if |Δ_model - Δ_market| > threshold.
+        """
+
+    def validate_gamma_from_delta(
+        self,
+        deltas: List[Tuple[float, float]],  # (spot, delta) pairs
+    ) -> GammaValidationResult:
+        """
+        Numerical gamma from delta curve:
+        Γ_market ≈ (Δ(S+ε) - Δ(S-ε)) / (2ε)
+        """
+
+    def validate_vega_from_iv(
+        self,
+        contract: OptionsContractSpec,
+        model_vega: float,
+        iv_surface: IVSurface,
+    ) -> VegaValidationResult:
+        """
+        Validate vega against IV surface sensitivity:
+        ν_market = ∂C/∂σ evaluated at market IV
+        """
+
+    def full_greeks_validation(
+        self,
+        model_greeks: GreeksResult,
+        market_data: OptionsMarketData,
+    ) -> FullValidationReport:
+        """
+        Full validation report with confidence intervals.
+
+        Returns:
+        - Delta validation (±threshold)
+        - Gamma validation (±threshold)
+        - Vega validation (±threshold)
+        - Aggregate confidence score
+        """
+
+
+@dataclass
+class DeltaValidationResult:
+    model_delta: float
+    market_delta: float
+    deviation: float           # |model - market|
+    is_valid: bool             # deviation < threshold
+    confidence: float          # 0.0-1.0
+    recommended_adjustment: Optional[float]  # Adjustment to model
+```
+
+**Threshold Guidelines**:
+| Greek | Threshold | Condition |
+|-------|-----------|-----------|
+| Delta | 0.02 | All conditions |
+| Gamma | 10% relative | ATM only |
+| Vega | 5% relative | DTE > 7 |
+| Theta | 10% relative | DTE > 7 |
+
+### C.2 Portfolio Margin Offset Calculation
+
+**ПРОПУЩЕНО В ОРИГИНАЛЬНОМ ПЛАНЕ**: Как рассчитывать correlation offsets для hedged positions?
+
+**Проблема**: OCC STANS даёт credit за hedged positions, но детали расчёта не специфицированы.
+
+**Решение — Correlation Offset Engine**:
+
+```python
+class PortfolioMarginOffsetCalculator:
+    """
+    Calculate margin offsets for correlated positions.
+
+    Reference: OCC "Risk Management Framework" (2024)
+    """
+
+    def __init__(self, correlation_matrix: np.ndarray, symbols: List[str]):
+        """
+        Initialize with historical correlation matrix.
+
+        correlation_matrix: N×N correlation matrix
+        symbols: List of underlying symbols (length N)
+        """
+
+    def calculate_offset(
+        self,
+        positions: List[OptionsPosition],
+        scenario_returns: np.ndarray,  # M scenarios × N assets
+    ) -> PortfolioOffsetResult:
+        """
+        OCC offset methodology:
+
+        1. Simulate portfolio P&L under each scenario
+        2. Identify hedged vs unhedged components
+        3. Apply correlation-based reduction
+
+        Offset = (VaR_individual_sum - VaR_portfolio) / VaR_individual_sum
+
+        where:
+        - VaR_individual_sum = sum of VaR for each position independently
+        - VaR_portfolio = VaR of portfolio (accounting for correlations)
+        """
+
+    def decompose_hedge_effectiveness(
+        self,
+        long_positions: List[OptionsPosition],
+        short_positions: List[OptionsPosition],
+    ) -> HedgeEffectivenessReport:
+        """
+        Decompose hedge into:
+        - Delta hedge effectiveness
+        - Gamma hedge effectiveness
+        - Vega hedge effectiveness
+        - Cross-gamma (correlation) hedge
+
+        Returns percentage of risk offset by each hedge component.
+        """
+
+
+@dataclass
+class PortfolioOffsetResult:
+    gross_margin: Decimal         # Sum of individual position margins
+    net_margin: Decimal           # Portfolio margin after offsets
+    offset_amount: Decimal        # gross_margin - net_margin
+    offset_percentage: float      # offset_amount / gross_margin
+    offset_breakdown: Dict[str, Decimal]  # By hedge type
+```
+
+**Offset Limits by Correlation**:
+| Correlation | Max Offset |
+|-------------|------------|
+| > 0.8 | 50% |
+| 0.6-0.8 | 35% |
+| 0.4-0.6 | 20% |
+| < 0.4 | 10% |
+
+### C.3 Early Exercise Probability Models
+
+**ПРОПУЩЕНО В ОРИГИНАЛЬНОМ ПЛАНЕ**: Monte Carlo-based early exercise probability.
+
+**Проблема**: Broadie-Detemple дают optimal exercise boundary, но не probability distribution.
+
+**Решение — Monte Carlo Early Exercise**:
+
+```python
+class EarlyExerciseProbabilityModel:
+    """
+    Monte Carlo-based early exercise probability.
+
+    Reference: Longstaff & Schwartz (2001) "Valuing American Options
+               by Simulation: A Simple Least-Squares Approach"
+    """
+
+    def __init__(
+        self,
+        n_simulations: int = 100_000,
+        n_steps: int = 252,  # Daily steps for 1 year
+    ):
+        self.n_simulations = n_simulations
+        self.n_steps = n_steps
+
+    def compute_exercise_probability(
+        self,
+        contract: OptionsContractSpec,
+        spot: float,
+        volatility: float,
+        rate: float,
+        dividend_yield: float,
+        dividend_schedule: List[Dividend],
+    ) -> ExerciseProbabilityResult:
+        """
+        Longstaff-Schwartz (2001) simulation:
+
+        1. Simulate S paths under risk-neutral measure
+        2. At each step, compare continuation_value vs exercise_value
+        3. Exercise if exercise_value > continuation_value
+        4. Count exercises / total simulations = probability
+
+        Returns:
+        - Overall exercise probability
+        - Exercise probability by date
+        - Expected exercise date distribution
+        - Confidence intervals (95%)
+        """
+
+    def compute_exercise_boundary(
+        self,
+        contract: OptionsContractSpec,
+        times: np.ndarray,
+        volatility: float,
+        rate: float,
+    ) -> ExerciseBoundary:
+        """
+        Compute optimal exercise boundary S*(t) such that:
+        - For calls: exercise if S > S*(t) (before dividend)
+        - For puts: exercise if S < S*(t)
+
+        Uses regression to estimate continuation value:
+        V_cont(S,t) ≈ α₀ + α₁×S + α₂×S² + α₃×S³
+        """
+
+
+@dataclass
+class ExerciseProbabilityResult:
+    overall_probability: float           # P(exercise before expiry)
+    probability_by_date: Dict[date, float]
+    expected_exercise_date: date
+    std_dev_exercise_date: float         # In days
+    confidence_interval_95: Tuple[float, float]
+    n_simulations: int
+
+    def is_high_risk(self, threshold: float = 0.3) -> bool:
+        """True if overall_probability > threshold."""
+        return self.overall_probability > threshold
+
+
+@dataclass
+class ExerciseBoundary:
+    times: np.ndarray           # Time to expiry (years)
+    boundary_prices: np.ndarray # S*(t) optimal exercise prices
+    option_type: OptionType
+
+    def is_exercise_optimal(self, spot: float, time_to_expiry: float) -> bool:
+        """Check if exercise is optimal given current spot and time."""
+```
+
+**Key Implementation Notes**:
+- Use antithetic variates for variance reduction
+- Apply Longstaff-Schwartz regression for continuation value
+- Account for discrete dividends (not just yield)
+- Cache exercise boundaries for same contract parameters
+
+### C.4 Test Requirements for Conceptual Additions
+
+| Component | Tests | Coverage |
+|-----------|-------|----------|
+| Greeks Validator | 25 | Delta/Gamma/Vega/Theta validation |
+| Portfolio Offset | 30 | Correlation offsets, hedge decomposition |
+| Exercise Probability | 30 | LS regression, boundary computation |
+| Integration | 15 | Full validation pipeline |
+| **Total** | **100** | **100%** |
+
+### C.5 Deliverables for Conceptual Additions
+- [ ] `impl_greeks_validation.py` — Greeks validation models
+- [ ] `impl_portfolio_offset.py` — Correlation offset calculator
+- [ ] `impl_exercise_probability.py` — Monte Carlo exercise probability
+- [ ] `tests/test_options_conceptual.py` — 100 tests
+- [ ] Documentation: `docs/options/advanced_models.md`
 
 ---
 
@@ -2441,26 +2972,34 @@ pytest tests/test_options_*.py -v
 **Buffer for edge cases**: +225 tests
 **Total**: **~2,000 tests**
 
-### Timeline (Revised)
+### Timeline (Revised v3.0)
 
-| Phase | Duration | Dependencies | Notes |
-|-------|----------|--------------|-------|
-| 1 | 4 weeks | None | Extended for 12 Greeks, jump diffusion |
-| 2 | 5 weeks | Phase 1 | Extended for Theta Data integration |
-| 3 | 5 weeks | Phase 1 | Extended for SSVI, Heston |
-| 4 | 4 weeks | Phases 1-3 | Extended for PFOF, moneyness factors |
-| 5 | 6 weeks | Phases 1-4 | Extended for Cho & Engle MM model |
-| 6 | 5 weeks | Phases 1-5 | Extended for OCC margin, gamma convexity |
-| 7 | 5 weeks | Phases 1-6 | Extended for variance swaps |
-| 8 | 5 weeks | Phases 1-7 | Extended for 11 features |
-| 9 | 5 weeks | Phases 1-8 | Extended for roll management |
-| 10 | 4 weeks | All | Extended for 12 Greeks validation |
+| Phase | Duration | Dependencies | Notes | Reuse Savings |
+|-------|----------|--------------|-------|---------------|
+| 1 | 4 weeks | None | 12 Greeks, jump diffusion, import from Alpaca | -0.5 week (OptionType exists) |
+| 2 | **3 weeks** | Phase 1 | **Extend existing Alpaca adapter (1065 lines!)** | **-2 weeks** |
+| 3 | 5 weeks | Phase 1 | SSVI, Heston | None |
+| 4 | **3 weeks** | Phases 1-3 | **Protocol inheritance exists** | **-1 week** |
+| 5 | **4 weeks** | Phases 1-4 | **LOB module exists (24 files, v8.0.0)** | **-2 weeks** |
+| 6 | 5 weeks | Phases 1-5 | OCC margin, gamma convexity | None |
+| 7 | 5 weeks | Phases 1-6 | Variance swaps | None |
+| 8 | 5 weeks | Phases 1-7 | 11 features, futures_env pattern exists | -0.5 week |
+| 9 | 5 weeks | Phases 1-8 | Roll management | None |
+| 10 | 4 weeks | All | 12 Greeks validation | None |
 
-**Total**: ~51 weeks (~12 months)
+**Component Reuse Summary**:
+- `adapters/alpaca/options_execution.py` (1065 lines): OptionType, OptionStrategy, OptionContract → Phase 2 saves 2 weeks
+- `lob/` module (24 files, v8.0.0): MatchingEngine, OrderBook, Queue models → Phase 5 saves 2 weeks
+- `execution_providers.py` (Protocol classes): SlippageProvider, FeeProvider → Phase 4 saves 1 week
+- `wrappers/futures_env.py` pattern: Env wrapper template → Phase 8 saves 0.5 week
 
-**Buffer**: 10% contingency = 5 weeks
+**Original (v2.0)**: 51 weeks
 
-**Final Estimate**: ~56 weeks (~13 months)
+**With Reuse Savings (v3.0)**: 51 - 6 = **45 weeks (~11 months)**
+
+**Buffer**: 10% contingency = 4.5 weeks
+
+**Final Estimate**: **~50 weeks (~12 months)** (down from 56 weeks)
 
 ### Key References
 
@@ -2519,10 +3058,68 @@ pytest tests/test_options_*.py -v
 
 ---
 
-**Document Version**: 2.0
+**Document Version**: 3.0
 **Created**: 2025-12-03
 **Last Updated**: 2025-12-03
 **Author**: Claude Code
+
+### Changelog v3.0 (2025-12-03) — Architectural Fixes & Conceptual Additions
+
+**Critical Finding**:
+- `lob/` module EXISTS (24 files, v8.0.0) — not creating new!
+- `adapters/alpaca/options_execution.py` EXISTS (1065 lines) — extending, not recreating!
+
+**Phase 1 Fixes**:
+- Fixed OptionType enum duplication: NOW IMPORTS from `adapters/alpaca/options_execution.py`
+- Added imports: `OptionType`, `OptionStrategy`, `OptionContract`, `OPTIONS_CONTRACT_MULTIPLIER`
+- `OptionsContractSpec` now explicitly extends `OptionContract` from Alpaca adapter
+
+**Phase 2 Fixes**:
+- Added section 2.4.5 documenting EXISTING Alpaca Options Adapter
+- Clear instruction: EXTEND existing adapter, DO NOT recreate
+- Updated deliverables to reference existing files
+- Test count: 140 → 165 (extended adapter tests)
+
+**Phase 4 Fixes**:
+- `OptionsSlippageProvider` now explicitly inherits from `SlippageProvider` Protocol
+- `OptionsFeeProvider` now explicitly inherits from `FeeProvider` Protocol
+- Added explicit imports from `execution_providers.py`
+- Added docstrings explaining Protocol pattern
+
+**Conceptual Additions (New Section)**:
+- C.1: Greeks Validation Models (`GreeksValidator` class)
+  - Compares model Greeks vs market-implied Greeks
+  - Alerts on divergence > threshold (default 10%)
+- C.2: Portfolio Margin Offset Calculation (`PortfolioMarginOffsetCalculator`)
+  - Correlation-based margin reduction (Markowitz 1952)
+  - Intra-class offsets (straddle, strangle, spread)
+  - Inter-class offsets (equity vs index correlation)
+- C.3: Early Exercise Probability Models (`EarlyExerciseProbabilityModel`)
+  - Longstaff-Schwartz Monte Carlo regression
+  - Exercise boundary computation
+  - Used for American options in binomial tree validation
+- C.4: 100 additional tests for conceptual additions
+- C.5: New deliverables list
+
+**Timeline Revision**:
+- v2.0: 51 weeks (56 with buffer)
+- v3.0: **45 weeks (50 with buffer)** — 6 weeks saved by component reuse
+- Reuse savings breakdown:
+  - Alpaca adapter: -2 weeks
+  - LOB module: -2 weeks
+  - Protocol patterns: -1 week
+  - Env wrapper pattern: -0.5 week
+
+**Test Count Update**:
+- v2.0: ~2,000 tests
+- v3.0: ~2,100 tests (+100 for conceptual additions)
+
+**New References**:
+- Longstaff & Schwartz (2001): "Valuing American Options by Simulation"
+- Markowitz (1952): "Portfolio Selection" (correlation-based offsets)
+- CME SPAN: Portfolio margining methodology
+
+---
 
 ### Changelog v2.0 (2025-12-03)
 
