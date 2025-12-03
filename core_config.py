@@ -17,6 +17,8 @@ import logging
 import math
 
 from services.universe import get_symbols
+# Backward compatibility: FeatureSpec now lives in transformers, but some tests/imports expect core_config.FeatureSpec
+from transformers import FeatureSpec
 
 
 class ComponentSpec(BaseModel):
@@ -1351,6 +1353,7 @@ def _set_seasonality_log_level(cfg: CommonRunConfig) -> None:
 __all__ = [
     "ComponentSpec",
     "Components",
+    "FeatureSpec",
     "ClockSyncConfig",
     "TimingConfig",
     "TimingProfileSpec",
