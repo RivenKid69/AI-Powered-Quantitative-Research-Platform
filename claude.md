@@ -118,6 +118,15 @@
 | **Futures validation** | `tests/test_futures_validation.py` | `pytest tests/test_futures_validation.py` |
 | **Futures backward compat** | `tests/test_futures_backward_compatibility.py` | `pytest tests/test_futures_backward_compatibility.py` |
 | **Futures benchmarks** | `benchmarks/bench_futures_simulation.py` | `python benchmarks/bench_futures_simulation.py` |
+| **Options pricing (BS/Binomial)** | `impl_pricing.py` | `pytest tests/test_options_core.py::TestBlackScholesPricing` |
+| **Options Greeks (12)** | `impl_greeks_vectorized.py` | `pytest tests/test_options_core.py::TestScalarGreeks` |
+| **Options batch Greeks** | `impl_greeks_vectorized.py` | `pytest tests/test_options_core.py::TestVectorizedGreeks` |
+| **Options IV solver** | `impl_iv_calculation.py` | `pytest tests/test_options_core.py::TestIVCalculation` |
+| **Options exercise prob** | `impl_exercise_probability.py` | `pytest tests/test_options_core.py::TestExerciseProbability` |
+| **Options LSMC** | `impl_exercise_probability.py` | `pytest tests/test_options_core.py::TestLongstaffSchwartzMC` |
+| **Options variance swap** | `impl_pricing.py` | `pytest tests/test_options_core.py::TestVarianceSwap` |
+| **Options jump diffusion** | `impl_pricing.py` | `pytest tests/test_options_core.py::TestJumpDiffusionPricing` |
+| **Options discrete dividends** | `impl_pricing.py` | `pytest tests/test_options_core.py::TestDiscreteDividends` |
 
 ### 🔍 Quick File Reference
 
@@ -4875,6 +4884,235 @@ python benchmarks/bench_futures_simulation.py
 
 ---
 
+## 📈 Options Integration (Phase 1: COMPLETED)
+
+**Статус**: ✅ Production Ready | **Тесты**: 240/240 (100% pass) | **Date**: 2025-12-03
+
+Phase 1 implements core options pricing, Greeks computation, IV solving, and exercise probability analysis.
+
+### Компоненты
+
+| Компонент | Файл | Описание |
+|-----------|------|----------|
+| **Black-Scholes Pricing** | `impl_pricing.py` | BSM with continuous dividends |
+| **Binomial Trees** | `impl_pricing.py` | Leisen-Reimer, CRR |
+| **Jump Diffusion** | `impl_pricing.py` | Merton model with Poisson jumps |
+| **Variance Swap** | `impl_pricing.py` | Strike calculation via replication |
+| **Discrete Dividends** | `impl_pricing.py` | Escrowed, piecewise-lognormal |
+| **Greeks (12)** | `impl_greeks_vectorized.py` | Delta, Gamma, Theta, Vega, Rho, Vanna, Volga, Charm, Speed, Color, Zomma, Ultima |
+| **Batch Greeks** | `impl_greeks_vectorized.py` | Vectorized NumPy computation |
+| **IV Solver** | `impl_iv_calculation.py` | Hybrid Newton-Raphson/Brent/bisection |
+| **Exercise Probability** | `impl_exercise_probability.py` | LSMC, Barone-Adesi-Whaley |
+| **Core Models** | `core_options.py` | OptionsContractSpec, GreeksResult, IVResult |
+
+### Key Concepts
+
+#### 1. Black-Scholes-Merton with Dividends
+
+```python
+from impl_pricing import black_scholes_price
+
+# Call option price
+price = black_scholes_price(
+    spot=100.0,
+    strike=100.0,
+    time_to_expiry=0.25,  # 3 months
+    rate=0.05,            # 5% risk-free rate
+    dividend_yield=0.02,  # 2% continuous dividend
+    volatility=0.20,      # 20% volatility
+    is_call=True,
+)
+```
+
+#### 2. All 12 Greeks
+
+| Greek | Symbol | Definition | Order |
+|-------|--------|------------|-------|
+| Delta | Δ | ∂V/∂S | 1st |
+| Gamma | Γ | ∂²V/∂S² | 2nd |
+| Theta | Θ | ∂V/∂t | 1st |
+| Vega | ν | ∂V/∂σ | 1st |
+| Rho | ρ | ∂V/∂r | 1st |
+| Vanna | | ∂²V/∂S∂σ | 2nd |
+| Volga | | ∂²V/∂σ² | 2nd |
+| Charm | | ∂²V/∂S∂t | 2nd |
+| Speed | | ∂³V/∂S³ | 3rd |
+| Color | | ∂³V/∂S²∂t | 3rd |
+| Zomma | | ∂³V/∂S²∂σ | 3rd |
+| Ultima | | ∂³V/∂σ³ | 3rd |
+
+```python
+from impl_greeks_vectorized import compute_all_greeks
+
+greeks = compute_all_greeks(
+    spot=100.0, strike=100.0, time_to_expiry=0.25,
+    rate=0.05, dividend_yield=0.0, volatility=0.20, is_call=True,
+)
+print(f"Delta: {greeks.delta:.4f}")
+print(f"Gamma: {greeks.gamma:.6f}")
+print(f"Vega: {greeks.vega:.4f}")
+```
+
+#### 3. Vectorized Batch Greeks
+
+```python
+from impl_greeks_vectorized import compute_all_greeks_batch
+import numpy as np
+
+# Portfolio of 1000 options
+n = 1000
+result = compute_all_greeks_batch(
+    spot=np.full(n, 100.0),
+    strike=np.linspace(80, 120, n),
+    time_to_expiry=np.full(n, 0.25),
+    rate=np.full(n, 0.05),
+    dividend_yield=np.full(n, 0.0),
+    volatility=np.full(n, 0.20),
+    is_call=np.ones(n, dtype=bool),
+)
+# result.delta, result.gamma, etc. are all numpy arrays of shape (n,)
+```
+
+#### 4. Implied Volatility Solver
+
+```python
+from impl_iv_calculation import calculate_iv
+
+result = calculate_iv(
+    spot=100.0, strike=100.0, time_to_expiry=0.25,
+    rate=0.05, dividend_yield=0.0,
+    market_price=5.5, is_call=True,
+)
+if result.converged:
+    print(f"IV: {result.implied_volatility:.2%}")
+```
+
+#### 5. American Options (Barone-Adesi-Whaley)
+
+```python
+from impl_exercise_probability import barone_adesi_whaley
+
+american_price, early_exercise_premium = barone_adesi_whaley(
+    spot=100.0, strike=100.0, time_to_expiry=0.25,
+    rate=0.05, dividend_yield=0.0, volatility=0.20, is_call=False,
+)
+```
+
+#### 6. Longstaff-Schwartz Monte Carlo
+
+```python
+from impl_exercise_probability import (
+    longstaff_schwartz_price,
+    compute_exercise_probability,
+)
+
+# LSMC price for American put
+price = longstaff_schwartz_price(
+    spot=100.0, strike=100.0, time_to_expiry=0.25,
+    rate=0.05, dividend_yield=0.0, volatility=0.20,
+    is_call=False, n_paths=50000, n_steps=50, seed=42,
+)
+
+# Exercise probability at each timestep
+probs = compute_exercise_probability(
+    spot=100.0, strike=100.0, time_to_expiry=0.25,
+    rate=0.05, dividend_yield=0.0, volatility=0.20,
+    is_call=False, n_paths=10000, n_steps=50,
+)
+```
+
+#### 7. Variance Swap Strike
+
+Based on Demeterfi et al. (1999) replication formula:
+
+```python
+from impl_pricing import variance_swap_strike, compute_variance_swap_value
+import numpy as np
+
+# Strike grid for replication
+strikes = np.array([70, 80, 90, 100, 110, 120, 130])
+call_prices = np.array([...])  # From market
+put_prices = np.array([...])   # From market
+
+strike = variance_swap_strike(
+    call_prices=call_prices,
+    put_prices=put_prices,
+    call_strikes=strikes,
+    put_strikes=strikes,
+    forward=100.0,
+    rate=0.05,
+    time_to_expiry=0.25,
+)
+# strike ≈ σ² (fair variance)
+```
+
+### Pricing Methods
+
+| Method | Function | Use Case |
+|--------|----------|----------|
+| Black-Scholes | `black_scholes_price()` | European options |
+| Leisen-Reimer | `binomial_tree_lr()` | American options, smooth convergence |
+| Cox-Ross-Rubinstein | `binomial_tree_crr()` | American options, education |
+| Merton Jump-Diffusion | `merton_jump_diffusion_price()` | Fat tails, jumps |
+| LSMC | `longstaff_schwartz_price()` | Path-dependent, American |
+| BAW | `barone_adesi_whaley()` | Fast American approximation |
+
+### Test Categories
+
+| Category | Tests | Coverage |
+|----------|-------|----------|
+| Scalar Greeks | 24 | All 12 Greeks, edge cases |
+| Vectorized Greeks | 19 | Batch, consistency, performance |
+| Black-Scholes | 17 | Put-call parity, bounds |
+| Binomial | 20 | Convergence, American exercise |
+| Jump Diffusion | 11 | Merton, calibration |
+| Variance Swap | 10 | Strike, value, scaling |
+| IV Solver | 23 | Round-trip, edge cases |
+| LSMC | 15 | Accuracy, variance reduction |
+| Exercise Probability | 13 | BAW, early exercise |
+| Contract Specs | 15 | Enums, dataclasses |
+| Edge Cases | 6 | Zero/extreme inputs |
+| Performance | 2 | Batch throughput |
+| Integration | 3 | Full workflow |
+
+### Тестирование
+
+```bash
+# All Phase 1 Options tests (240 tests)
+pytest tests/test_options_core.py -v
+
+# By category
+pytest tests/test_options_core.py::TestScalarGreeks -v
+pytest tests/test_options_core.py::TestVectorizedGreeks -v
+pytest tests/test_options_core.py::TestBlackScholesPricing -v
+pytest tests/test_options_core.py::TestBinomialPricing -v
+pytest tests/test_options_core.py::TestIVCalculation -v
+pytest tests/test_options_core.py::TestLongstaffSchwartzMC -v
+pytest tests/test_options_core.py::TestVarianceSwap -v
+```
+
+### Ключевые файлы
+
+| Файл | Описание |
+|------|----------|
+| `impl_pricing.py` | BSM, binomial, jump diffusion, variance swap (~800 lines) |
+| `impl_greeks_vectorized.py` | 12 Greeks with vectorized batch (~600 lines) |
+| `impl_iv_calculation.py` | Hybrid IV solver (~400 lines) |
+| `impl_exercise_probability.py` | LSMC, BAW, exercise analysis (~700 lines) |
+| `core_options.py` | Core models (OptionsContractSpec, GreeksResult) |
+| `tests/test_options_core.py` | 240 comprehensive tests |
+
+### Референсы
+
+- Black & Scholes (1973): "The Pricing of Options and Corporate Liabilities"
+- Merton (1973): "Theory of Rational Option Pricing"
+- Leisen & Reimer (1996): "Binomial Models for Option Valuation"
+- Longstaff & Schwartz (2001): "Valuing American Options by Simulation"
+- Barone-Adesi & Whaley (1987): "Efficient Analytic Approximation"
+- Demeterfi et al. (1999): "A Guide to Volatility and Variance Swaps"
+
+---
+
 ## 🛡️ Критические правила (НЕ НАРУШАТЬ!)
 
 1. **ActionProto.volume_frac = TARGET position, НЕ DELTA!**
@@ -6673,9 +6911,26 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 
 ---
 
-**Последнее обновление**: 2025-12-02
-**Версия документации**: 11.8 (Phase 10: Validation & Documentation)
-**Статус**: ✅ Production Ready (567+ test files, Futures Integration complete)
+**Последнее обновление**: 2025-12-03
+**Версия документации**: 11.9 (Options Integration Phase 1)
+**Статус**: ✅ Production Ready (567+ test files, Futures Integration complete, Options Phase 1 complete)
+
+### Изменения в 11.9:
+- **Options Integration Phase 1 COMPLETE** — 240 tests (100% pass rate)
+  - Black-Scholes-Merton pricing with continuous dividends
+  - Binomial trees (Leisen-Reimer, CRR)
+  - Merton jump-diffusion model
+  - 12 Greeks (Δ, Γ, Θ, ν, ρ, Vanna, Volga, Charm, Speed, Color, Zomma, Ultima)
+  - Vectorized batch Greeks for portfolio analysis
+  - Hybrid IV solver (Newton-Raphson, Brent, bisection)
+  - Longstaff-Schwartz Monte Carlo for American options
+  - Barone-Adesi-Whaley American approximation
+  - Variance swap strike calculation (Demeterfi replication)
+  - Discrete dividends handling
+  - Exercise probability analysis
+- Added Options entries to Quick Reference table
+- Added full Options Integration documentation section
+- Fixed all 240 test cases (API signature fixes, variance swap integration)
 
 ### Изменения в 11.8:
 - **Phase 10 Validation & Documentation complete** — 171 tests total (125 validation + 46 backward compatibility)
