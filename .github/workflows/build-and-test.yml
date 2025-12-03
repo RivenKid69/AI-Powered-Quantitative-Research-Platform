@@ -45,6 +45,67 @@ jobs:
       - name: Check formatting with black
         run: python -m black --check .
 
+      - name: Lint imports (soft)
+        continue-on-error: true
+        env:
+          PYTHONUTF8: "1"
+        run: lint-imports --config importlinter.ini --show-timings
+
+      - name: Lint imports (enforced)
+        env:
+          PYTHONUTF8: "1"
+        run: lint-imports --config importlinter.ini --show-timings
+
+      - name: Detect secrets (soft)
+        continue-on-error: true
+        env:
+          PYTHONUTF8: "1"
+        run: python -m detect_secrets scan --baseline .secrets.baseline --all-files --json > detect-secrets-scan.json
+
+      - name: Detect secrets (enforced)
+        env:
+          PYTHONUTF8: "1"
+        run: |
+          python - <<'PY'
+          import json, subprocess, sys, pathlib
+
+          cmd = [
+              sys.executable,
+              "-m",
+              "detect_secrets",
+              "scan",
+              "--baseline",
+              ".secrets.baseline",
+              "--all-files",
+              "--json",
+          ]
+          result = subprocess.run(cmd, capture_output=True, text=True)
+          pathlib.Path("detect-secrets-scan.json").write_text(result.stdout, encoding="utf-8")
+          if result.returncode not in (0,):
+              sys.stdout.write(result.stdout)
+              sys.stderr.write(result.stderr)
+              sys.exit(result.returncode)
+
+          baseline = json.loads(pathlib.Path(".secrets.baseline").read_text(encoding="utf-8"))
+          scan = json.loads(result.stdout or "{}")
+          baseline_hashes = {
+              fname: {finding["hashed_secret"] for finding in findings}
+              for fname, findings in baseline.get("results", {}).items()
+          }
+          new = []
+          for fname, findings in scan.get("results", {}).items():
+              allowed = baseline_hashes.get(fname, set())
+              for finding in findings:
+                  if finding.get("hashed_secret") not in allowed:
+                      new.append(f"{fname}:{finding.get('line_number')} ({finding.get('type')})")
+
+          if new:
+              print("New potential secrets detected (not in baseline):")
+              for item in new:
+                  print(f"- {item}")
+              sys.exit(1)
+          PY
+
       - name: Enforce generated-file policy before build
         run: python tools/clean_artifacts.py --check-only
 

@@ -7013,35 +7013,10 @@ pytest tests/test_conformal_prediction.py -v
 
 ## Архитектура проекта
 
-**Слоистая архитектура** с префиксами имён файлов:
-
-```
-core_ → impl_ → service_ → strategies → script_
-```
-
-**ВАЖНО**: Нарушение зависимостей → циклические импорты!
-
-### Слои
-
-| Слой | Префикс | Описание |
-|------|---------|----------|
-| Базовый | `core_*` | Модели, контракты, константы. Без зависимостей. |
-| Реализация | `impl_*` | Инфраструктура. Зависит только от `core_`. |
-| Сервисы | `service_*` | Бизнес-логика. Зависит от `core_`, `impl_`. |
-| Стратегии | `strategies/` | Торговые алгоритмы. Зависит от всех. |
-| CLI | `script_*` | Точки входа. Использует DI. |
-
-### Ключевые файлы
-
-**Core**: `core_config.py`, `core_models.py`, `core_strategy.py`
-
-**Impl**: `impl_sim_executor.py`, `impl_fees.py`, `impl_slippage.py`, `impl_latency.py`
-
-**Service**: `service_backtest.py`, `service_train.py`, `service_eval.py`, `service_signal_runner.py`
-
-**ML**: `distributional_ppo.py`, `custom_policy_patch1.py`, `variance_gradient_scaler.py`
-
-**Scripts**: `train_model_multi_patch.py`, `script_backtest.py`, `script_live.py`, `script_eval.py`
+Источник правды по архитектуре: `ARCHITECTURE.md` (обновляется вместе с кодом, а CLAUDE хранит только краткие напоминания).
+- Карта слоёв и допустимых зависимостей: см. `ARCHITECTURE.md#слои`.
+- Примеры ключевых файлов и конфигураций запусков: см. `ARCHITECTURE.md#конфигурации-запусков`.
+- Быстрый ориентир: слои `core_ → impl_ → service_ → strategies → script_`; зависимости строим только слева направо.
 
 ---
 

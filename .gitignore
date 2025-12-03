@@ -57,6 +57,8 @@ coverage.xml
 .hypothesis/
 .mypy_cache/
 .ruff_cache/
+.import_linter_cache/
+.grimp_cache/
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -117,3 +119,7 @@ c?UserssuyunTradingBot2*/
 /*_FINDINGS*.txt
 /*_ANALYSIS*.txt
 nul
+
+# Removed artifacts and local-only dumps
+distributional_ppo.py.backup_before_bug_fixes
+ЛОГИ*.txt
