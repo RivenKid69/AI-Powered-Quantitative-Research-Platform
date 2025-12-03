@@ -89,6 +89,10 @@ class AdapterType(str, Enum):
     FUTURES_MARKET_DATA = "futures_market_data"      # Mark price, funding, OI
     FUTURES_EXCHANGE_INFO = "futures_exchange_info"  # Contract specs, leverage
     FUTURES_ORDER_EXECUTION = "futures_order_execution"  # Margin, leverage control
+    # Options-specific adapters (Phase 2)
+    OPTIONS_MARKET_DATA = "options_market_data"      # Historical chains, quotes, Greeks
+    OPTIONS_ORDER_EXECUTION = "options_order_execution"  # Single-leg options orders
+    OPTIONS_COMBO = "options_combo"  # Multi-leg spreads, combos (IB)
 
 
 # Mapping from AdapterType to base class
@@ -105,6 +109,10 @@ ADAPTER_BASE_CLASSES: Dict[AdapterType, Type[BaseAdapter]] = {
     AdapterType.FUTURES_MARKET_DATA: MarketDataAdapter,
     AdapterType.FUTURES_EXCHANGE_INFO: ExchangeInfoAdapter,
     AdapterType.FUTURES_ORDER_EXECUTION: OrderExecutionAdapter,
+    # Options adapters use MarketDataAdapter base (specialized via inheritance)
+    AdapterType.OPTIONS_MARKET_DATA: MarketDataAdapter,
+    AdapterType.OPTIONS_ORDER_EXECUTION: OrderExecutionAdapter,
+    AdapterType.OPTIONS_COMBO: OrderExecutionAdapter,
 }
 
 
@@ -176,6 +184,9 @@ class AdapterRegistry:
             ExchangeVendor.BINANCE_US: "adapters.binance",
             ExchangeVendor.ALPACA: "adapters.alpaca",
             ExchangeVendor.YAHOO: "adapters.yahoo",
+            # Data providers (Phase 2 Options)
+            ExchangeVendor.POLYGON: "adapters.polygon",
+            ExchangeVendor.THETA_DATA: "adapters.theta_data",
             # Forex vendors (Phase 1)
             ExchangeVendor.OANDA: "adapters.oanda",
             ExchangeVendor.IG: "adapters.ig",
@@ -649,6 +660,111 @@ def create_futures_order_execution_adapter(
         Futures order execution adapter instance
     """
     return get_registry().create_adapter(vendor, AdapterType.FUTURES_ORDER_EXECUTION, config)
+
+
+# =========================
+# Options Adapter Factory Functions
+# =========================
+
+def create_options_market_data_adapter(
+    vendor: Union[ExchangeVendor, str],
+    config: Optional[Mapping[str, Any]] = None,
+) -> BaseAdapter:
+    """
+    Create options market data adapter.
+
+    Provides access to:
+    - Historical options chains (EOD snapshots)
+    - Options quotes and Greeks
+    - Expiration dates and strikes
+    - Contract specifications
+
+    Supported vendors:
+    - polygon: Historical US options data (2018+)
+    - theta_data: Historical + delayed real-time US options
+    - ib: Real-time options data via TWS API
+
+    Args:
+        vendor: Exchange vendor (e.g., 'polygon', 'theta_data', 'ib')
+        config: Adapter configuration (api_key, cache settings, etc.)
+
+    Returns:
+        Options market data adapter instance
+
+    Example:
+        adapter = create_options_market_data_adapter("polygon", {"api_key": "..."})
+        chain = adapter.get_historical_chain("AAPL", date(2024, 1, 15))
+    """
+    return get_registry().create_adapter(vendor, AdapterType.OPTIONS_MARKET_DATA, config)
+
+
+def create_options_order_execution_adapter(
+    vendor: Union[ExchangeVendor, str],
+    config: Optional[Mapping[str, Any]] = None,
+) -> BaseAdapter:
+    """
+    Create options order execution adapter.
+
+    Provides access to:
+    - Single-leg options order submission
+    - Position management
+    - Exercise and assignment handling
+    - Options-specific margin queries
+
+    Supported vendors:
+    - ib: Interactive Brokers TWS API
+
+    Args:
+        vendor: Exchange vendor (e.g., 'ib')
+        config: Adapter configuration (host, port, client_id, etc.)
+
+    Returns:
+        Options order execution adapter instance
+
+    Example:
+        adapter = create_options_order_execution_adapter("ib", {"port": 7497})
+        order = adapter.submit_option_order("AAPL", "20241220C00200000", "BUY", 10)
+    """
+    return get_registry().create_adapter(vendor, AdapterType.OPTIONS_ORDER_EXECUTION, config)
+
+
+def create_options_combo_adapter(
+    vendor: Union[ExchangeVendor, str],
+    config: Optional[Mapping[str, Any]] = None,
+) -> BaseAdapter:
+    """
+    Create options combo/spread adapter.
+
+    Provides access to:
+    - Multi-leg spread order submission
+    - Combo order management
+    - Spread pricing and margin
+
+    Supported strategies:
+    - Vertical spreads (bull call, bear put)
+    - Calendar spreads
+    - Iron condors, butterflies
+    - Custom combos
+
+    Supported vendors:
+    - ib: Interactive Brokers TWS API
+
+    Args:
+        vendor: Exchange vendor (e.g., 'ib')
+        config: Adapter configuration (host, port, client_id, etc.)
+
+    Returns:
+        Options combo adapter instance
+
+    Example:
+        adapter = create_options_combo_adapter("ib", {"port": 7497})
+        legs = [
+            {"symbol": "AAPL", "exp": "20241220", "strike": 200, "type": "C", "side": "BUY", "ratio": 1},
+            {"symbol": "AAPL", "exp": "20241220", "strike": 210, "type": "C", "side": "SELL", "ratio": 1},
+        ]
+        order = adapter.submit_combo_order(legs, order_type="LMT", limit_price=2.50)
+    """
+    return get_registry().create_adapter(vendor, AdapterType.OPTIONS_COMBO, config)
 
 
 # =========================

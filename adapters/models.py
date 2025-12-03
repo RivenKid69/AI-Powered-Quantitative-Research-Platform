@@ -114,6 +114,8 @@ class ExchangeVendor(str, Enum):
     ALPACA = "alpaca"
     POLYGON = "polygon"  # Data provider
     YAHOO = "yahoo"      # Data provider for corporate actions, earnings (Phase 7)
+    # Options Data Providers (Phase 2)
+    THETA_DATA = "theta_data"    # Theta Data - US options (historical + delayed real-time)
     # Forex (Phase 0)
     OANDA = "oanda"          # Primary forex broker (OANDA v20 API)
     IG = "ig"                # IG Markets (alternative)
@@ -136,6 +138,8 @@ class ExchangeVendor(str, Enum):
             return MarketType.CRYPTO_PERP
         elif self == ExchangeVendor.ALPACA:
             return MarketType.EQUITY
+        elif self == ExchangeVendor.THETA_DATA:
+            return MarketType.EQUITY_OPTIONS
         elif self in (ExchangeVendor.OANDA, ExchangeVendor.IG, ExchangeVendor.DUKASCOPY):
             return MarketType.FOREX
         elif self in (ExchangeVendor.IB, ExchangeVendor.IB_CME):
