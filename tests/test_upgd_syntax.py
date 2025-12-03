@@ -55,7 +55,7 @@ python_files = [
 all_valid = True
 for filepath in python_files:
     try:
-        with open(filepath, 'r') as f:
+        with open(filepath, "r", encoding="utf-8") as f:
             code = f.read()
             ast.parse(code)
         print(f"✓ {filepath} - Valid Python syntax")
@@ -75,7 +75,7 @@ print("-" * 60)
 
 def check_class_in_file(filepath, classname):
     """Check if a class is defined in a file."""
-    with open(filepath, 'r') as f:
+    with open(filepath, "r", encoding="utf-8") as f:
         tree = ast.parse(f.read())
 
     for node in ast.walk(tree):
@@ -107,7 +107,7 @@ print("\n✓ All optimizer classes are properly defined")
 print("\nTest 4: Checking optimizer module exports")
 print("-" * 60)
 
-with open('optimizers/__init__.py', 'r') as f:
+with open("optimizers/__init__.py", "r", encoding="utf-8") as f:
     init_content = f.read()
 
 required_exports = ['UPGD', 'AdaptiveUPGD', 'UPGDW']
@@ -130,7 +130,7 @@ print("\n✓ All optimizers are properly exported")
 print("\nTest 5: Checking DistributionalPPO modifications")
 print("-" * 60)
 
-with open('distributional_ppo.py', 'r') as f:
+with open("distributional_ppo.py", "r", encoding="utf-8") as f:
     ppo_content = f.read()
 
 checks = {
@@ -158,7 +158,7 @@ print("\n✓ DistributionalPPO properly modified")
 print("\nTest 6: Checking documentation updates")
 print("-" * 60)
 
-with open('docs/UPGD_INTEGRATION.md', 'r') as f:
+with open("docs/UPGD_INTEGRATION.md", "r", encoding="utf-8") as f:
     docs_content = f.read()
 
 doc_checks = {
@@ -186,7 +186,7 @@ print("\n✓ Documentation is complete and up to date")
 print("\nTest 7: Checking test file structure")
 print("-" * 60)
 
-with open('tests/test_upgd_integration.py', 'r') as f:
+with open("tests/test_upgd_integration.py", "r", encoding="utf-8") as f:
     test_content = f.read()
 
 test_checks = {

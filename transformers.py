@@ -1362,3 +1362,88 @@ def apply_offline_features(
     out = pd.DataFrame(out_rows)
     out = out.sort_values([symbol_col, ts_col]).reset_index(drop=True)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Backwards compatibility shims (legacy API)
+# ---------------------------------------------------------------------------
+# Older code paths/tests import TransformerSpec/FeatureTransformer/OnlineFeatureTransform.
+# Map them to the current FeatureSpec/OnlineFeatureTransformer implementation to
+# keep the legacy surface stable without duplicating logic.
+TransformerSpec = FeatureSpec
+OnlineFeatureTransform = OnlineFeatureTransformer
+
+
+class FeatureTransformer:
+    """Lightweight wrapper around OnlineFeatureTransformer for legacy callers."""
+
+    def __init__(self, spec: FeatureSpec) -> None:
+        self.spec = spec
+        self._transformer = OnlineFeatureTransformer(spec)
+        self._last_symbol: Optional[str] = None
+        self._ts_counter: int = 0
+
+    def _coerce_ts_ms(self, bar: Dict[str, Any]) -> int:
+        """Extract or synthesize a timestamp in milliseconds for update()."""
+        ts = bar.get("ts_ms") or bar.get("timestamp")
+        if ts is None and "time_key" in bar:
+            try:
+                ts = int(pd.Timestamp(bar["time_key"]).value // 1_000_000)
+            except Exception:
+                ts = None
+        if ts is None:
+            # Fallback to a simple counter to preserve ordering
+            self._ts_counter += 1
+            return self._ts_counter
+        try:
+            return int(ts)
+        except Exception:
+            self._ts_counter += 1
+            return self._ts_counter
+
+    def transform(self, bar: Dict[str, Any]) -> Dict[str, Any]:
+        """Transform a single bar dict and return computed features."""
+        symbol = str(bar.get("symbol", "")).upper()
+        self._last_symbol = symbol or self._last_symbol
+
+        update_kwargs: Dict[str, Any] = {
+            "symbol": symbol or "UNKNOWN",
+            "ts_ms": self._coerce_ts_ms(bar),
+            "close": float(bar.get("close", 0.0)),
+        }
+
+        # Optional OHLCV fields if present
+        if all(k in bar for k in ("open", "high", "low")):
+            try:
+                update_kwargs["open_price"] = float(bar["open"])
+                update_kwargs["high"] = float(bar["high"])
+                update_kwargs["low"] = float(bar["low"])
+            except Exception:
+                pass
+
+        if "volume" in bar:
+            try:
+                update_kwargs["volume"] = float(bar["volume"])
+            except Exception:
+                pass
+
+        # Taker buy volume naming varies across datasets
+        tbb_value = None
+        if "taker_buy_base_volume" in bar:
+            tbb_value = bar["taker_buy_base_volume"]
+        elif "taker_buy_base" in bar:
+            tbb_value = bar["taker_buy_base"]
+        if tbb_value is not None:
+            try:
+                update_kwargs["taker_buy_base"] = float(tbb_value)
+            except Exception:
+                pass
+
+        return self._transformer.update(**update_kwargs)
+
+    def get_state(self, symbol: Optional[str] = None) -> Dict[str, Any]:
+        """Expose internal state for inspection (e.g., avg_gain/avg_loss for RSI)."""
+        sym = (symbol or self._last_symbol or "").upper()
+        if not sym:
+            return {}
+        return self._transformer._state.get(sym, {})

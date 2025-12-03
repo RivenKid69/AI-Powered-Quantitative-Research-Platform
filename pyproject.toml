@@ -301,6 +301,16 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "requires_cython: marks tests that require compiled Cython modules",
     "requires_gpu: marks tests that require GPU",
+    "phase1: forex regression phase 1 enum checks",
+    "phase2: forex regression phase 2 adapter checks",
+    "phase3: forex regression phase 3 slippage checks",
+    "phase4: forex regression phase 4 feature checks",
+    "phase5: forex regression phase 5 services checks",
+    "phase6: forex regression phase 6 risk checks",
+    "phase7: forex regression phase 7 data pipeline checks",
+    "phase8: forex regression phase 8 config checks",
+    "phase9: forex regression phase 9 training checks",
+    "full: forex regression full-suite gate",
 ]
 asyncio_mode = "auto"
 filterwarnings = [
