@@ -6,6 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "ai-quant-platform"
 version = "0.1.0"
 description = "AI-Powered Quantitative Research Platform - Cython/C++ extensions: LOB and microstructure generator"
+requires-python = ">=3.12"
+authors = [{name = "TradingBot2 Team"}]
 dependencies = [
     "numpy>=1.24.0",
     "optuna>=3.0.0,<4.0.0",

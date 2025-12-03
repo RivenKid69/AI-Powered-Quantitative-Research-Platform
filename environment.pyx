@@ -1,7 +1,7 @@
 # distutils: language = c++
 # cython: language_level=3, boundscheck=False, wraparound=False
 
-from libc.math cimport log, tanh
+from libc.math cimport log, tanh, isfinite
 
 import numpy as np
 

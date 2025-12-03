@@ -15,6 +15,28 @@ from core_constants cimport MarketRegime
 np.import_array()
 
 
+# Inline C++ helper functions to work around Cython's std::array limitations
+cdef extern from *:
+    """
+    #include <array>
+    #include "MarketSimulator.h"
+
+    static void _set_regime_dist_from_ptr(MarketSimulator* sim, const double* probs) {
+        std::array<double, 4> arr;
+        for (int i = 0; i < 4; i++) arr[i] = probs[i];
+        sim->set_regime_distribution(arr);
+    }
+
+    static void _set_liquidity_seas_from_ptr(MarketSimulator* sim, const double* mults) {
+        std::array<double, 168> arr;
+        for (int i = 0; i < 168; i++) arr[i] = mults[i];
+        sim->set_liquidity_seasonality(arr);
+    }
+    """
+    void _set_regime_dist_from_ptr(MarketSimulator* sim, const double* probs) nogil
+    void _set_liquidity_seas_from_ptr(MarketSimulator* sim, const double* mults) nogil
+
+
 cdef inline double _clamp_non_negative(double value) nogil:
     if value < 0.0:
         return 0.0
@@ -208,15 +230,14 @@ cdef class MarketSimulatorWrapper:
             total += probs[i]
         if total <= 0.0:
             raise ValueError("regime probabilities must sum to a positive value")
-        cdef ArrayDouble4 c_probs = ArrayDouble4()
-        cdef double* probs_ptr = <double*>c_probs.data()
+        # Normalize and store probabilities
         for i in range(4):
             self._regime_probs[i] = probs[i] / total
-            probs_ptr[i] = self._regime_probs[i]
         if self._sim == NULL:
             raise RuntimeError("MarketSimulator instance not initialised")
 
-        self._sim.set_regime_distribution(c_probs)
+        # Use inline C++ helper to pass std::array to C++ method
+        _set_regime_dist_from_ptr(self._sim, self._regime_probs)
 
     def get_regime_distribution(self):
         cdef np.ndarray[np.float64_t, ndim=1] out = np.empty(4, dtype=np.float64)
@@ -230,15 +251,14 @@ cdef class MarketSimulatorWrapper:
         if mult.size != 168:
             raise ValueError("liquidity seasonality must contain 168 hourly multipliers")
         cdef int i
-        cdef ArrayDouble168 c_mult = ArrayDouble168()
-        cdef double* mult_ptr = <double*>c_mult.data()
+        # Clamp and store multipliers
         for i in range(168):
             self._liquidity_multipliers[i] = _clamp_non_negative(mult[i])
-            mult_ptr[i] = self._liquidity_multipliers[i]
         if self._sim == NULL:
             raise RuntimeError("MarketSimulator instance not initialised")
 
-        self._sim.set_liquidity_seasonality(c_mult)
+        # Use inline C++ helper to pass std::array to C++ method
+        _set_liquidity_seas_from_ptr(self._sim, self._liquidity_multipliers)
 
     def get_liquidity_seasonality(self):
         cdef np.ndarray[np.float64_t, ndim=1] out = np.empty(168, dtype=np.float64)
