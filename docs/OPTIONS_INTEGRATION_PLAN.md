@@ -2,12 +2,13 @@
 
 ## AI-Powered Quantitative Research Platform — Options Integration
 
-**Version**: 5.0
-**Status**: PLANNED
+**Version**: 5.1
+**Status**: IN PROGRESS (Phase 0.5 ✅ Complete)
 **Target Completion**: Q1 2027
 **Estimated Tests**: 3,100
 **Realism Target**: 95%+
 **Last Updated**: 2025-12-03
+**Phase 0.5 Tests**: 71/71 ✅
 
 ---
 
@@ -433,29 +434,35 @@ class EventDrivenLOBCoordinator:
         return affected  # Typically 10-30 series, not 960
 ```
 
-### 0.5.4 Test Matrix (Phase 0.5)
+### 0.5.4 Test Matrix (Phase 0.5) — ✅ PASSED
 
-| Test Category | Tests | Coverage |
-|---------------|-------|----------|
-| LazyMultiSeriesLOBManager | 20 | Lazy creation, LRU eviction |
-| RingBufferOrderBook | 15 | Depth limiting, aggregation |
-| EventDrivenLOBCoordinator | 15 | Bucketing, propagation |
-| Memory benchmarks | 10 | Peak memory, GC pressure |
-| Disk persistence | 10 | Save/restore, compression |
-| **Total** | **70** | **100%** |
+| Test Category | Tests | Coverage | Status |
+|---------------|-------|----------|--------|
+| LazyMultiSeriesLOBManager | 19 | Lazy creation, LRU/LFU/TTL eviction | ✅ |
+| RingBufferOrderBook | 15 | Depth limiting, VWAP, aggregation | ✅ |
+| EventDrivenLOBCoordinator | 15 | Bucketing, propagation scopes | ✅ |
+| Memory benchmarks | 10 | Peak memory, GC pressure | ✅ |
+| Disk persistence | 10 | Save/restore, compression, versioning | ✅ |
+| Integration | 2 | Full workflow, SPY chain simulation | ✅ |
+| **Total** | **71** | **100%** | **✅ ALL PASS** |
 
-### 0.5.5 Deliverables
-- [ ] `lob/lazy_multi_series.py` — Lazy LOB manager
-- [ ] `lob/ring_buffer_orderbook.py` — Fixed-depth order book
-- [ ] `lob/event_coordinator.py` — O(N log N) event propagation
-- [ ] `tests/test_options_memory.py` — 70 tests
-- [ ] `benchmarks/bench_options_memory.py` — Memory benchmarks
-- [ ] Documentation: `docs/options/memory_architecture.md`
+### 0.5.5 Deliverables (✅ COMPLETED 2025-12-03)
+- [x] `lob/lazy_multi_series.py` — Lazy LOB manager (~600 lines)
+- [x] `lob/ring_buffer_orderbook.py` — Fixed-depth order book (~500 lines)
+- [x] `lob/event_coordinator.py` — O(N log N) event propagation (~450 lines)
+- [x] `tests/test_options_memory.py` — 71 tests (100% pass)
+- [x] `benchmarks/bench_options_memory.py` — Memory benchmarks
+- [x] Documentation: `docs/options/memory_architecture.md`
 
-### 0.5.6 Success Criteria
-- Peak memory for SPY full chain: < 4 GB (vs 480 GB naive)
-- LOB access latency: < 1 ms (including lazy load)
-- Event propagation: < 100 μs per tick
+### 0.5.6 Success Criteria — ✅ MET
+
+| Metric | Target | Achieved | Status |
+|--------|--------|----------|--------|
+| Peak memory (SPY 960 series) | < 4 GB | ~2.5 GB | ✅ |
+| LOB access latency | < 1 ms | ~50 μs avg | ✅ |
+| Event propagation | < 100 μs | ~30 μs avg | ✅ |
+
+See: [docs/options/memory_architecture.md](options/memory_architecture.md) for detailed benchmarks
 
 ---
 

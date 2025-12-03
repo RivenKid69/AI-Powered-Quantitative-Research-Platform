@@ -18,6 +18,7 @@ supporting full market microstructure modeling including:
 - Impact calibration from historical trade data
 - Latency simulation (feed/order/exchange/fill latencies)
 - Event scheduling with priority queue and race condition detection
+- Options memory architecture (lazy LOB, ring buffer, event coordination)
 
 Architecture:
     This module is SEPARATE from the Cython LOB implementations (fast_lob.pyx,
@@ -25,6 +26,7 @@ Architecture:
     implementation here provides better flexibility and testability for equity
     market simulation while integrating with execution_providers.py.
 
+Stage 0.5 (v9.0): Options memory architecture (Phase 0.5)
 Stage 1 (v1.0): Data structures, parsers, state manager
 Stage 2 (v2.0): Matching engine, queue tracker, order manager
 Stage 3 (v3.0): Fill probability models, queue value, calibration
@@ -336,6 +338,41 @@ from lob.calibration_pipeline import (
     calibrate_from_dataframe,
 )
 
+# Stage 0.5: Options Memory Architecture (v9.0)
+from lob.lazy_multi_series import (
+    EvictionPolicy,
+    LazyMultiSeriesLOBManager,
+    LOBMetadata,
+    ManagerStats,
+    SeriesKey,
+    SeriesLOBState,
+    create_lazy_lob_manager,
+    create_options_lob_manager,
+)
+
+from lob.ring_buffer_orderbook import (
+    AggregatedLevel,
+    BookLevel,
+    BookSnapshot,
+    BookStatistics,
+    RingBufferOrderBook,
+    create_options_book,
+    create_ring_buffer_book,
+)
+
+from lob.event_coordinator import (
+    CoordinatorStats,
+    EventDrivenLOBCoordinator,
+    OptionsEvent,
+    OptionsEventType,
+    OptionsQuote,
+    PropagationResult,
+    PropagationScope,
+    StrikeBucket,
+    create_event_coordinator,
+    create_options_coordinator,
+)
+
 __all__ = [
     # Core data structures
     "Side",
@@ -547,6 +584,32 @@ __all__ = [
     "CalibrationDataType",
     "create_l3_calibration_pipeline",
     "calibrate_from_dataframe",
+    # Options Memory Architecture (Stage 0.5)
+    "EvictionPolicy",
+    "LazyMultiSeriesLOBManager",
+    "LOBMetadata",
+    "ManagerStats",
+    "SeriesKey",
+    "SeriesLOBState",
+    "create_lazy_lob_manager",
+    "create_options_lob_manager",
+    "AggregatedLevel",
+    "BookLevel",
+    "BookSnapshot",
+    "BookStatistics",
+    "RingBufferOrderBook",
+    "create_options_book",
+    "create_ring_buffer_book",
+    "CoordinatorStats",
+    "EventDrivenLOBCoordinator",
+    "OptionsEvent",
+    "OptionsEventType",
+    "OptionsQuote",
+    "PropagationResult",
+    "PropagationScope",
+    "StrikeBucket",
+    "create_event_coordinator",
+    "create_options_coordinator",
 ]
 
-__version__ = "8.0.0"
+__version__ = "9.0.0"
