@@ -39,6 +39,12 @@ jobs:
           python -m pip install -r requirements-cpu.lock.txt
           python -m pip install -r requirements-dev.txt
 
+      - name: Lint with ruff
+        run: python -m ruff check .
+
+      - name: Check formatting with black
+        run: python -m black --check .
+
       - name: Enforce generated-file policy before build
         run: python tools/clean_artifacts.py --check-only
 

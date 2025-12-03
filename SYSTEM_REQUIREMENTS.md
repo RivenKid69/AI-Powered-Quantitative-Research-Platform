@@ -275,6 +275,8 @@ For reproducible builds, use lock files:
 - `make verify-hash` re-hashes compiled extensions against `build_hash_report.json` and fails on mismatches.
 - GitHub Actions workflow `.github/workflows/build-and-test.yml` runs on Linux (GCC) and Windows (MSVC) with Python 3.12.x using the CPU lockfile plus `requirements-dev.txt`.
 - Lock files must remain current and include their generation date (see [Dependency Locking](#dependency-locking)).
+- Release gating: follow `RELEASE_CHECKLIST.md` for version bumps, changelog updates, test-matrix coverage, hash verification, and dependency audits before tagging.
+- Local checks: install pre-commit hooks (`pre-commit install`) to enforce ruff, isort, black, trailing-whitespace, and end-of-file fixes before commits.
 
 ### Known Good Toolchains (CI baselines)
 

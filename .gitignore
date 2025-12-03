@@ -102,6 +102,8 @@ test_output.log
 pbt_checkpoints/
 test_quick_distppo.py
 /tmp/
+# Stray Windows path extractions
+c?UserssuyunTradingBot2*/
 
 # Backup files
 *.backup

@@ -373,6 +373,22 @@ known-first-party = [
 ]
 
 # ============================================================================
+# isort Configuration (for direct invocations)
+# ============================================================================
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = [
+    "adapters",
+    "adversarial",
+    "lob",
+    "optimizers",
+    "services",
+    "strategies",
+    "wrappers",
+]
+
+# ============================================================================
 # MyPy Configuration
 # ============================================================================
 [tool.mypy]

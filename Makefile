@@ -7,8 +7,8 @@
 #   make rebuild        # Clean + build
 #   make test           # Run tests after build
 #   make verify-hash    # Verify build reproducibility
-#   make format         # Format code with black
-#   make lint           # Lint code with flake8
+#   make format         # Format code (isort + black)
+#   make lint           # Lint code with ruff and enforce black style
 #
 # Supported Platforms: Windows (MSVC), Linux (GCC), macOS (Clang)
 
@@ -76,8 +76,8 @@ help:
 	@echo "  make install-build-deps Install build dependencies"
 	@echo ""
 	@echo "$(YELLOW)Development targets:$(NC)"
-	@echo "  make format            Format Python code with black"
-	@echo "  make lint              Lint code with flake8"
+	@echo "  make format            Format Python code (isort + black)"
+	@echo "  make lint              Lint code with ruff and check black style"
 	@echo "  make check             Quick syntax check (no build)"
 	@echo "  make no-trade-mask-sample Run no-trade mask sample"
 	@echo ""
@@ -136,13 +136,17 @@ check:
 # ============================================================================
 
 format:
+	@echo "$(GREEN)Formatting imports with isort...$(NC)"
+	$(PYTHON) -m isort .
 	@echo "$(GREEN)Formatting code with black...$(NC)"
 	$(PYTHON) -m black .
 	@echo "$(GREEN)[OK] Format complete.$(NC)"
 
 lint:
-	@echo "$(GREEN)Linting code with flake8...$(NC)"
-	$(PYTHON) -m flake8 --max-line-length=200 config.py transformers.py tune_threshold.py update_and_infer.py utils_time.py validate_processed.py watchdog_vec_env.py
+	@echo "$(GREEN)Linting code with ruff...$(NC)"
+	$(PYTHON) -m ruff check .
+	@echo "$(GREEN)Checking Black formatting...$(NC)"
+	$(PYTHON) -m black --check .
 	@echo "$(GREEN)[OK] Lint complete.$(NC)"
 
 no-trade-mask-sample:
