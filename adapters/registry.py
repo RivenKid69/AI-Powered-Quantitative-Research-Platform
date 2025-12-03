@@ -200,6 +200,8 @@ class AdapterRegistry:
             ExchangeVendor.IB_CBOT: "adapters.ib",
             ExchangeVendor.IB_NYMEX: "adapters.ib",
             ExchangeVendor.IB_COMEX: "adapters.ib",
+            # Crypto Options (Deribit - Phase 2B)
+            ExchangeVendor.DERIBIT: "adapters.deribit",
         }
 
         # Track which vendors have been loaded
@@ -765,6 +767,182 @@ def create_options_combo_adapter(
         order = adapter.submit_combo_order(legs, order_type="LMT", limit_price=2.50)
     """
     return get_registry().create_adapter(vendor, AdapterType.OPTIONS_COMBO, config)
+
+
+# =========================
+# Deribit Adapter Factory Functions (Phase 2B)
+# =========================
+
+def create_deribit_options_market_data_adapter(
+    config: Optional[Mapping[str, Any]] = None,
+    *,
+    testnet: bool = True,
+) -> BaseAdapter:
+    """
+    Create Deribit options market data adapter.
+
+    Provides access to:
+    - Option chains for BTC/ETH
+    - Options quotes with Greeks (delta, gamma, theta, vega, rho)
+    - DVOL (Deribit Volatility Index)
+    - Orderbook data
+    - Instrument specifications
+
+    Key differences from US equity options:
+    - Inverse settlement (P&L in crypto, not USD)
+    - European exercise only
+    - 24/7 trading
+    - Strike increments: BTC=$1000, ETH=$50
+
+    Args:
+        config: Adapter configuration (optional)
+        testnet: Use Deribit testnet (default: True)
+
+    Returns:
+        Deribit options market data adapter instance
+
+    Example:
+        adapter = create_deribit_options_market_data_adapter(testnet=True)
+        chain = adapter.get_option_chain("BTC", date(2025, 3, 28))
+        quote = adapter.get_option_quote("BTC-28MAR25-100000-C")
+        dvol = adapter.get_dvol("BTC")
+    """
+    merged_config = dict(config or {})
+    merged_config.setdefault("testnet", testnet)
+    return get_registry().create_adapter(
+        ExchangeVendor.DERIBIT,
+        AdapterType.OPTIONS_MARKET_DATA,
+        merged_config,
+    )
+
+
+def create_deribit_options_order_execution_adapter(
+    config: Optional[Mapping[str, Any]] = None,
+    *,
+    client_id: Optional[str] = None,
+    client_secret: Optional[str] = None,
+    testnet: bool = True,
+) -> BaseAdapter:
+    """
+    Create Deribit options order execution adapter.
+
+    Provides access to:
+    - Order submission (limit, market, stop)
+    - Order cancellation
+    - Position management
+    - Open orders and order history
+    - Account summary
+
+    Args:
+        config: Adapter configuration (optional)
+        client_id: Deribit API client ID (or set in config/env)
+        client_secret: Deribit API client secret (or set in config/env)
+        testnet: Use Deribit testnet (default: True)
+
+    Returns:
+        Deribit options order execution adapter instance
+
+    Example:
+        adapter = create_deribit_options_order_execution_adapter(
+            client_id="your_client_id",
+            client_secret="your_client_secret",
+            testnet=True,
+        )
+        order = adapter.submit_order(DeribitOrder(...))
+        positions = adapter.get_positions("BTC")
+    """
+    merged_config = dict(config or {})
+    merged_config.setdefault("testnet", testnet)
+    if client_id:
+        merged_config["client_id"] = client_id
+    if client_secret:
+        merged_config["client_secret"] = client_secret
+    return get_registry().create_adapter(
+        ExchangeVendor.DERIBIT,
+        AdapterType.OPTIONS_ORDER_EXECUTION,
+        merged_config,
+    )
+
+
+def create_deribit_margin_calculator(
+    config: Optional[Mapping[str, Any]] = None,
+) -> Any:
+    """
+    Create Deribit margin calculator.
+
+    The margin calculator provides:
+    - Single position margin calculation
+    - Portfolio margin with hedge benefits
+    - Liquidation price estimation
+    - Maximum position size calculation
+
+    Key concepts:
+    - Inverse margining: collateral in crypto, not USD
+    - "Double-whammy" risk for short positions
+    - Portfolio margin benefits for hedged positions
+
+    Args:
+        config: Calculator configuration (optional)
+
+    Returns:
+        DeribitMarginCalculator instance
+
+    Example:
+        from adapters.deribit import DeribitMarginCalculator
+        calc = create_deribit_margin_calculator()
+        result = calc.calculate_portfolio_margin(positions, margin_balance)
+    """
+    try:
+        from adapters.deribit.margin import DeribitMarginCalculator
+        return DeribitMarginCalculator(**(config or {}))
+    except ImportError:
+        raise ImportError("Deribit adapter module not available")
+
+
+def create_deribit_websocket_client(
+    config: Optional[Mapping[str, Any]] = None,
+    *,
+    testnet: bool = True,
+    client_id: Optional[str] = None,
+    client_secret: Optional[str] = None,
+) -> Any:
+    """
+    Create Deribit WebSocket client for real-time streaming.
+
+    Provides real-time streaming for:
+    - Ticker updates (quotes, Greeks)
+    - Orderbook changes
+    - Trade feed
+    - User orders (private, requires auth)
+    - User trades (private, requires auth)
+    - Portfolio updates (private, requires auth)
+
+    Args:
+        config: Client configuration (optional)
+        testnet: Use Deribit testnet (default: True)
+        client_id: For private channels (optional)
+        client_secret: For private channels (optional)
+
+    Returns:
+        DeribitWebSocketClient instance
+
+    Example:
+        client = create_deribit_websocket_client(testnet=True)
+        await client.connect()
+        await client.subscribe(DeribitSubscription.ticker("BTC-28MAR25-100000-C", callback=on_tick))
+        await client.run_forever()
+    """
+    try:
+        from adapters.deribit.websocket import DeribitWebSocketClient, DeribitStreamConfig
+        stream_config = DeribitStreamConfig(
+            testnet=testnet,
+            client_id=client_id,
+            client_secret=client_secret,
+            **(config or {}),
+        )
+        return DeribitWebSocketClient(config=stream_config)
+    except ImportError:
+        raise ImportError("Deribit adapter module not available")
 
 
 # =========================

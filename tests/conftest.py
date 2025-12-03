@@ -26,6 +26,25 @@ _requests_stub.put = _unavailable
 _requests_stub.delete = _unavailable
 _requests_stub.request = _unavailable
 
+
+class _MockSession:
+    """Mock Session class for testing."""
+
+    def __init__(self):
+        self.headers = {}
+
+    def get(self, *args, **kwargs):
+        raise RuntimeError("requests.Session.get is not available in the test environment")
+
+    def post(self, *args, **kwargs):
+        raise RuntimeError("requests.Session.post is not available in the test environment")
+
+    def close(self):
+        pass
+
+
+_requests_stub.Session = _MockSession
+
 # Create stub exceptions module for testing
 _requests_exceptions_stub = types.ModuleType("requests.exceptions")
 

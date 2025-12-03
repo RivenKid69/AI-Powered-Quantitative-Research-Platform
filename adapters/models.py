@@ -34,6 +34,7 @@ class MarketType(str, Enum):
     CRYPTO_SPOT = "CRYPTO_SPOT"
     CRYPTO_FUTURES = "CRYPTO_FUTURES"
     CRYPTO_PERP = "CRYPTO_PERP"
+    CRYPTO_OPTIONS = "CRYPTO_OPTIONS"  # Deribit BTC/ETH options
     # Equity
     EQUITY = "EQUITY"
     EQUITY_OPTIONS = "EQUITY_OPTIONS"
@@ -47,7 +48,7 @@ class MarketType(str, Enum):
 
     @property
     def is_crypto(self) -> bool:
-        return self in (MarketType.CRYPTO_SPOT, MarketType.CRYPTO_FUTURES, MarketType.CRYPTO_PERP)
+        return self in (MarketType.CRYPTO_SPOT, MarketType.CRYPTO_FUTURES, MarketType.CRYPTO_PERP, MarketType.CRYPTO_OPTIONS)
 
     @property
     def is_equity(self) -> bool:
@@ -80,6 +81,7 @@ class MarketType(str, Enum):
         """Returns True if contracts have expiry dates (not perpetuals)."""
         return self in (
             MarketType.CRYPTO_FUTURES,
+            MarketType.CRYPTO_OPTIONS,
             MarketType.INDEX_FUTURES,
             MarketType.COMMODITY_FUTURES,
             MarketType.CURRENCY_FUTURES,
@@ -116,6 +118,8 @@ class ExchangeVendor(str, Enum):
     YAHOO = "yahoo"      # Data provider for corporate actions, earnings (Phase 7)
     # Options Data Providers (Phase 2)
     THETA_DATA = "theta_data"    # Theta Data - US options (historical + delayed real-time)
+    # Crypto Options (Phase 2B)
+    DERIBIT = "deribit"          # Deribit - BTC/ETH options (European, inverse settlement)
     # Forex (Phase 0)
     OANDA = "oanda"          # Primary forex broker (OANDA v20 API)
     IG = "ig"                # IG Markets (alternative)
@@ -136,6 +140,8 @@ class ExchangeVendor(str, Enum):
             return MarketType.CRYPTO_SPOT
         elif self in (ExchangeVendor.BINANCE_FUTURES, ExchangeVendor.BINANCE_COIN_FUTURES):
             return MarketType.CRYPTO_PERP
+        elif self == ExchangeVendor.DERIBIT:
+            return MarketType.CRYPTO_OPTIONS
         elif self == ExchangeVendor.ALPACA:
             return MarketType.EQUITY
         elif self == ExchangeVendor.THETA_DATA:
@@ -161,6 +167,11 @@ class ExchangeVendor(str, Enum):
     def is_crypto_futures(self) -> bool:
         """Returns True if this vendor supports crypto futures."""
         return self in (ExchangeVendor.BINANCE_FUTURES, ExchangeVendor.BINANCE_COIN_FUTURES)
+
+    @property
+    def is_crypto_options(self) -> bool:
+        """Returns True if this vendor supports crypto options."""
+        return self == ExchangeVendor.DERIBIT
 
     @property
     def is_traditional_futures(self) -> bool:
