@@ -343,29 +343,33 @@ make check-clean  # fails if generated artifacts remain
 
 ---
 
-## Environment Variables
+## Environment Variables & Secret Handling
+
+- Secrets **must** be injected via environment variables or a secret manager; never commit credentials to the repo.
+- Use `.env.example` as the template and keep your real `.env` file untracked (gitignored).
+- CI enforces gitleaks + TruffleHog scans on every PR and weekly schedule.
 
 ### Required for Live Trading
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `BINANCE_API_KEY` | Binance API key | `abc123...` |
-| `BINANCE_API_SECRET` | Binance API secret | `xyz789...` |
+| Variable | Description | Source |
+|----------|-------------|--------|
+| `BINANCE_API_KEY` | Binance API key | Secret manager / `.env` |
+| `BINANCE_API_SECRET` | Binance API secret | Secret manager / `.env` |
 
 ### Optional for US Equities
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `ALPACA_API_KEY` | Alpaca API key | `PKxxx...` |
-| `ALPACA_API_SECRET` | Alpaca API secret | `xxxyyy...` |
-| `POLYGON_API_KEY` | Polygon.io API key | `xxx...` |
+| Variable | Description | Source |
+|----------|-------------|--------|
+| `ALPACA_API_KEY` | Alpaca API key | Secret manager / `.env` |
+| `ALPACA_API_SECRET` | Alpaca API secret | Secret manager / `.env` |
+| `POLYGON_API_KEY` | Polygon.io API key | Secret manager / `.env` |
 
 ### Optional for Forex
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `OANDA_API_KEY` | OANDA API token | `xxx-yyy-zzz` |
-| `OANDA_ACCOUNT_ID` | OANDA account ID | `001-001-12345` |
+| Variable | Description | Source |
+|----------|-------------|--------|
+| `OANDA_API_KEY` | OANDA API token | Secret manager / `.env` |
+| `OANDA_ACCOUNT_ID` | OANDA account ID | Secret manager / `.env` |
 
 ### Development
 

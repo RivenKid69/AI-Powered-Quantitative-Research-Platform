@@ -40,4 +40,7 @@ skips = [B101, B311, B314, B405]
 
 # Confidence level threshold (low, medium, high)
 # Only report issues at or above this level
-# confidence = low
+confidence = medium
+
+# Fail the build on Medium+ severity issues (enforced in CI)
+severity = medium

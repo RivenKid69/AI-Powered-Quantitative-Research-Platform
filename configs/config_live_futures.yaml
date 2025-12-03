@@ -40,9 +40,9 @@ paper_trading: true
 # - BINANCE_API_KEY, BINANCE_API_SECRET (for Binance)
 # - IB credentials are managed via TWS/Gateway
 
-# Binance API credentials (leave empty to use env vars)
-api_key: ""
-api_secret: ""
+# Binance API credentials (set via env; keep null here)
+api_key: null
+api_secret: null
 
 # Interactive Brokers settings (for CME futures)
 ib_host: "127.0.0.1"

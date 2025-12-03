@@ -74,7 +74,12 @@ _BUILD_TRAINING_TABLE_SCRIPT = str(_ROOT_DIR / "build_training_table.py")
 
 # --------------------------- Seasonality API ---------------------------
 
-API_TOKEN = os.environ.get("SEASONALITY_API_TOKEN", "changeme")
+API_TOKEN = os.environ.get("SEASONALITY_API_TOKEN")
+if API_TOKEN is None:
+    raise RuntimeError(
+        "SEASONALITY_API_TOKEN is required for API access. "
+        "Load it from your secret manager or .env (see .env.example)."
+    )
 
 api = FastAPI()
 

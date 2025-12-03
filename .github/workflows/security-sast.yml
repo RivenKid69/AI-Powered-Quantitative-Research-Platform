@@ -3,17 +3,8 @@ name: Security SAST Analysis
 on:
   push:
     branches: [main, master, develop]
-    paths:
-      - '**.py'
-      - '.bandit'
-      - '.semgrep.yml'
-      - '.github/workflows/security-sast.yml'
   pull_request:
     branches: [main, master, develop]
-    paths:
-      - '**.py'
-      - '.bandit'
-      - '.semgrep.yml'
   schedule:
     # Run weekly on Sundays at 00:00 UTC
     - cron: '0 0 * * 0'
@@ -35,24 +26,32 @@ jobs:
       - name: Install Bandit
         run: pip install bandit[toml]
 
-      - name: Run Bandit scan
+      - name: Run Bandit (fail on MEDIUM+)
         run: |
-          echo "Running Bandit security scan..."
-          bandit -c .bandit -r . -f json -o bandit-results.json || true
-          bandit -c .bandit -r . -f txt -o bandit-results.txt || true
-
-          # Show results in console
-          echo "=== Bandit Results ==="
-          cat bandit-results.txt
-
-          # Check for high severity issues
-          HIGH_COUNT=$(cat bandit-results.json | python -c "import sys,json; d=json.load(sys.stdin); print(len([r for r in d.get('results',[]) if r.get('issue_severity')=='HIGH']))" 2>/dev/null || echo "0")
-          echo "High severity issues: $HIGH_COUNT"
-
-          if [ "$HIGH_COUNT" -gt "0" ]; then
-            echo "::error::Found $HIGH_COUNT high severity security issues"
-            exit 1
+          set -euo pipefail
+          set +e
+          bandit -c .bandit -r . --severity-level medium --confidence-level medium -f json -o bandit-results.json
+          status_json=$?
+          bandit -c .bandit -r . --severity-level medium --confidence-level medium -f txt -o bandit-results.txt
+          status_txt=$?
+          set -e
+          if [ "$status_json" -ge 2 ] || [ "$status_txt" -ge 2 ]; then
+            echo "::error::Bandit execution failed (json=$status_json, txt=$status_txt)"
+            exit 2
           fi
+          echo "=== Bandit MEDIUM+ findings ==="
+          cat bandit-results.txt || true
+          python - <<'PY'
+          import json, sys
+          data = json.load(open("bandit-results.json", "r", encoding="utf-8"))
+          findings = [
+              r for r in data.get("results", [])
+              if str(r.get("issue_severity", "")).lower() in {"medium", "high"}
+          ]
+          if findings:
+              print(f"Found {len(findings)} Bandit issues with medium+ severity")
+              sys.exit(1)
+          PY
 
       - name: Upload Bandit results
         uses: actions/upload-artifact@v4
@@ -63,40 +62,6 @@ jobs:
             bandit-results.json
             bandit-results.txt
           retention-days: 30
-
-      - name: Comment on PR (if high severity found)
-        if: failure() && github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const fs = require('fs');
-            let results = '';
-            try {
-              results = fs.readFileSync('bandit-results.txt', 'utf8');
-            } catch (e) {
-              results = 'Unable to read results file';
-            }
-
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `## 🔴 Bandit Security Scan Failed
-
-Found high severity security issues in this PR.
-
-<details>
-<summary>Click to see details</summary>
-
-\`\`\`
-${results.substring(0, 60000)}
-\`\`\`
-
-</details>
-
-Please fix the security issues before merging.
-`
-            });
 
   semgrep:
     name: Semgrep Security Scanner
@@ -109,63 +74,101 @@ Please fix the security issues before merging.
 
       - name: Run Semgrep scan
         run: |
-          echo "Running Semgrep security scan..."
-
-          # Run with local rules
-          semgrep scan --config .semgrep.yml --json --output semgrep-local-results.json . || true
-
-          # Run with community rules for Python security
-          semgrep scan --config p/python --config p/secrets --json --output semgrep-community-results.json . || true
-
-          # Combine and show results
-          echo "=== Semgrep Local Rules Results ==="
-          semgrep scan --config .semgrep.yml . || true
-
-          echo "=== Semgrep Community Rules Results ==="
-          semgrep scan --config p/python --config p/secrets . || true
-
-      - name: Check for errors
-        run: |
-          # Check for ERROR severity in local results
-          ERROR_COUNT=$(cat semgrep-local-results.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(len([r for r in d.get('results',[]) if r.get('extra',{}).get('severity')=='ERROR']))" 2>/dev/null || echo "0")
-          echo "Error severity issues from local rules: $ERROR_COUNT"
-
-          if [ "$ERROR_COUNT" -gt "0" ]; then
-            echo "::error::Found $ERROR_COUNT error severity security issues"
-            exit 1
+          set -euo pipefail
+          set +e
+          semgrep scan --config .semgrep.yml --config p/python --config p/secrets --json --output semgrep-results.json --metrics=off
+          status=$?
+          set -e
+          if [ "$status" -ge 2 ]; then
+            echo "::error::Semgrep failed with exit code $status"
+            exit $status
           fi
+          python - <<'PY'
+          import json, sys
+          data = json.load(open("semgrep-results.json", "r", encoding="utf-8"))
+          errors = [
+              r for r in data.get("results", [])
+              if str(r.get("extra", {}).get("severity", "")).lower() in {"error", "critical"}
+          ]
+          print(f"Semgrep ERROR/CRITICAL findings: {len(errors)}")
+          if errors:
+              sys.exit(1)
+          PY
 
       - name: Upload Semgrep results
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: semgrep-results
-          path: |
-            semgrep-local-results.json
-            semgrep-community-results.json
+          path: semgrep-results.json
           retention-days: 30
 
-      - name: Comment on PR (if errors found)
-        if: failure() && github.event_name == 'pull_request'
-        uses: actions/github-script@v7
+  secrets-scan:
+    name: Secret Scanners
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install gitleaks
+        run: |
+          set -euo pipefail
+          curl -sSL https://raw.githubusercontent.com/gitleaks/gitleaks/master/install.sh | bash -s -- -b /usr/local/bin
+
+      - name: Run gitleaks
+        id: gitleaks
+        run: |
+          set +e
+          gitleaks detect --no-git --report-format json --report-path gitleaks-report.json
+          status=$?
+          set -e
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+
+      - name: Install trufflehog
+        run: pip install --upgrade trufflehog
+
+      - name: Run trufflehog
+        id: trufflehog
+        run: |
+          set +e
+          trufflehog filesystem --no-update --json . > trufflehog-report.json
+          status=$?
+          set -e
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+
+      - name: Enforce secret scan results
+        run: |
+          set -euo pipefail
+          gitleaks_status="${{ steps.gitleaks.outputs.exit_code }}"
+          trufflehog_status="${{ steps.trufflehog.outputs.exit_code }}"
+          gitleaks_status=${gitleaks_status:-0}
+          trufflehog_status=${trufflehog_status:-0}
+          fail=0
+          if [ "$gitleaks_status" != "0" ]; then
+            echo "::error::gitleaks detected potential secrets (exit=$gitleaks_status)"
+            fail=1
+          fi
+          if [ "$trufflehog_status" != "0" ]; then
+            echo "::error::trufflehog detected potential secrets (exit=$trufflehog_status)"
+            fail=1
+          fi
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Upload secret scan results
+        uses: actions/upload-artifact@v4
+        if: always()
         with:
-          script: |
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `## 🔴 Semgrep Security Scan Failed
+          name: secret-scan-results
+          path: |
+            gitleaks-report.json
+            trufflehog-report.json
+          retention-days: 30
+          if-no-files-found: ignore
 
-Found error severity security issues in this PR.
-
-See the [job logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.
-
-Please fix the security issues before merging.
-`
-            });
-
-  dependency-check:
-    name: Dependency Security Check
+  dependency-audit:
+    name: Dependency Security Audit
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -176,49 +179,126 @@ Please fix the security issues before merging.
         with:
           python-version: '3.12'
 
-      - name: Install safety
-        run: pip install safety
+      - name: Install dependency audit tooling
+        run: pip install --upgrade pip-audit safety cyclonedx-bom
 
-      - name: Check for requirements files
-        id: check-reqs
+      - name: Run pip-audit on lockfiles
         run: |
-          if [ -f "requirements.txt" ] || [ -f "requirements-lock.txt" ] || [ -f "pyproject.toml" ]; then
-            echo "found=true" >> $GITHUB_OUTPUT
-          else
-            echo "found=false" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          files=()
+          for f in requirements-cpu.lock.txt requirements-gpu.lock.txt requirements-dev.txt requirements-build.txt; do
+            if [ -f "$f" ]; then
+              files+=("$f")
+            fi
+          done
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No lockfiles found"
+            exit 0
           fi
+          for file in "${files[@]}"; do
+            out="pip-audit-${file//[^A-Za-z0-9]/_}.json"
+            set +e
+            pip-audit -r "$file" --format json --output "$out" --disable-pip --progress-spinner off
+            status=$?
+            set -e
+            if [ "$status" -ge 2 ]; then
+              echo "::error::pip-audit failed for $file (exit=$status)"
+              exit $status
+            fi
+          done
+          python - <<'PY'
+          import glob, json, sys
+          high = 0
+          for path in glob.glob("pip-audit-*.json"):
+              data = json.load(open(path, "r", encoding="utf-8"))
+              for dep in data:
+                  for vuln in dep.get("vulns", []):
+                      sev = str(vuln.get("severity", "")).upper()
+                      if sev in {"HIGH", "CRITICAL"}:
+                          high += 1
+          if high:
+              print(f"pip-audit found {high} HIGH/CRITICAL vulnerabilities")
+              sys.exit(1)
+          PY
 
-      - name: Run Safety check
-        if: steps.check-reqs.outputs.found == 'true'
+      - name: Run safety on lockfiles
         run: |
-          echo "Running dependency security check..."
-
-          # Check requirements.txt if exists
-          if [ -f "requirements.txt" ]; then
-            echo "Checking requirements.txt..."
-            safety check -r requirements.txt --json --output safety-results.json || true
-            safety check -r requirements.txt || true
+          set -euo pipefail
+          files=()
+          for f in requirements-cpu.lock.txt requirements-gpu.lock.txt requirements-dev.txt requirements-build.txt; do
+            if [ -f "$f" ]; then
+              files+=("$f")
+            fi
+          done
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No lockfiles found for safety"
+            exit 0
           fi
+          for file in "${files[@]}"; do
+            out="safety-${file//[^A-Za-z0-9]/_}.json"
+            set +e
+            safety check --file "$file" --json > "$out"
+            status=$?
+            set -e
+            if [ "$status" -ge 2 ]; then
+              echo "::error::safety failed for $file (exit=$status)"
+              exit $status
+            fi
+          done
+          python - <<'PY'
+          import glob, json, sys
+          high = 0
+          for path in glob.glob("safety-*.json"):
+              try:
+                  payload = json.load(open(path, "r", encoding="utf-8"))
+              except json.JSONDecodeError:
+                  continue
+              vulns = payload.get("vulnerabilities") or payload.get("issues") or []
+              for vuln in vulns:
+                  sev = str(vuln.get("severity", "")).upper()
+                  if not sev and isinstance(vuln, dict):
+                      sev = str(vuln.get("severity", vuln.get("severity_level", ""))).upper()
+                  if sev in {"HIGH", "CRITICAL"}:
+                      high += 1
+          if high:
+              print(f"Safety reported {high} HIGH/CRITICAL vulnerabilities")
+              sys.exit(1)
+          PY
 
-          # Check requirements-lock.txt if exists
-          if [ -f "requirements-lock.txt" ]; then
-            echo "Checking requirements-lock.txt..."
-            safety check -r requirements-lock.txt || true
+      - name: Generate SBOM (CycloneDX)
+        run: |
+          set -euo pipefail
+          files=()
+          for f in requirements-cpu.lock.txt requirements-gpu.lock.txt requirements-dev.txt requirements-build.txt; do
+            if [ -f "$f" ]; then
+              files+=("$f")
+            fi
+          done
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No lockfiles found for SBOM generation"
+            exit 0
           fi
-        continue-on-error: true
+          args=""
+          for file in "${files[@]}"; do
+            args="$args --requirements $file"
+          done
+          cyclonedx-py --format json --output sbom.json $args
 
-      - name: Upload Safety results
+      - name: Upload dependency audit artifacts
         uses: actions/upload-artifact@v4
-        if: always() && steps.check-reqs.outputs.found == 'true'
+        if: always()
         with:
-          name: safety-results
-          path: safety-results.json
-          retention-days: 30
+          name: dependency-audit
+          path: |
+            pip-audit-*.json
+            safety-*.json
+            sbom.json
           if-no-files-found: ignore
+          retention-days: 30
 
   summary:
     name: Security Summary
-    needs: [bandit, semgrep, dependency-check]
+    needs: [bandit, semgrep, secrets-scan, dependency-audit]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -227,11 +307,10 @@ Please fix the security issues before merging.
           echo "Security Scan Summary:"
           echo "  - Bandit: ${{ needs.bandit.result }}"
           echo "  - Semgrep: ${{ needs.semgrep.result }}"
-          echo "  - Dependency Check: ${{ needs.dependency-check.result }}"
-
-          if [ "${{ needs.bandit.result }}" == "failure" ] || [ "${{ needs.semgrep.result }}" == "failure" ]; then
-            echo "❌ Security issues found"
+          echo "  - Secret Scans: ${{ needs.secrets-scan.result }}"
+          echo "  - Dependency Audit: ${{ needs.dependency-audit.result }}"
+          if [ "${{ needs.bandit.result }}" == "failure" ] || [ "${{ needs.semgrep.result }}" == "failure" ] || [ "${{ needs.secrets-scan.result }}" == "failure" ] || [ "${{ needs.dependency-audit.result }}" == "failure" ]; then
+            echo "❌ Security checks failed"
             exit 1
           fi
-
           echo "✅ Security checks passed"

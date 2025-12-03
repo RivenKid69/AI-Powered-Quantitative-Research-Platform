@@ -8,12 +8,12 @@ access.
 ## Authentication
 
 Requests must include an `X-API-Key` header whose value matches the
-`SEASONALITY_API_TOKEN` environment variable defined on the server.  A
-default placeholder of `changeme` is used if the variable is unset.
-Never expose the service without setting a strong token.
+`SEASONALITY_API_TOKEN` environment variable defined on the server. Load
+the token from your secret manager or `.env` (see `.env.example`) and never
+start the service with a default or hard-coded value.
 
 ```bash
-export SEASONALITY_API_TOKEN="supersecret"
+export SEASONALITY_API_TOKEN="<set-via-secret-manager>"
 uvicorn app:api --reload
 ```
 

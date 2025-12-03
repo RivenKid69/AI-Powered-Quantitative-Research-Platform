@@ -55,6 +55,7 @@ from services.monitoring import (
     pipeline_stage_drop_count,
     MonitoringAggregator,
 )
+from services.runtime_security import configure_runtime_security
 from services.alerts import AlertManager
 from pipeline import (
     check_ttl,
@@ -9246,6 +9247,15 @@ def from_config(
                 rt_cfg = yaml.safe_load(f) or {}
         except Exception:
             rt_cfg = {}
+
+    runtime_security_state = configure_runtime_security(
+        mode=getattr(cfg, "mode", ""),
+        config=rt_cfg.get("security"),
+    )
+    if runtime_security_state:
+        logging.getLogger(__name__).info(
+            "runtime security guards active: %s", runtime_security_state
+        )
 
     # Load signal quality configuration
     signal_quality_cfg = SignalQualityConfig()
