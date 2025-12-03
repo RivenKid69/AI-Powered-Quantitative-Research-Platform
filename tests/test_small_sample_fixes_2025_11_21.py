@@ -18,14 +18,63 @@ References:
 
 import sys
 import os
+import types
 import warnings
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _install_sb3_stub() -> None:
+    """Install minimal SB3 stubs for testing without full dependencies."""
+    if "sb3_contrib" in sys.modules:
+        return
+
+    sb3_contrib = types.ModuleType("sb3_contrib")
+    sb3_contrib.__path__ = []
+    sys.modules["sb3_contrib"] = sb3_contrib
+
+    common = types.ModuleType("sb3_contrib.common")
+    common.__path__ = []
+    sys.modules["sb3_contrib.common"] = common
+    sb3_contrib.common = common  # type: ignore[attr-defined]
+
+    recurrent = types.ModuleType("sb3_contrib.common.recurrent")
+    recurrent.__path__ = []
+    sys.modules["sb3_contrib.common.recurrent"] = recurrent
+    common.recurrent = recurrent  # type: ignore[attr-defined]
+
+    policies = types.ModuleType("sb3_contrib.common.recurrent.policies")
+
+    class _DummyPolicy:  # pragma: no cover - placeholder
+        pass
+
+    policies.RecurrentActorCriticPolicy = _DummyPolicy
+    sys.modules["sb3_contrib.common.recurrent.policies"] = policies
+    recurrent.policies = policies  # type: ignore[attr-defined]
+
+    # Add buffers module (required by train_model_multi_patch imports)
+    buffers = types.ModuleType("sb3_contrib.common.recurrent.buffers")
+
+    class _DummyBuffer:  # pragma: no cover - placeholder
+        pass
+
+    buffers.RecurrentRolloutBuffer = _DummyBuffer
+    sys.modules["sb3_contrib.common.recurrent.buffers"] = buffers
+    recurrent.buffers = buffers  # type: ignore[attr-defined]
+
+    # Add type_aliases module (required by custom_policy_patch1 imports)
+    type_aliases = types.ModuleType("sb3_contrib.common.recurrent.type_aliases")
+    type_aliases.RNNStates = object  # Simple placeholder
+    sys.modules["sb3_contrib.common.recurrent.type_aliases"] = type_aliases
+    recurrent.type_aliases = type_aliases  # type: ignore[attr-defined]
+
+
+_install_sb3_stub()
 
 import numpy as np
 import pandas as pd
 import pytest
-from train_model_multi_patch import sharpe_ratio, sortino_ratio
-from features_pipeline import FeaturePipeline
+from train_model_multi_patch import sharpe_ratio, sortino_ratio  # noqa: E402
+from features_pipeline import FeaturePipeline  # noqa: E402
 
 
 # ==============================================================================
@@ -151,15 +200,23 @@ class TestTransformDFDoubleShift:
     """Test FeaturePipeline.transform_df() repeated application protection."""
 
     def setup_method(self):
-        """Create simple test data and fitted pipeline."""
+        """Create simple test data and fitted pipelines."""
         self.df = pd.DataFrame({
             'timestamp': [1000, 2000, 3000, 4000, 5000],
             'close': [100.0, 101.0, 102.0, 103.0, 104.0],
             'volume': [1000, 1100, 1200, 1300, 1400]
         })
-        self.pipe = FeaturePipeline()
+        # Pipeline with strict_idempotency=True (default) - raises ValueError
+        self.pipe_strict = FeaturePipeline(strict_idempotency=True)
         dfs_dict = {'BTCUSDT': self.df.copy()}
-        self.pipe.fit(dfs_dict)
+        self.pipe_strict.fit(dfs_dict)
+
+        # Pipeline with strict_idempotency=False - issues warning but returns original
+        self.pipe_lenient = FeaturePipeline(strict_idempotency=False)
+        self.pipe_lenient.fit(dfs_dict)
+
+        # Backward compatible reference
+        self.pipe = self.pipe_strict
 
     def test_first_transform_shifts_close_correctly(self):
         """First transform_df() should shift close correctly."""
@@ -178,14 +235,22 @@ class TestTransformDFDoubleShift:
         assert df_transformed.attrs.get('_feature_pipeline_transformed') == True, \
             "Transform marker should be set"
 
-    def test_second_transform_warns_about_double_shift(self):
-        """Second transform_df() should warn about repeated application."""
-        df_transformed_1 = self.pipe.transform_df(self.df.copy())
+    def test_second_transform_raises_error_in_strict_mode(self):
+        """Second transform_df() should raise ValueError in strict mode (default)."""
+        df_transformed_1 = self.pipe_strict.transform_df(self.df.copy())
 
-        # Second transform should trigger warning
+        # Second transform should raise ValueError in strict mode
+        with pytest.raises(ValueError, match="already-transformed"):
+            self.pipe_strict.transform_df(df_transformed_1.copy())
+
+    def test_second_transform_warns_in_lenient_mode(self):
+        """Second transform_df() should warn in lenient mode (strict_idempotency=False)."""
+        df_transformed_1 = self.pipe_lenient.transform_df(self.df.copy())
+
+        # Second transform should trigger warning in lenient mode
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            df_transformed_2 = self.pipe.transform_df(df_transformed_1.copy())
+            df_transformed_2 = self.pipe_lenient.transform_df(df_transformed_1.copy())
 
             # Check: warning was raised
             assert len(w) == 1, f"Expected 1 warning, got {len(w)}"
@@ -194,37 +259,49 @@ class TestTransformDFDoubleShift:
             assert "already-transformed" in str(w[0].message).lower(), \
                 f"Warning should mention 'already-transformed', got: {w[0].message}"
 
-    def test_second_transform_causes_double_shift(self):
-        """Second transform_df() causes double shift (expected behavior with warning)."""
-        df_transformed_1 = self.pipe.transform_df(self.df.copy())
+        # In lenient mode, the original (already transformed) DataFrame is returned unchanged
+        pd.testing.assert_frame_equal(df_transformed_2, df_transformed_1)
 
-        # Suppress warning for this test (we know it's wrong)
+    def test_strict_mode_prevents_double_shift(self):
+        """Strict mode (default) prevents double shift by raising ValueError."""
+        df_transformed_1 = self.pipe_strict.transform_df(self.df.copy())
+
+        # In strict mode, second transform raises ValueError - prevents double shift
+        with pytest.raises(ValueError, match="already-transformed"):
+            self.pipe_strict.transform_df(df_transformed_1.copy())
+
+    def test_lenient_mode_returns_original_no_double_shift(self):
+        """Lenient mode returns original DataFrame unchanged, preventing double shift."""
+        df_transformed_1 = self.pipe_lenient.transform_df(self.df.copy())
+
+        # Suppress warning for this test
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            df_transformed_2 = self.pipe.transform_df(df_transformed_1.copy())
+            df_transformed_2 = self.pipe_lenient.transform_df(df_transformed_1.copy())
 
-        # Check: close is shifted TWICE
-        # Original: [100, 101, 102, 103, 104]
-        # After 1st: [NaN, 100, 101, 102, 103]
-        # After 2nd: [NaN, NaN, 100, 101, 102]
-        assert pd.isna(df_transformed_2['close'].iloc[0]), "close[0] should be NaN"
-        assert pd.isna(df_transformed_2['close'].iloc[1]), "close[1] should be NaN (double shift)"
-        assert df_transformed_2['close'].iloc[2] == 100.0, \
-            f"Expected close[2]=100.0 (double shifted), got {df_transformed_2['close'].iloc[2]}"
+        # In lenient mode, return unchanged (no double shift) - IDEMPOTENT behavior
+        # close[1] should still be 100.0 (not NaN from double shift)
+        assert df_transformed_2['close'].iloc[1] == 100.0, \
+            f"Expected close[1]=100.0 (no double shift), got {df_transformed_2['close'].iloc[1]}"
+        pd.testing.assert_frame_equal(df_transformed_2, df_transformed_1)
 
     def test_transform_with_close_orig_no_double_shift(self):
-        """Transform with close_orig present should NOT shift again."""
+        """Transform with close_orig present should NOT shift again.
+
+        Uses lenient mode since strict mode raises ValueError before checking close_orig.
+        The key behavior being tested is that close_orig prevents double shift.
+        """
         # Add close_orig to prevent shift
         df_with_orig = self.df.copy()
         df_with_orig['close_orig'] = df_with_orig['close'].copy()
 
-        # First transform
-        df_transformed_1 = self.pipe.transform_df(df_with_orig.copy())
+        # First transform (using lenient mode)
+        df_transformed_1 = self.pipe_lenient.transform_df(df_with_orig.copy())
 
-        # Second transform (should NOT shift because close_orig exists)
+        # Second transform (should NOT shift because close_orig exists + lenient mode)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")  # Ignore the marker warning
-            df_transformed_2 = self.pipe.transform_df(df_transformed_1.copy())
+            df_transformed_2 = self.pipe_lenient.transform_df(df_transformed_1.copy())
 
         # Check: close should be same as after first transform (no double shift)
         pd.testing.assert_series_equal(

@@ -58,7 +58,8 @@ def test_binance_ws_bar_uses_close_timestamp_for_ttl(monkeypatch):
         captured["bar_close_ms"] = bar_close_ms
         captured["now_ms"] = now_ms
         captured["timeframe_ms"] = timeframe_ms
-        expires_at = bar_close_ms
+        # Fix: expires_at should be bar_close_ms + timeframe_ms per pipeline.compute_expires_at
+        expires_at = bar_close_ms + timeframe_ms
         captured["expires_at_ms"] = expires_at
         return True, expires_at, ""
 

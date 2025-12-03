@@ -763,3 +763,35 @@ def create_minimal_cme_flags() -> FuturesFeatureFlags:
     for feature in essential:
         flags.set_stage(feature, RolloutStage.PRODUCTION)
     return flags
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CONVENIENCE FUNCTIONS (Module-level API)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def is_feature_enabled(feature: FuturesFeature) -> bool:
+    """
+    Check if a feature is enabled (module-level convenience function).
+
+    This is a shorthand for `get_global_flags().is_enabled(feature)`.
+
+    Args:
+        feature: Feature to check
+
+    Returns:
+        True if feature is enabled (any stage except DISABLED)
+    """
+    return get_global_flags().is_enabled(feature)
+
+
+def load_feature_flags(path: str) -> FuturesFeatureFlags:
+    """
+    Load feature flags from file and set as global (alias for init_feature_flags).
+
+    Args:
+        path: Path to configuration file
+
+    Returns:
+        Initialized FuturesFeatureFlags instance
+    """
+    return init_feature_flags(path)

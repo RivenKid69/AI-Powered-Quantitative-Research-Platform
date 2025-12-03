@@ -35,6 +35,22 @@ def _install_sb3_stub() -> None:
     sys.modules["sb3_contrib.common.recurrent.policies"] = policies
     recurrent.policies = policies  # type: ignore[attr-defined]
 
+    # Add buffers module (required by train_model_multi_patch imports)
+    buffers = types.ModuleType("sb3_contrib.common.recurrent.buffers")
+
+    class _DummyBuffer:  # pragma: no cover - placeholder
+        pass
+
+    buffers.RecurrentRolloutBuffer = _DummyBuffer
+    sys.modules["sb3_contrib.common.recurrent.buffers"] = buffers
+    recurrent.buffers = buffers  # type: ignore[attr-defined]
+
+    # Add type_aliases module (required by custom_policy_patch1 imports)
+    type_aliases = types.ModuleType("sb3_contrib.common.recurrent.type_aliases")
+    type_aliases.RNNStates = object  # Simple placeholder
+    sys.modules["sb3_contrib.common.recurrent.type_aliases"] = type_aliases
+    recurrent.type_aliases = type_aliases  # type: ignore[attr-defined]
+
 
 _install_sb3_stub()
 

@@ -1944,8 +1944,8 @@ def objective(trial: optuna.Trial,
 
     # Log warning if test data is provided (it will be ignored during HPO)
     if test_data_by_token:
-        print(
-            "[WARN] Test data provided to HPO objective function but will NOT be used "
+        logger.warning(
+            "Test data provided to HPO objective function but will NOT be used "
             "for hyperparameter optimization (correct behavior). Test data should "
             "only be used for final evaluation after HPO is complete."
         )
@@ -4020,48 +4020,49 @@ def objective(trial: optuna.Trial,
         "kl_absolute_stop_factor",
         kl_absolute_stop_factor_default,
     )
-    logger = getattr(model, "logger", None) or getattr(model, "_logger", None)
+    # NOTE: Use model_logger to avoid shadowing the module-level logger
+    model_logger = getattr(model, "logger", None) or getattr(model, "_logger", None)
     expand_logger = getattr(model, "_expand_logger_key_length", None)
     min_key_length = getattr(model, "_LOGGER_MIN_KEY_LENGTH", None)
     if callable(expand_logger) and isinstance(min_key_length, (int, float)):
         try:
-            expand_logger(logger, min_max_length=int(min_key_length))
+            expand_logger(model_logger, min_max_length=int(min_key_length))
         except Exception:
             pass
-    if logger is not None:
-        logger.record("config/target_kl", float(target_kl_logged))
-        logger.record(
+    if model_logger is not None:
+        model_logger.record("config/target_kl", float(target_kl_logged))
+        model_logger.record(
             "config/kl_exceed_stop_fraction", float(kl_exceed_stop_fraction_logged)
         )
         if kl_absolute_stop_factor_logged is not None:
-            logger.record(
+            model_logger.record(
                 "config/kl_absolute_stop_factor",
                 float(kl_absolute_stop_factor_logged),
             )
         else:
-            logger.record("config/kl_absolute_stop_factor", 0.0)
-        logger.record("config/kl_early_stop", 1.0 if kl_early_stop_logged else 0.0)
-        logger.record(
+            model_logger.record("config/kl_absolute_stop_factor", 0.0)
+        model_logger.record("config/kl_early_stop", 1.0 if kl_early_stop_logged else 0.0)
+        model_logger.record(
             "config/kl_use_ema", 1.0 if params.get("kl_early_stop_use_ema", True) else 0.0
         )
-        logger.record("config/kl_ema_updates", float(params.get("kl_ema_updates", 10)))
+        model_logger.record("config/kl_ema_updates", float(params.get("kl_ema_updates", 10)))
         if params.get("kl_ema_alpha") is not None:
-            logger.record("config/kl_ema_alpha", float(params["kl_ema_alpha"]))
-        logger.record(
+            model_logger.record("config/kl_ema_alpha", float(params["kl_ema_alpha"]))
+        model_logger.record(
             "config/kl_consec_minibatches", float(params.get("kl_consec_minibatches", 3))
         )
-        logger.record("config/kl_penalty_beta_init", float(params["kl_penalty_beta_init"]))
-        logger.record("config/kl_penalty_beta_min", float(params["kl_penalty_beta_min"]))
-        logger.record("config/kl_penalty_beta_max", float(params["kl_penalty_beta_max"]))
-        logger.record("config/kl_penalty_pid_kp", float(params["kl_penalty_pid_kp"]))
-        logger.record("config/kl_penalty_pid_ki", float(params["kl_penalty_pid_ki"]))
-        logger.record("config/kl_penalty_pid_kd", float(params["kl_penalty_pid_kd"]))
-        logger.record("config/kl_penalty_beta", float(kl_penalty_beta_logged))
-        logger.record(
+        model_logger.record("config/kl_penalty_beta_init", float(params["kl_penalty_beta_init"]))
+        model_logger.record("config/kl_penalty_beta_min", float(params["kl_penalty_beta_min"]))
+        model_logger.record("config/kl_penalty_beta_max", float(params["kl_penalty_beta_max"]))
+        model_logger.record("config/kl_penalty_pid_kp", float(params["kl_penalty_pid_kp"]))
+        model_logger.record("config/kl_penalty_pid_ki", float(params["kl_penalty_pid_ki"]))
+        model_logger.record("config/kl_penalty_pid_kd", float(params["kl_penalty_pid_kd"]))
+        model_logger.record("config/kl_penalty_beta", float(kl_penalty_beta_logged))
+        model_logger.record(
             "config/kl_penalty_type",
             params.get("kl_penalty_type", "adaptive_beta"),
         )
-        logger.record(
+        model_logger.record(
             "config/kl_use_lr_decay_requested",
             1.0 if params.get("kl_use_lr_decay_requested", False) else 0.0,
         )

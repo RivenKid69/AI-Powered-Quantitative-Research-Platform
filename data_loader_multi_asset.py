@@ -366,6 +366,8 @@ def load_from_adapter(
     asset_class = AssetClass.CRYPTO
     if vendor in (DataVendor.ALPACA, DataVendor.POLYGON):
         asset_class = AssetClass.EQUITY
+    elif vendor in (DataVendor.OANDA, DataVendor.IG, DataVendor.DUKASCOPY):
+        asset_class = AssetClass.FOREX
 
     # Parse dates
     start_ts = None
@@ -443,6 +445,10 @@ def load_from_adapter(
                     df = _add_stock_features(
                         df, symbol.upper(), vix_df=vix_df, spy_df=spy_df, qqq_df=qqq_df
                     )
+
+            # Apply forex-specific processing (Phase 9)
+            if asset_class == AssetClass.FOREX:
+                df = _add_forex_features(df, symbol.upper())
 
             all_dfs[symbol.upper()] = df
 
@@ -614,6 +620,76 @@ def _add_stock_features(
     return df
 
 
+def _add_forex_features(
+    df: pd.DataFrame,
+    pair: str,
+) -> pd.DataFrame:
+    """
+    Add forex-specific features to DataFrame.
+
+    This function enriches forex DataFrames with:
+    - Session indicators (Sydney/Tokyo/London/NY)
+    - Session liquidity factors
+    - Session overlap flags
+
+    For more comprehensive forex features (swap rates, interest rate differentials,
+    economic calendar proximity), use data_loader_forex.py directly.
+
+    Args:
+        df: DataFrame with forex data
+        pair: Currency pair (e.g., "EUR_USD")
+
+    Returns:
+        DataFrame with forex features added
+    """
+    try:
+        from data_loader_forex import _add_session_features
+
+        df = _add_session_features(df)
+        logger.debug(f"Added forex session features to {pair}")
+
+    except ImportError as e:
+        logger.warning(f"Could not import forex session features: {e}")
+        # Fallback: add basic session indicators
+        if "timestamp" in df.columns and len(df) > 0:
+            from datetime import datetime, timezone
+
+            def get_session(ts: int) -> str:
+                dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+                hour = dt.hour
+                if 12 <= hour < 16:
+                    return "london_ny_overlap"
+                if 7 <= hour < 9:
+                    return "tokyo_london_overlap"
+                if 7 <= hour < 16:
+                    return "london"
+                if 12 <= hour < 21:
+                    return "new_york"
+                if 0 <= hour < 9:
+                    return "tokyo"
+                if hour >= 21 or hour < 6:
+                    return "sydney"
+                return "low_liquidity"
+
+            df = df.copy()
+            df["session"] = df["timestamp"].apply(get_session)
+            df["session_liquidity"] = df["session"].map({
+                "london_ny_overlap": 1.5,
+                "tokyo_london_overlap": 1.0,
+                "london": 1.3,
+                "new_york": 1.2,
+                "tokyo": 0.8,
+                "sydney": 0.6,
+                "low_liquidity": 0.4,
+            }).fillna(0.5)
+            df["is_session_overlap"] = df["session"].str.contains("overlap", na=False)
+
+    except Exception as e:
+        logger.warning(f"Error adding forex features to {pair}: {e}")
+
+    return df
+
+
 def load_multi_asset_data(
     paths: Sequence[Union[str, Path]],
     asset_class: AssetClass = AssetClass.CRYPTO,
@@ -627,6 +703,15 @@ def load_multi_asset_data(
     vix_path: Optional[str] = None,
     spy_path: Optional[str] = None,
     qqq_path: Optional[str] = None,
+    # Forex-specific options (Phase 9)
+    filter_weekends: bool = True,
+    add_session_features: bool = True,
+    merge_swap_rates: bool = False,
+    merge_interest_rates: bool = False,
+    merge_calendar: bool = False,
+    swap_dir: Optional[str] = None,
+    rate_dir: Optional[str] = None,
+    calendar_dir: Optional[str] = None,
 ) -> Tuple[Dict[str, pd.DataFrame], Dict[str, np.ndarray]]:
     """
     Load data from multiple files with multi-asset support.
@@ -636,7 +721,7 @@ def load_multi_asset_data(
 
     Args:
         paths: List of file paths (feather, parquet, csv)
-        asset_class: Asset class (crypto/equity)
+        asset_class: Asset class (crypto/equity/forex)
         timeframe: Bar timeframe
         merge_fear_greed: Merge Fear & Greed data (crypto only)
         synthetic_fraction: Fraction of synthetic data (unused)
@@ -647,6 +732,15 @@ def load_multi_asset_data(
         vix_path: Path to VIX data file (optional, will try default locations)
         spy_path: Path to SPY data file (optional, will try default locations)
         qqq_path: Path to QQQ data file (optional, will try default locations)
+        # Forex-specific options (Phase 9)
+        filter_weekends: Filter out forex weekend gaps (forex only)
+        add_session_features: Add session indicators Sydney/Tokyo/London/NY (forex only)
+        merge_swap_rates: Merge swap/rollover rate data (forex only)
+        merge_interest_rates: Merge interest rate differential data (forex only)
+        merge_calendar: Merge economic calendar proximity (forex only)
+        swap_dir: Directory with swap rate files (forex only)
+        rate_dir: Directory with interest rate files (forex only)
+        calendar_dir: Directory with calendar files (forex only)
 
     Returns:
         (all_dfs_dict, all_obs_dict) tuple
@@ -677,6 +771,32 @@ def load_multi_asset_data(
             logger.info(f"Loaded SPY benchmark data: {len(spy_df)} rows")
         if qqq_df is not None:
             logger.info(f"Loaded QQQ benchmark data: {len(qqq_df)} rows")
+
+    # Forex: use specialized forex loader (Phase 9)
+    if asset_class == AssetClass.FOREX:
+        try:
+            from data_loader_forex import load_forex_data as _load_forex_data
+
+            forex_dfs, forex_obs = _load_forex_data(
+                paths=list(paths),
+                timeframe=timeframe,
+                filter_weekends=filter_weekends,
+                merge_swaps=merge_swap_rates,
+                merge_rates=merge_interest_rates,
+                merge_calendar=merge_calendar,
+                swap_dir=swap_dir,
+                rate_dir=rate_dir,
+                calendar_dir=calendar_dir,
+                add_session_features=add_session_features,
+            )
+
+            logger.info(f"Loaded {len(forex_dfs)} forex pairs via specialized loader")
+            return forex_dfs, {k: np.array(v) for k, v in forex_obs.items()}
+
+        except ImportError as e:
+            logger.warning(f"Forex loader not available, falling back to generic: {e}")
+        except Exception as e:
+            logger.warning(f"Forex loader failed, falling back to generic: {e}")
 
     for path in paths:
         try:

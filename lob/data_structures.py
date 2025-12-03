@@ -642,6 +642,21 @@ class OrderBook:
             return False
         return bid >= ask
 
+    @property
+    def num_bid_levels(self) -> int:
+        """Number of distinct bid price levels."""
+        return len(self._bids)
+
+    @property
+    def num_ask_levels(self) -> int:
+        """Number of distinct ask price levels."""
+        return len(self._asks)
+
+    @property
+    def num_levels(self) -> int:
+        """Total number of price levels (bids + asks)."""
+        return len(self._bids) + len(self._asks)
+
     # ==========================================================================
     # Order Operations
     # ==========================================================================
@@ -1062,6 +1077,40 @@ class OrderBook:
             asks.append((key, level.total_visible_qty, level.order_count))
 
         return bids, asks
+
+    def get_bid_levels(self, limit: int = 100) -> List[PriceLevel]:
+        """
+        Get bid price levels as PriceLevel objects.
+
+        Args:
+            limit: Maximum number of levels to return
+
+        Returns:
+            List of PriceLevel objects, sorted by price descending (best first)
+        """
+        levels: List[PriceLevel] = []
+        for i, (key, level) in enumerate(self._bids.items()):
+            if i >= limit:
+                break
+            levels.append(level)
+        return levels
+
+    def get_ask_levels(self, limit: int = 100) -> List[PriceLevel]:
+        """
+        Get ask price levels as PriceLevel objects.
+
+        Args:
+            limit: Maximum number of levels to return
+
+        Returns:
+            List of PriceLevel objects, sorted by price ascending (best first)
+        """
+        levels: List[PriceLevel] = []
+        for i, (key, level) in enumerate(self._asks.items()):
+            if i >= limit:
+                break
+            levels.append(level)
+        return levels
 
     def walk_book(
         self,
