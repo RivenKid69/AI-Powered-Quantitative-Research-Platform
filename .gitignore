@@ -3,9 +3,18 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# C extensions
-*.so
-*.c  # Generated Cython files
+# C extensions (built shared libraries)
+*.so      # Linux/macOS shared libraries
+*.pyd     # Windows extension modules
+*.dll     # Windows dynamic libraries
+*.dylib   # macOS dynamic libraries
+
+# Generated Cython C/C++ files
+*.c       # Generated from .pyx
+*.cpp     # Keep only hand-written C++ files (OrderBook.cpp, etc.)
+
+# Build artifacts
+build_hash_report.json
 
 # Distribution / packaging
 .Python

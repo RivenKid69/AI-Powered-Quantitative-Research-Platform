@@ -1,0 +1,17 @@
+# Build Requirements for Native Extensions
+# Pin versions for reproducible builds
+#
+# Install with: pip install -r requirements-build.txt
+
+# Core build tools
+setuptools==69.0.3
+wheel==0.42.0
+
+# Cython compiler
+Cython==3.0.10
+
+# Numpy (required for C API headers)
+numpy==1.26.4
+
+# Optional: for better error messages
+colorama==0.4.6; sys_platform == "win32"
