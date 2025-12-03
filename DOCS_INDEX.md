@@ -32,7 +32,7 @@
 |------|----------|
 | [CLAUDE.md](CLAUDE.md) | ⭐ **Master reference** - полная документация (RU) |
 | [docs/AI_GUIDE.md](docs/AI_GUIDE.md) | 🤖 **AI Agent Guide** - context & instructions (EN) |
-| [README.md](README.md) | Обзор проекта и quick start |
+| [README.md](README.md) | Обзор, установка, quick start и runbooks (sim/live/debug/release) |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Архитектура системы |
 | [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md) | Инструкции по сборке |
 | [QUICK_START_REFERENCE.md](QUICK_START_REFERENCE.md) | Быстрый старт |
