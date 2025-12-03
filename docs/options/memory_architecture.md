@@ -107,8 +107,8 @@ manager = create_options_lob_manager(
 ```
 
 Examples:
-- `SPY_241220_C_500` — SPY Dec 2024 500 Call
-- `AAPL_250117_P_200` — AAPL Jan 2025 200 Put
+- `SPY_241220_C_500` -- SPY Dec 2024 500 Call
+- `AAPL_250117_P_200` -- AAPL Jan 2025 200 Put
 
 #### Usage
 

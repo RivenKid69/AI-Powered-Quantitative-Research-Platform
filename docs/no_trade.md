@@ -7,8 +7,8 @@ This document explains the available fields, dataset masking options, and runtim
 
 The `no_trade` section is split into two structured blocks:
 
-* `maintenance` – static windows around funding, maintenance, or custom events.
-* `dynamic` – runtime guard that can pause trading based on market anomalies.
+* `maintenance` - static windows around funding, maintenance, or custom events.
+* `dynamic` - runtime guard that can pause trading based on market anomalies.
 
 `NoTradeConfig` keeps backwards-compatible accessors (`funding_buffer_min`,
 `daily_utc`, `custom_ms`, `dynamic_guard`), but new configuration files should

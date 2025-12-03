@@ -80,25 +80,25 @@ True  # ✅ PRESERVED
 **Новые тесты** (test_feature_pipeline_idempotency.py): **16 тестов**
 
 #### TestFeaturePipelineIdempotency (12 tests)
-- ✅ `test_strict_mode_fails_on_repeated_transform_same_df` — Strict mode блокирует повторный вызов на том же DataFrame
-- ✅ `test_strict_mode_fails_on_repeated_transform_copy` — Strict mode блокирует даже на копии (attrs preserved)
-- ✅ `test_idempotent_mode_returns_unchanged` — Idempotent mode возвращает unchanged DataFrame
-- ✅ `test_fresh_copies_work_fine` — Свежие копии из original работают корректно
-- ✅ `test_double_shift_causes_wrong_lag` — Демонстрация проблемы double shift (lag=2)
-- ✅ `test_close_orig_bypass_allows_multiple_transforms` — close_orig bypass работает
-- ✅ `test_per_symbol_shift_prevents_contamination` — Per-symbol shift предотвращает cross-contamination
-- ✅ `test_save_load_preserves_strict_idempotency_flag` — Save/load сохраняет strict_idempotency
-- ✅ `test_strict_idempotency_default_true` — Default strict mode для безопасности
-- ✅ `test_can_disable_strict_mode` — Можно отключить strict mode
-- ✅ `test_error_message_is_helpful` — Сообщение об ошибке содержит полезные подсказки
+- ✅ `test_strict_mode_fails_on_repeated_transform_same_df` -- Strict mode блокирует повторный вызов на том же DataFrame
+- ✅ `test_strict_mode_fails_on_repeated_transform_copy` -- Strict mode блокирует даже на копии (attrs preserved)
+- ✅ `test_idempotent_mode_returns_unchanged` -- Idempotent mode возвращает unchanged DataFrame
+- ✅ `test_fresh_copies_work_fine` -- Свежие копии из original работают корректно
+- ✅ `test_double_shift_causes_wrong_lag` -- Демонстрация проблемы double shift (lag=2)
+- ✅ `test_close_orig_bypass_allows_multiple_transforms` -- close_orig bypass работает
+- ✅ `test_per_symbol_shift_prevents_contamination` -- Per-symbol shift предотвращает cross-contamination
+- ✅ `test_save_load_preserves_strict_idempotency_flag` -- Save/load сохраняет strict_idempotency
+- ✅ `test_strict_idempotency_default_true` -- Default strict mode для безопасности
+- ✅ `test_can_disable_strict_mode` -- Можно отключить strict mode
+- ✅ `test_error_message_is_helpful` -- Сообщение об ошибке содержит полезные подсказки
 
 #### TestFeaturePipelineDataIntegrity (2 tests)
-- ✅ `test_shift_consistency_between_fit_and_transform` — fit() и transform() применяют одинаковый shift
-- ✅ `test_no_information_leakage_from_future` — Shifted close не содержит future information
+- ✅ `test_shift_consistency_between_fit_and_transform` -- fit() и transform() применяют одинаковый shift
+- ✅ `test_no_information_leakage_from_future` -- Shifted close не содержит future information
 
 #### TestBackwardCompatibility (2 tests)
-- ✅ `test_old_code_without_strict_flag_still_works` — Старый код работает с safe defaults
-- ✅ `test_legacy_json_without_config_loads_with_defaults` — Legacy JSON файлы загружаются корректно
+- ✅ `test_old_code_without_strict_flag_still_works` -- Старый код работает с safe defaults
+- ✅ `test_legacy_json_without_config_loads_with_defaults` -- Legacy JSON файлы загружаются корректно
 
 **Обновлённые тесты**:
 - ✅ Fixed `test_medium_issues_fixes.py::TestIntegration::test_full_pipeline_with_all_fixes` (удалена устаревшая проверка `_close_shifted_in_fit`)
@@ -115,7 +115,7 @@ result1 = pipe.transform_df(df)        # ✅ Success
 result2 = pipe.transform_df(result1)   # ❌ ValueError: "already-transformed DataFrame"
 ```
 
-**Result**: ✅ **PREVENTED** — Повторный вызов блокируется с чёткой ошибкой
+**Result**: ✅ **PREVENTED** -- Повторный вызов блокируется с чёткой ошибкой
 
 #### Scenario 2: Repeated transform_df() (Idempotent Mode)
 
@@ -127,7 +127,7 @@ result1 = pipe.transform_df(df)        # ✅ Success
 result2 = pipe.transform_df(result1)   # ⚠️ Warning, returns result1 unchanged
 ```
 
-**Result**: ✅ **SAFE** — Возвращает неизменённый DataFrame, double shift не происходит
+**Result**: ✅ **SAFE** -- Возвращает неизменённый DataFrame, double shift не происходит
 
 #### Scenario 3: Fresh copies from original
 
@@ -139,7 +139,7 @@ result1 = pipe.transform_df(df.copy())  # ✅ Success
 result2 = pipe.transform_df(df.copy())  # ✅ Success
 ```
 
-**Result**: ✅ **CORRECT** — Свежие копии трансформируются корректно
+**Result**: ✅ **CORRECT** -- Свежие копии трансформируются корректно
 
 #### Scenario 4: close_orig bypass
 
@@ -154,7 +154,7 @@ result = pipe.transform_df(df)
 assert result['close'].iloc[0] == 100.0  # ✅ Not NaN
 ```
 
-**Result**: ✅ **WORKS** — close_orig bypass позволяет избежать shift
+**Result**: ✅ **WORKS** -- close_orig bypass позволяет избежать shift
 
 ---
 
@@ -376,7 +376,7 @@ tests/test_medium_issues_fixes.py::
 
 ### Рекомендации
 
-1. ✅ **Оставить текущую реализацию без изменений** — она корректна и robust
+1. ✅ **Оставить текущую реализацию без изменений** -- она корректна и robust
 2. ✅ **Использовать strict mode в production** (уже default)
 3. ✅ **Следовать best practices** из этого отчёта
 4. ✅ **Добавить comprehensive тесты в CI/CD** (test_feature_pipeline_idempotency.py)
@@ -388,16 +388,16 @@ tests/test_medium_issues_fixes.py::
 - ✅ **COMPLETE**: Устаревший тест исправлён (test_medium_issues_fixes.py)
 - ✅ **COMPLETE**: Документация обновлена (этот отчёт)
 
-**Финальный вердикт**: ✅ **NO FURTHER ACTION REQUIRED** — Система работает корректно и безопасно.
+**Финальный вердикт**: ✅ **NO FURTHER ACTION REQUIRED** -- Система работает корректно и безопасно.
 
 ---
 
 ## References
 
-- [features_pipeline.py](features_pipeline.py) — Implementation
-- [tests/test_feature_pipeline_idempotency.py](tests/test_feature_pipeline_idempotency.py) — Comprehensive tests
-- [tests/test_medium_issues_fixes.py](tests/test_medium_issues_fixes.py) — Integration tests
-- [CLAUDE.md](CLAUDE.md) — Critical fixes documentation
+- [features_pipeline.py](features_pipeline.py) -- Implementation
+- [tests/test_feature_pipeline_idempotency.py](tests/test_feature_pipeline_idempotency.py) -- Comprehensive tests
+- [tests/test_medium_issues_fixes.py](tests/test_medium_issues_fixes.py) -- Integration tests
+- [CLAUDE.md](CLAUDE.md) -- Critical fixes documentation
 
 **Report Author**: Claude (Sonnet 4.5)
 **Date**: 2025-11-21

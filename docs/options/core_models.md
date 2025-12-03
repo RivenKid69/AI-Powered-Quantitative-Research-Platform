@@ -738,7 +738,7 @@ python benchmarks/bench_options_greeks.py
 
 4. **Cox, J.C., Ross, S.A. & Rubinstein, M. (1979)**. "Option Pricing: A Simplified Approach". *Journal of Financial Economics*.
 
-5. **Leisen, D.P. & Reimer, M. (1996)**. "Binomial Models for Option Valuation — Examining and Improving Convergence". *Applied Mathematical Finance*.
+5. **Leisen, D.P. & Reimer, M. (1996)**. "Binomial Models for Option Valuation -- Examining and Improving Convergence". *Applied Mathematical Finance*.
 
 6. **Longstaff, F.A. & Schwartz, E.S. (2001)**. "Valuing American Options by Simulation: A Simple Least-Squares Approach". *Review of Financial Studies*.
 

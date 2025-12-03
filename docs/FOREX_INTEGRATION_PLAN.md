@@ -4,9 +4,9 @@
 
 Комплексный план интеграции Forex в TradingBot2 с параметрической TCA моделью (L2+) и OTC dealer simulation для 95%+ реализма. Полностью параллельно crypto и equity веткам без нарушения существующего функционала.
 
-**Ключевое архитектурное решение**: Forex — это OTC (Over-The-Counter) рынок с дилерскими котировками, а НЕ биржевой рынок с центральным order book. Поэтому:
+**Ключевое архитектурное решение**: Forex -- это OTC (Over-The-Counter) рынок с дилерскими котировками, а НЕ биржевой рынок с центральным order book. Поэтому:
 - Используется **L2+ Parametric TCA** (как для crypto/equity), НЕ L3 LOB simulation
-- **OTC Dealer Simulation** — отдельный модуль в `services/`, НЕ в `lob/`
+- **OTC Dealer Simulation** -- отдельный модуль в `services/`, НЕ в `lob/`
 - Концепция "L3" неприменима напрямую к OTC рынкам
 
 **Ключевой принцип тестирования**: Zero Regression Policy
@@ -1504,7 +1504,7 @@ class SwapRatesProvider:
 
 **ПЕРЕИМЕНОВАНО**: Ранее называлось "L3 Forex Dealer Simulation"
 
-**ВАЖНО**: Это НЕ L3 LOB simulation! Forex — OTC рынок без центрального order book. Модуль помещается в `services/`, НЕ в `lob/`.
+**ВАЖНО**: Это НЕ L3 LOB simulation! Forex -- OTC рынок без центрального order book. Модуль помещается в `services/`, НЕ в `lob/`.
 
 **Цель**: High-fidelity OTC dealer quote simulation для 95% реализма
 
@@ -1890,7 +1890,7 @@ class SwapCostTracker:
         # ... implementation
 ```
 
-#### 6.2 services/forex_position_sync.py (~300 LOC) — NEW!
+#### 6.2 services/forex_position_sync.py (~300 LOC) -- NEW!
 
 ```python
 """
@@ -2010,7 +2010,7 @@ class ForexPositionSynchronizer:
             self._task.cancel()
 ```
 
-#### 6.3 services/forex_session_router.py (~250 LOC) — NEW!
+#### 6.3 services/forex_session_router.py (~250 LOC) -- NEW!
 
 ```python
 """
@@ -2138,9 +2138,9 @@ class ForexSessionRouter:
 ```
 
 **Deliverables**:
-- `services/forex_risk_guards.py` — margin, leverage, swap tracking
-- `services/forex_position_sync.py` — position synchronization
-- `services/forex_session_router.py` — session-aware routing
+- `services/forex_risk_guards.py` -- margin, leverage, swap tracking
+- `services/forex_position_sync.py` -- position synchronization
+- `services/forex_session_router.py` -- session-aware routing
 - Integration with existing risk system
 
 **Tests**: ~100
@@ -2155,7 +2155,7 @@ class ForexSessionRouter:
 
 *Как в оригинальном плане*
 
-#### 7.2 scripts/download_swap_rates.py — NEW!
+#### 7.2 scripts/download_swap_rates.py -- NEW!
 
 ```python
 """
@@ -2173,7 +2173,7 @@ Usage:
 """
 ```
 
-#### 7.3 scripts/download_economic_calendar.py — NEW!
+#### 7.3 scripts/download_economic_calendar.py -- NEW!
 
 ```python
 """
@@ -2206,7 +2206,7 @@ Usage:
 
 *Как в оригинальном плане с добавлениями:*
 
-#### 8.1 configs/forex_defaults.yaml — Updated
+#### 8.1 configs/forex_defaults.yaml -- Updated
 
 ```yaml
 # =============================================================================
@@ -3103,9 +3103,9 @@ jobs:
 - **735+ tests total** (увеличено на 115 для regression/isolation/backward compat)
 - Property-based test suite (40 tests)
 - Stress test scenarios (20 tests)
-- **Regression test suite (45 tests) — NEW**
-- **Isolation test suite (35 tests) — NEW**
-- **Backward compatibility tests (30 tests) — NEW**
+- **Regression test suite (45 tests) -- NEW**
+- **Isolation test suite (35 tests) -- NEW**
+- **Backward compatibility tests (30 tests) -- NEW**
 - Validation report
 - CI/CD pipeline configuration
 

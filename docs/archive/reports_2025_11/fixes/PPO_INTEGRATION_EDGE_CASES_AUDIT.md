@@ -11,9 +11,9 @@ This audit examined **6 critical integration points** in the PPO implementation 
 
 **Overall Assessment**:
 -  **13 integration points verified as CORRECT**
--   **5 potential issues identified** (3 MEDIUM, 2 LOW severity)
+-   **5 potential issues identified** (3 MEDIUM, 2 LOW severity)
 - =' **3 recommended improvements** for robustness
-- =Ê **Test coverage: Strong** (127+ tests for critical fixes)
+- =Ðš **Test coverage: Strong** (127+ tests for critical fixes)
 
 ---
 
@@ -100,7 +100,7 @@ def get_parameters(self, include_optimizer: bool = False) -> dict[str, dict]:
 **Status**:  **CORRECT**
 - VGS state dict includes **all critical state**: `step_count`, per-parameter statistics, legacy statistics
 - PBT checkpoints include VGS state via `get_parameters(include_optimizer=True)`
-- VGS `load_state_dict()` handles **backward compatibility** (v1.x ’ v2.0 migration with warning)
+- VGS `load_state_dict()` handles **backward compatibility** (v1.x â€™ v2.0 migration with warning)
 
 ---
 
@@ -230,12 +230,12 @@ normalized_utility = torch.clamp(normalized_utility, 0.0, 1.0)  #  Clamp to val
 **Edge Case - All Utilities Equal**:
 - If `global_min_util == global_max_util`, then `util_range = epsilon` (very small)
 - Normalized utility becomes approximately uniform (close to 0.5 after normalization)
-- `scaled_utility = sigmoid(0) = 0.5` ’ all parameters get moderate protection
+- `scaled_utility = sigmoid(0) = 0.5` â€™ all parameters get moderate protection
 - **Behavior**: Reasonable fallback (no catastrophic failure)
 
 ---
 
-### 2.2 Sigma Noise Scaling with VGS   POTENTIAL ISSUE #1
+### 2.2 Sigma Noise Scaling with VGS   POTENTIAL ISSUE #1
 
 **Files**: `optimizers/adaptive_upgd.py:195-221`, `variance_gradient_scaler.py:400-421`
 
@@ -261,7 +261,7 @@ else:
 **Problem**:
 - If `adaptive_noise=False` (default in some configs), noise is **FIXED** (`sigma = 0.001`)
 - VGS scales gradients down (e.g., `grad *= 0.1`)
-- Noise remains constant ’ **Noise-to-signal ratio increases 10x!**
+- Noise remains constant â€™ **Noise-to-signal ratio increases 10x!**
 - Can cause excessive exploration and training instability
 
 **Verification**:
@@ -270,7 +270,7 @@ else:
 model:
   optimizer_kwargs:
     sigma: 0.001              # Fixed noise std
-    adaptive_noise: false     #   Noise does NOT adapt to VGS scaling!
+    adaptive_noise: false     #   Noise does NOT adapt to VGS scaling!
   vgs:
     enabled: true             # VGS may scale gradients down significantly
 ```
@@ -339,7 +339,7 @@ state_dict = {
 
 **Analysis**:
 - **No integer overflow** (Python ints are unbounded)
-- **No float overflow** (`beta^step` underflows to 0.0 for large `step`, causing `bias_correction ’ 1.0`)
+- **No float overflow** (`beta^step` underflows to 0.0 for large `step`, causing `bias_correction â€™ 1.0`)
 - **Mathematically correct**: Bias correction saturates to 1.0 for large steps (expected)
 
 **Status**:  **NOT AN ISSUE**
@@ -367,7 +367,7 @@ state_dict = {
 
 ---
 
-### 3.3 LSTM State During Population Replacement   POTENTIAL ISSUE #3
+### 3.3 LSTM State During Population Replacement   POTENTIAL ISSUE #3
 
 **Files**: `distributional_ppo.py:8229-8238`, `adversarial/pbt_scheduler.py:261-410`
 
@@ -442,7 +442,7 @@ if hasattr(model.policy, "recurrent_initial_state"):
 
 ## 5. Rollout Buffer Edge Cases
 
-### 5.1 EV Reserve - All Samples Masked   POTENTIAL ISSUE #4
+### 5.1 EV Reserve - All Samples Masked   POTENTIAL ISSUE #4
 
 **Files**: `distributional_ppo.py:2626-2666`, `distributional_ppo.py:9636-9680`
 
@@ -486,7 +486,7 @@ If **ALL** batches empty, epoch completes with no updates.
 
 ---
 
-### 6.2 Dones Array Mismatch   POTENTIAL ISSUE #5
+### 6.2 Dones Array Mismatch   POTENTIAL ISSUE #5
 
 **Issue**: If vectorized env returns `dones` with wrong shape, LSTM reset may fail.
 
@@ -523,7 +523,7 @@ If **ALL** batches empty, epoch completes with no updates.
 12. Rollout buffer EV reserve
 13. Twin Critics old values
 
-###   Potential Issues (5 items)
+###   Potential Issues (5 items)
 
 | # | Issue | Severity | Recommendation |
 |---|-------|----------|----------------|

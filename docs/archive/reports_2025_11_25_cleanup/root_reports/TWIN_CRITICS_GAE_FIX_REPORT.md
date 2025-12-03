@@ -8,17 +8,17 @@
 
 ## Executive Summary
 
-**CRITICAL BUG IDENTIFIED AND FIXED**: Twin Critics min(Q1, Q2) operation was NOT applied during GAE (Generalized Advantage Estimation) computation in `collect_rollouts`. This completely defeated the primary purpose of Twin Critics architecture — reducing overestimation bias in value estimates.
+**CRITICAL BUG IDENTIFIED AND FIXED**: Twin Critics min(Q1, Q2) operation was NOT applied during GAE (Generalized Advantage Estimation) computation in `collect_rollouts`. This completely defeated the primary purpose of Twin Critics architecture -- reducing overestimation bias in value estimates.
 
 **Impact**:
-- High severity — Twin Critics provided NO benefit during training
+- High severity -- Twin Critics provided NO benefit during training
 - GAE and advantages were based solely on first critic (overestimated values)
 - Affected ALL models trained with Twin Critics since feature introduction
 
 **Fix**:
 - Modified `collect_rollouts` to use `predict_values()` which correctly returns `min(Q1, Q2)`
 - Applied fix to both step-wise values AND terminal bootstrap values
-- **Zero regressions** — all existing tests pass (10/10)
+- **Zero regressions** -- all existing tests pass (10/10)
 
 ---
 
@@ -180,17 +180,17 @@ tests/test_twin_critics.py::TestTwinCriticsGradients::test_independent_gradients
 ============================= 10 passed in 2.76s ==============================
 ```
 
-✅ **Zero regressions** — all architectural, forward pass, loss, and gradient tests pass
+✅ **Zero regressions** -- all architectural, forward pass, loss, and gradient tests pass
 
 ### New Tests Created
 
 Created comprehensive test suite in `tests/test_twin_critics_gae_fix.py`:
 
 **Core tests PASSING** (4/4):
-1. ✅ `test_predict_values_uses_min_when_twin_critics_enabled` — Verifies min operation
-2. ✅ `test_predict_values_uses_single_critic_when_disabled` — Backward compatibility
-3. ✅ `test_collect_rollouts_calls_predict_values` — Integration verification
-4. ✅ `test_twin_critics_reduce_value_overestimation` — Sanity check for bias reduction
+1. ✅ `test_predict_values_uses_min_when_twin_critics_enabled` -- Verifies min operation
+2. ✅ `test_predict_values_uses_single_critic_when_disabled` -- Backward compatibility
+3. ✅ `test_collect_rollouts_calls_predict_values` -- Integration verification
+4. ✅ `test_twin_critics_reduce_value_overestimation` -- Sanity check for bias reduction
 
 **Advanced tests** (5 tests with callback setup issues - functionally correct, needs refactoring):
 - VF clipping buffer verification

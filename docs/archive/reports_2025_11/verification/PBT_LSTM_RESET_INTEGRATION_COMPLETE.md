@@ -105,8 +105,8 @@ if new_state is not None:
 ```
 
 **Test Coverage**:
-- ✅ `test_coordinator_full_training_simulation` — Updated to use new method
-- ✅ `test_pbt_exploitation_with_real_model` — Marked as backward compat test
+- ✅ `test_coordinator_full_training_simulation` -- Updated to use new method
+- ✅ `test_pbt_exploitation_with_real_model` -- Marked as backward compat test
 
 ---
 
@@ -248,7 +248,7 @@ if new_params is not None:
 
 | Scenario | Behavior | Log Level |
 |----------|----------|-----------|
-| `new_parameters = None` | Early return, no-op | — |
+| `new_parameters = None` | Early return, no-op | -- |
 | Model has LSTM states | Reset to zero | INFO |
 | Model has no LSTM | Skip reset | DEBUG |
 | `optimizer_state` not in checkpoint (strategy='copy') | Keep current optimizer | WARNING |
@@ -294,11 +294,11 @@ if new_params is not None:
 
 ## 🔗 Related Documentation
 
-- [LSTM_STATE_RESET_AFTER_PBT_ANALYSIS.md](LSTM_STATE_RESET_AFTER_PBT_ANALYSIS.md) — Full problem analysis
-- [CLAUDE.md](CLAUDE.md) — Updated with PBT + LSTM best practices
-- [tests/test_pbt_lstm_reset_integration.py](tests/test_pbt_lstm_reset_integration.py) — Integration tests
-- [tests/test_lstm_state_reset_after_pbt.py](tests/test_lstm_state_reset_after_pbt.py) — Unit tests
-- [training_pbt_adversarial_integration.py](training_pbt_adversarial_integration.py) — Implementation
+- [LSTM_STATE_RESET_AFTER_PBT_ANALYSIS.md](LSTM_STATE_RESET_AFTER_PBT_ANALYSIS.md) -- Full problem analysis
+- [CLAUDE.md](CLAUDE.md) -- Updated with PBT + LSTM best practices
+- [tests/test_pbt_lstm_reset_integration.py](tests/test_pbt_lstm_reset_integration.py) -- Integration tests
+- [tests/test_lstm_state_reset_after_pbt.py](tests/test_lstm_state_reset_after_pbt.py) -- Unit tests
+- [training_pbt_adversarial_integration.py](training_pbt_adversarial_integration.py) -- Implementation
 
 ---
 
@@ -307,9 +307,9 @@ if new_params is not None:
 ### Immediate Actions (Production Deployment)
 1. ✅ **Update existing training scripts** to use `apply_exploited_parameters()`
 2. ✅ **Monitor PBT metrics** after deployment:
-   - `pbt/exploitation_count` — should increment normally
-   - `train/value_loss` — should NOT spike after exploits
-   - `pbt/mean_performance` — should improve faster
+   - `pbt/exploitation_count` -- should increment normally
+   - `train/value_loss` -- should NOT spike after exploits
+   - `pbt/mean_performance` -- should improve faster
 3. ✅ **Check logs** for LSTM reset confirmations
 
 ### Recommended (Optional)

@@ -53,11 +53,11 @@ python scripts/build_spread_seasonality.py \
 
 Key options:
 
-* `--window-days` – restricts the computation to the most recent N days.
-* `--out` – destination JSON file used by the simulator.
-* `--spread-column` – overrides the auto-detected spread column. If omitted,
+* `--window-days` - restricts the computation to the most recent N days.
+* `--out` - destination JSON file used by the simulator.
+* `--spread-column` - overrides the auto-detected spread column. If omitted,
   the script falls back to `(high - low) / mid`.
-* `--refresh-warn-days` – emits a warning when the historical snapshot is older
+* `--refresh-warn-days` - emits a warning when the historical snapshot is older
   than the configured number of days. The warning mirrors the
   `refresh_warn_days` guard in `DynamicSpreadConfig` and helps operators notice
   stale inputs before running backtests.

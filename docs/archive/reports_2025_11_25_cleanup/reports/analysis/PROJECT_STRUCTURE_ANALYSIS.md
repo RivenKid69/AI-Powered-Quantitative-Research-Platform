@@ -3,7 +3,7 @@
 ## 1. ОБЗОР ПРОЕКТА
 
 ### Что это за проект?
-**AI-Powered Quantitative Research Platform** — это сложная система торговки на базе машинного обучения (ML), предназначенная для среднечастотной торговли (medium-frequency trading) на биржи криптовалют (в основном Binance). Проект реализует полный цикл от накопления данных, обучения моделей до исполнения торговых сигналов в реальном времени.
+**AI-Powered Quantitative Research Platform** -- это сложная система торговки на базе машинного обучения (ML), предназначенная для среднечастотной торговли (medium-frequency trading) на биржи криптовалют (в основном Binance). Проект реализует полный цикл от накопления данных, обучения моделей до исполнения торговых сигналов в реальном времени.
 
 ### Основные характеристики:
 - **Язык**: Python (основной) + Cython + C++ (оптимизация критичных операций)
@@ -593,7 +593,7 @@ MarketData -> FeaturePipe -> Model Inference ->
 
 ## 14. ВЫВОДЫ
 
-AI-Powered Quantitative Research Platform — это **комплексная, production-ready торговая система**, построенная на:
+AI-Powered Quantitative Research Platform -- это **комплексная, production-ready торговая система**, построенная на:
 
 1. **Solid Architecture** - четко определенная слойная архитектура
 2. **Advanced ML** - Distributional PPO с CVaR и Optuna HPO

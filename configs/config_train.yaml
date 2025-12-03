@@ -97,7 +97,7 @@ model:
     learning_rate: 1.0e-4              # Base learning rate (осторожно повышаем шаг обучения)
     gamma: 0.99
     gae_lambda: 0.95
-    clip_range: 0.10                   # не душим обновления (0.1–0.2 норма)
+    clip_range: 0.10                   # не душим обновления (0.1-0.2 норма)
 
     clip_range_vf: 0.7                 # ✅ FIX (2025-11-24): Enable VF clipping for PPO stability & Twin Critics
     vf_clip_warmup_updates: 10         # Warmup: gradually enable VF clipping over first 10 updates

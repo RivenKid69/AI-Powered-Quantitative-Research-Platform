@@ -10,12 +10,12 @@
 
 | Компонент | Статус | Версия |
 |-----------|--------|--------|
-| AdaptiveUPGD Optimizer | ✅ Production | — |
-| Twin Critics + VF Clipping | ✅ Production | — |
+| AdaptiveUPGD Optimizer | ✅ Production | -- |
+| Twin Critics + VF Clipping | ✅ Production | -- |
 | VGS | ✅ Production | v3.2 |
-| PBT | ✅ Production | — |
-| SA-PPO | ✅ Production | — |
-| Data Leakage Prevention | ✅ Production | — |
+| PBT | ✅ Production | -- |
+| SA-PPO | ✅ Production | -- |
+| Data Leakage Prevention | ✅ Production | -- |
 | **Multi-Asset (Stocks)** | ✅ Production | Phase 3 |
 | **Execution Providers** | ✅ Production | Phase 4 (L2) |
 | **Live Trading Improvements** | ✅ Production | Phase 9 |

@@ -28,7 +28,7 @@ When a feature column is entirely NaN:
 - During `transform_df()`, `np.clip(data, nan, nan)` returns all-NaN array
 - However, `is_constant=True` flag causes silent conversion: **NaN → 0.0**
 
-**Consequence**: Semantic ambiguity — model cannot distinguish "missing data" (NaN) from "zero value" (0.0).
+**Consequence**: Semantic ambiguity -- model cannot distinguish "missing data" (NaN) from "zero value" (0.0).
 
 ### Verification
 
@@ -80,10 +80,10 @@ In `features_pipeline.py:fit()`:
 - 2 tests skipped (future enhancements)
 
 **Key Tests**:
-- `test_fixed_behavior_all_nan_marked_and_preserved` — Verifies is_all_nan flag and NaN preservation
-- `test_partial_nan_column_works_correctly` — Ensures partial NaN columns still work
-- `test_all_nan_without_winsorization` — Verifies detection even without winsorization
-- `test_distinguish_zero_variance_from_all_nan` — Ensures constant vs all-NaN distinction
+- `test_fixed_behavior_all_nan_marked_and_preserved` -- Verifies is_all_nan flag and NaN preservation
+- `test_partial_nan_column_works_correctly` -- Ensures partial NaN columns still work
+- `test_all_nan_without_winsorization` -- Verifies detection even without winsorization
+- `test_distinguish_zero_variance_from_all_nan` -- Ensures constant vs all-NaN distinction
 
 ### Impact
 
@@ -100,8 +100,8 @@ In `features_pipeline.py:fit()`:
 
 `ServiceTrain.run()` filters rows with NaN **targets** (line 195-257) but does **NOT** filter rows with NaN **features**:
 - Line 177: `X = self.fp.transform_df(df_raw)`
-- Line 260: `_log_feature_statistics(X)` — only logs, doesn't filter
-- Line 272: `trainer.fit(X, y)` — passes X with potential NaN directly
+- Line 260: `_log_feature_statistics(X)` -- only logs, doesn't filter
+- Line 272: `trainer.fit(X, y)` -- passes X with potential NaN directly
 
 **Consequence**:
 - Neural networks (PyTorch/TensorFlow) crash with `ValueError` or `RuntimeError`
@@ -156,9 +156,9 @@ In `service_train.py:run()`:
 - 5 tests skipped (future enhancements: imputation, configurable strategy)
 
 **Key Tests**:
-- `test_all_nan_column_causes_all_rows_filtered` — Verifies informative error when all rows filtered
-- `test_clean_data_passes_through` — Ensures clean data works correctly
-- `test_logging_reports_nan_statistics` — Verifies logging of NaN details
+- `test_all_nan_column_causes_all_rows_filtered` -- Verifies informative error when all rows filtered
+- `test_clean_data_passes_through` -- Ensures clean data works correctly
+- `test_logging_reports_nan_statistics` -- Verifies logging of NaN details
 
 ### Impact
 
@@ -298,8 +298,8 @@ Fix status: COMPLETE
 - Pandas: `DataFrame.dropna()` for row-wise filtering
 
 ### Related Fixes
-- [NUMERICAL_ISSUES_FIX_SUMMARY.md](NUMERICAL_ISSUES_FIX_SUMMARY.md) — Previous NaN handling improvements (external features)
-- [CRITICAL_LSTM_RESET_FIX_REPORT.md](CRITICAL_LSTM_RESET_FIX_REPORT.md) — LSTM state reset fix
+- [NUMERICAL_ISSUES_FIX_SUMMARY.md](NUMERICAL_ISSUES_FIX_SUMMARY.md) -- Previous NaN handling improvements (external features)
+- [CRITICAL_LSTM_RESET_FIX_REPORT.md](CRITICAL_LSTM_RESET_FIX_REPORT.md) -- LSTM state reset fix
 
 ---
 
@@ -382,7 +382,7 @@ Add automated data quality checks:
    ```
 
 **Models trained AFTER 2025-11-21**:
-- No action needed — fixes applied automatically
+- No action needed -- fixes applied automatically
 
 ### For Production Deployment
 
@@ -412,7 +412,7 @@ All three reported issues have been successfully addressed:
 - 10 tests skipped (future work)
 - 0 tests failed
 
-**Verification**: `python verify_issues_simple.py` — Exit code 0 (success)
+**Verification**: `python verify_issues_simple.py` -- Exit code 0 (success)
 
 The codebase is now more robust, with explicit NaN handling and comprehensive logging to prevent silent data corruption and training failures.
 

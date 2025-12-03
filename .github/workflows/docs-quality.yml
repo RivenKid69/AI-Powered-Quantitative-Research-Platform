@@ -1,0 +1,137 @@
+name: Documentation Quality Checks
+
+on:
+  push:
+    branches: [main, master, develop]
+    paths:
+      - '**.md'
+      - '**.yaml'
+      - '**.yml'
+      - '.github/workflows/docs-quality.yml'
+      - 'tools/check_encoding.py'
+      - 'tools/normalize_encoding.py'
+  pull_request:
+    branches: [main, master, develop]
+    paths:
+      - '**.md'
+      - '**.yaml'
+      - '**.yml'
+
+jobs:
+  encoding-check:
+    name: Check Encoding (UTF-8)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Check file encoding
+        run: |
+          python tools/check_encoding.py
+        env:
+          PYTHONIOENCODING: utf-8
+
+      - name: Comment on PR (if failed)
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '❌ **Encoding check failed**\n\nFound problematic Unicode characters in markdown/YAML files.\n\nTo fix:\n```bash\npython tools/normalize_encoding.py\n```\n\nSee [job logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.'
+            })
+
+  markdown-lint:
+    name: Markdown Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run markdownlint
+        uses: nosborn/github-action-markdown-cli@v3.3.0
+        with:
+          files: .
+          config_file: .markdownlint.json
+          ignore_files: |
+            node_modules/
+            .git/
+            __pycache__/
+            venv/
+
+  markdown-render-check:
+    name: Markdown Render Check (Pandoc)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Pandoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc
+
+      - name: Check key markdown files render correctly
+        run: |
+          echo "Checking markdown files with pandoc..."
+          for file in README.md ARCHITECTURE.md CLAUDE.md BUILD_INSTRUCTIONS.md DOCS_INDEX.md; do
+            if [ -f "$file" ]; then
+              echo "Testing: $file"
+              pandoc "$file" -t html -o /dev/null || {
+                echo "ERROR: $file failed to render"
+                exit 1
+              }
+              echo "OK: $file"
+            fi
+          done
+          echo "All key markdown files render successfully!"
+
+  yaml-lint:
+    name: YAML Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install yamllint
+        run: pip install yamllint
+
+      - name: Run yamllint
+        run: |
+          yamllint -d '{extends: default, rules: {line-length: {max: 120}, document-start: disable}}' configs/ .github/
+
+  summary:
+    name: Quality Summary
+    needs: [encoding-check, markdown-lint, markdown-render-check, yaml-lint]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check results
+        run: |
+          echo "Documentation Quality Check Summary:"
+          echo "  - Encoding Check: ${{ needs.encoding-check.result }}"
+          echo "  - Markdown Lint: ${{ needs.markdown-lint.result }}"
+          echo "  - Render Check: ${{ needs.markdown-render-check.result }}"
+          echo "  - YAML Lint: ${{ needs.yaml-lint.result }}"
+
+          if [ "${{ needs.encoding-check.result }}" != "success" ] || \
+             [ "${{ needs.markdown-lint.result }}" != "success" ] || \
+             [ "${{ needs.markdown-render-check.result }}" != "success" ] || \
+             [ "${{ needs.yaml-lint.result }}" != "success" ]; then
+            echo "❌ Some quality checks failed"
+            exit 1
+          fi
+
+          echo "✅ All quality checks passed!"

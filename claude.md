@@ -7,10 +7,10 @@
 ### Критические паттерны работы
 
 **ВСЕГДА НАЧИНАЙТЕ С:**
-1. **Изучите слоистую архитектуру** — `core_` → `impl_` → `service_` → `strategies` → `script_` — НЕ НАРУШАЙТЕ зависимости!
+1. **Изучите слоистую архитектуру** -- `core_` → `impl_` → `service_` → `strategies` → `script_` -- НЕ НАРУШАЙТЕ зависимости!
 2. **Используйте Glob/Grep** для поиска файлов, НЕ используйте bash find/grep
-3. **Читайте файлы перед изменением** — НИКОГДА не редактируйте файлы, которые не читали
-4. **Проверяйте тесты** — перед изменением критичной логики найдите и изучите соответствующие тесты
+3. **Читайте файлы перед изменением** -- НИКОГДА не редактируйте файлы, которые не читали
+4. **Проверяйте тесты** -- перед изменением критичной логики найдите и изучите соответствующие тесты
 
 ### 📍 Быстрый поиск по задачам
 
@@ -165,9 +165,9 @@ TradingBot2/
 ```
 
 **Key directories**:
-- `tools/` — Scripts for verification, debugging, analysis (run directly)
-- `tests/` — All pytest tests (use `pytest tests/`)
-- `scripts/` — Data management scripts
+- `tools/` -- Scripts for verification, debugging, analysis (run directly)
+- `tests/` -- All pytest tests (use `pytest tests/`)
+- `scripts/` -- Data management scripts
 
 ### ⚡ Критические команды
 
@@ -319,7 +319,7 @@ adapter = config.create_market_data_adapter()
 
 ### Конфигурация
 
-**configs/exchange.yaml** — главный файл конфигурации биржи:
+**configs/exchange.yaml** -- главный файл конфигурации биржи:
 ```yaml
 vendor: "alpaca"  # или "binance"
 market_type: "EQUITY"  # или "CRYPTO_SPOT"
@@ -332,7 +332,7 @@ alpaca:
   extended_hours: false
 ```
 
-**configs/config_live_alpaca.yaml** — live trading для Alpaca
+**configs/config_live_alpaca.yaml** -- live trading для Alpaca
 
 ### Ключевые отличия Crypto vs Stocks
 
@@ -666,10 +666,10 @@ slippage_bps = half_spread + k * sqrt(participation) * vol_scale * 10000
 ```
 
 Где:
-- `half_spread` — половина спреда из MarketState
-- `k` — impact coefficient (0.1 для crypto, 0.05 для equity)
-- `participation` — order_notional / ADV
-- `vol_scale` — volatility adjustment factor
+- `half_spread` -- половина спреда из MarketState
+- `k` -- impact coefficient (0.1 для crypto, 0.05 для equity)
+- `participation` -- order_notional / ADV
+- `vol_scale` -- volatility adjustment factor
 
 ### Limit Order Fill Logic
 
@@ -1063,7 +1063,7 @@ pytest tests/test_equity_parametric_tca.py::TestL2Integration -v
 - Kissell & Glantz (2013): "Optimal Trading Strategies"
 - Hasbrouck (2007): "Empirical Market Microstructure"
 - Kyle (1985): "Continuous Auctions and Insider Trading"
-- ITG (2012): "Global Cost Review" — intraday patterns
+- ITG (2012): "Global Cost Review" -- intraday patterns
 - Cont, Kukanov, Stoikov (2014): "Price Impact of Order Book Events"
 - Pagano & Schwartz (2003): "Opening and Closing Auctions"
 
@@ -1076,9 +1076,9 @@ pytest tests/test_equity_parametric_tca.py::TestL2Integration -v
 Phase 5 добавляет stock-специфичные features и risk guards, параллельно crypto Fear & Greed индексу.
 
 **Файлы**:
-- `stock_features.py` — VIX integration, market regime, relative strength
-- `services/stock_risk_guards.py` — Margin, short sale, corporate actions guards
-- `services/universe_stocks.py` — Stock universe management with TTL caching
+- `stock_features.py` -- VIX integration, market regime, relative strength
+- `services/stock_risk_guards.py` -- Margin, short sale, corporate actions guards
+- `services/universe_stocks.py` -- Stock universe management with TTL caching
 
 ### Stock Features (`stock_features.py`)
 
@@ -1132,15 +1132,15 @@ rs_20d = calculate_relative_strength(
 | **CorporateActionsHandler** | SEC | Dividends, splits, ex-dates |
 
 **Margin Call Types**:
-- `FEDERAL` — Below Reg T initial margin (new positions)
-- `MAINTENANCE` — Below 25% maintenance margin
-- `HOUSE` — Broker's stricter requirements
+- `FEDERAL` -- Below Reg T initial margin (new positions)
+- `MAINTENANCE` -- Below 25% maintenance margin
+- `HOUSE` -- Broker's stricter requirements
 
 **Short Sale Restrictions**:
-- `UPTICK_RULE` — Rule 201 (short only on uptick)
-- `HTB` — Hard-to-borrow (may not be available)
-- `RESTRICTED` — Exchange restricted
-- `NOT_SHORTABLE` — Cannot be shorted
+- `UPTICK_RULE` -- Rule 201 (short only on uptick)
+- `HTB` -- Hard-to-borrow (may not be available)
+- `RESTRICTED` -- Exchange restricted
+- `NOT_SHORTABLE` -- Cannot be shorted
 
 **Использование**:
 ```python
@@ -1470,7 +1470,7 @@ Phase 10 добавляет высокоточную симуляцию order bo
 
 2. **Stage 2: Matching Engine** (`lob/matching_engine.py`)
    - FIFO Price-Time Priority matching (CME Globex style)
-   - Self-Trade Prevention (STP) — 4 режима
+   - Self-Trade Prevention (STP) -- 4 режима
    - Pro-Rata matching для опционных рынков
    - Queue position tracking (Erik Rigtorp method)
 
@@ -1644,10 +1644,10 @@ from lob import QueuePositionTracker, PositionEstimationMethod
 
 tracker = QueuePositionTracker()
 
-# MBP (pessimistic) — advance only on executions
+# MBP (pessimistic) -- advance only on executions
 state = tracker.add_order(order, level_qty_before=500.0)
 
-# MBO (exact) — requires order-level data
+# MBO (exact) -- requires order-level data
 state = tracker.add_order(order, orders_ahead=[...])
 
 # Fill probability (Poisson model)
@@ -1949,13 +1949,13 @@ SEC Reg NMS rules implementation for realistic equity simulation:
 | **Rule 611** | `NBBOProtector` | Order Protection Rule (trade-through prevention) |
 
 **Lot Types**:
-- `ODD_LOT` — < 100 shares (different execution properties)
-- `ROUND_LOT` — Exactly 100 shares or multiples
-- `MIXED_LOT` — Round lots + odd lot remainder
+- `ODD_LOT` -- < 100 shares (different execution properties)
+- `ROUND_LOT` -- Exactly 100 shares or multiples
+- `MIXED_LOT` -- Round lots + odd lot remainder
 
 **Trade-Through Protection**:
-- `BID_THROUGH` — Sell below protected bid (violation)
-- `ASK_THROUGH` — Buy above protected ask (violation)
+- `BID_THROUGH` -- Sell below protected bid (violation)
+- `ASK_THROUGH` -- Buy above protected ask (violation)
 
 ```python
 from lob.us_market_structure import (
@@ -2101,9 +2101,9 @@ Phase 11 добавляет полную поддержку Forex (OTC) чере
 
 **Статус**: ✅ Production Ready | **Тесты**: 18 test files (735+ tests planned)
 
-**Ключевое архитектурное решение**: Forex — это OTC (Over-The-Counter) рынок с дилерскими котировками, а НЕ биржевой рынок. Поэтому:
+**Ключевое архитектурное решение**: Forex -- это OTC (Over-The-Counter) рынок с дилерскими котировками, а НЕ биржевой рынок. Поэтому:
 - Используется **L2+ Parametric TCA** (как для crypto/equity), НЕ L3 LOB simulation
-- **OTC Dealer Simulation** — отдельный модуль в `services/`, НЕ в `lob/`
+- **OTC Dealer Simulation** -- отдельный модуль в `services/`, НЕ в `lob/`
 
 ### Компоненты
 
@@ -2185,8 +2185,8 @@ OANDA_PRACTICE=true  # or false for live
 - BIS Triennial Survey (2022): FX market structure
 - LMAX Exchange: FX market microstructure
 - OANDA API Documentation
-- `docs/FOREX_INTEGRATION_PLAN.md` — Полный план интеграции
-- `docs/FOREX_INTEGRATION_QUICK_REF.md` — Краткий справочник
+- `docs/FOREX_INTEGRATION_PLAN.md` -- Полный план интеграции
+- `docs/FOREX_INTEGRATION_QUICK_REF.md` -- Краткий справочник
 
 ---
 
@@ -2584,13 +2584,13 @@ exec_adapter = create_order_execution_adapter("ib", {"port": 7497})
 ### Roadmap (Phase 4+)
 
 **Next Steps**:
-- ✅ Phase 3A: Funding Rate Mechanics (Binance perpetuals) — DONE
-- ✅ Phase 3B: IB Adapters & CME Settlement — DONE
-- ✅ Phase 4A: L2 Execution Provider (Crypto Futures Slippage) — DONE
-- ✅ Phase 4B: CME SPAN Margin & Slippage — DONE
-- ✅ Phase 5A: L3 LOB Integration for Crypto Futures — DONE
-- ✅ Phase 5B: L3 LOB for CME Futures — DONE
-- ✅ Phase 6A: Crypto Futures Risk Management — DONE
+- ✅ Phase 3A: Funding Rate Mechanics (Binance perpetuals) -- DONE
+- ✅ Phase 3B: IB Adapters & CME Settlement -- DONE
+- ✅ Phase 4A: L2 Execution Provider (Crypto Futures Slippage) -- DONE
+- ✅ Phase 4B: CME SPAN Margin & Slippage -- DONE
+- ✅ Phase 5A: L3 LOB Integration for Crypto Futures -- DONE
+- ✅ Phase 5B: L3 LOB for CME Futures -- DONE
+- ✅ Phase 6A: Crypto Futures Risk Management -- DONE
 - 📋 Phase 6B: CME Futures Risk Management
 - 📋 Phase 7: Training & Backtesting Integration
 
@@ -2801,7 +2801,7 @@ Phase 4B implements CME-specific margin calculation (SPAN methodology) and slipp
 
 ### SPAN Margin Calculator
 
-**SPAN (Standard Portfolio Analysis of Risk)** — CME's risk-based margin methodology.
+**SPAN (Standard Portfolio Analysis of Risk)** -- CME's risk-based margin methodology.
 
 **Key Concepts**:
 - **Scanning Risk**: Maximum expected loss under 16 stress scenarios
@@ -3364,11 +3364,11 @@ pytest tests/test_futures_l3_execution.py::TestIntegration -v
 
 ### Референсы
 
-- Kyle (1985): "Continuous Auctions and Insider Trading" — Price impact model
-- Almgren & Chriss (2001): "Optimal Execution" — Market impact theory
-- Binance: "Liquidation Protocol" — Insurance fund and ADL mechanics
-- Binance: "Funding Rate" — 8-hour funding periods
-- FTX Research: "Liquidation Cascades" — Cascade dynamics (pre-collapse research)
+- Kyle (1985): "Continuous Auctions and Insider Trading" -- Price impact model
+- Almgren & Chriss (2001): "Optimal Execution" -- Market impact theory
+- Binance: "Liquidation Protocol" -- Insurance fund and ADL mechanics
+- Binance: "Funding Rate" -- 8-hour funding periods
+- FTX Research: "Liquidation Cascades" -- Cascade dynamics (pre-collapse research)
 
 ---
 
@@ -3656,11 +3656,11 @@ pytest tests/test_cme_l3_execution.py::TestIntegration -v
 
 ### Референсы
 
-- CME Group: "Globex Matching Algorithm" — FIFO Price-Time Priority
-- CME Group: "Market with Protection Orders" — MWP order handling
-- CME Group: "Stop Spike Logic" — Velocity logic protection
-- CME Group: "Daily Settlement Procedures" — Variation margin
-- CME Group: "Globex Trading Hours" — RTH/ETH session definitions
+- CME Group: "Globex Matching Algorithm" -- FIFO Price-Time Priority
+- CME Group: "Market with Protection Orders" -- MWP order handling
+- CME Group: "Stop Spike Logic" -- Velocity logic protection
+- CME Group: "Daily Settlement Procedures" -- Variation margin
+- CME Group: "Globex Trading Hours" -- RTH/ETH session definitions
 
 ---
 
@@ -5120,12 +5120,12 @@ pytest tests/test_options_core.py::TestVarianceSwap -v
    - ❌ `next_units = current_units + volume_frac * max_position` (удвоение!)
 
 2. **Action space bounds: [-1, 1] для policy с LongOnlyActionWrapper**
-   - ✅ `LongOnlyActionWrapper.action_space = Box(-1, 1)` — wrapper сам устанавливает!
+   - ✅ `LongOnlyActionWrapper.action_space = Box(-1, 1)` -- wrapper сам устанавливает!
    - ✅ Policy использует `tanh` когда `action_space.low < 0`
    - ❌ Wrapper НЕ должен наследовать `action_space` от env (было [0,1] → баг!)
 
 3. **LongOnlyActionWrapper: mapping [-1,1] → [0,1], НЕ clipping**
-   - ✅ `mapped = (action + 1.0) / 2.0` — policy выдаёт [-1,1], wrapper маппит в [0,1]
+   - ✅ `mapped = (action + 1.0) / 2.0` -- policy выдаёт [-1,1], wrapper маппит в [0,1]
    - ✅ `-1.0 → 0.0` (exit), `0.0 → 0.5` (50%), `+1.0 → 1.0` (100%)
    - ❌ `clipped = max(0, action)` (теряет reduction сигналы)
    - ❌ Если wrapper наследует [0,1] от env: sigmoid [0,1] → mapping → [0.5,1.0] **минимум 50%!**
@@ -5140,7 +5140,7 @@ pytest tests/test_options_core.py::TestVarianceSwap -v
 
 6. **Gamma synchronization для reward shaping**
    - ✅ `reward.gamma == model.params.gamma` (оба = 0.99)
-   - ⚠️ При изменении одного — обновите другой!
+   - ⚠️ При изменении одного -- обновите другой!
 
 7. **Technical Indicators инициализация**
    - ✅ **RSI**: SMA(14) для первых gains/losses
@@ -5247,7 +5247,7 @@ rollout_buffer.add(..., self._last_episode_starts, ...)
 self._last_episode_starts = dones
 ```
 
-**Почему это НЕ баг**: Это стандартный паттерн Stable-Baselines3. `_last_episode_starts` хранит `dones` от **предыдущего** шага. При вычислении GAE (строка 280) используется `episode_starts[step+1]` — это означает "был ли шаг step терминальным". Сдвиг на 1 **намеренный** и семантически корректный.
+**Почему это НЕ баг**: Это стандартный паттерн Stable-Baselines3. `_last_episode_starts` хранит `dones` от **предыдущего** шага. При вычислении GAE (строка 280) используется `episode_starts[step+1]` -- это означает "был ли шаг step терминальным". Сдвиг на 1 **намеренный** и семантически корректный.
 
 **Референс**: SB3 `OnPolicyAlgorithm.collect_rollouts()`, PPO paper (Schulman et al., 2017)
 
@@ -5280,7 +5280,7 @@ interval_start = alpha_idx / num_quantiles       # граница между н�
 weight_start = (interval_start - tau_i_prev) / (tau_i - tau_i_prev)  # = 0.5
 ```
 
-**Почему это НЕ баг**: `interval_start` (граница квантильного интервала) находится **ровно посередине** между центрами соседних интервалов `tau_i_prev` и `tau_i`. Вес 0.5 — это математически корректная линейная интерполяция.
+**Почему это НЕ баг**: `interval_start` (граница квантильного интервала) находится **ровно посередине** между центрами соседних интервалов `tau_i_prev` и `tau_i`. Вес 0.5 -- это математически корректная линейная интерполяция.
 
 **Математика**: `weight = (α_idx/N - (α_idx-0.5)/N) / ((α_idx+0.5)/N - (α_idx-0.5)/N) = 0.5/N / (1/N) = 0.5`
 
@@ -5294,7 +5294,7 @@ state_tensor[:, env_idx, ...] = init_tensor[:, 0, ...].detach().to(...)
 
 **Почему это НЕ баг**: `recurrent_initial_state` инициализируется **нулями** для всех environments (custom_policy_patch1.py:492). Все init states идентичны, поэтому `init_tensor[:, 0, ...]` безопасен.
 
-**Референс**: custom_policy_patch1.py:491-503 — `torch.zeros(self.lstm_hidden_state_shape, ...)`
+**Референс**: custom_policy_patch1.py:491-503 -- `torch.zeros(self.lstm_hidden_state_shape, ...)`
 
 ---
 
@@ -5317,12 +5317,12 @@ critic_loss = torch.mean((loss_c1_final + loss_c2_final) / 2.0)
 ### 6. close_orig vs _close_shifted маркеры (features_pipeline.py, trading_patchnew.py)
 
 ```python
-# features_pipeline.py:329-331 — пропускает shift если close_orig есть
+# features_pipeline.py:329-331 -- пропускает shift если close_orig есть
 if "close_orig" in frame.columns:
     shifted_frames.append(frame)
     continue
 
-# trading_patchnew.py:305-307 — проверяет close_orig ПЕРВЫМ
+# trading_patchnew.py:305-307 -- проверяет close_orig ПЕРВЫМ
 if "close_orig" in self.df.columns:
     self._close_actual = self.df["close_orig"].copy()
 elif "close" in self.df.columns and "_close_shifted" not in self.df.columns:
@@ -5330,8 +5330,8 @@ elif "close" in self.df.columns and "_close_shifted" not in self.df.columns:
 ```
 
 **Почему это НЕ баг**: Проверка `close_orig` идёт **раньше** проверки `_close_shifted`. Если данные пришли с `close_orig` (уже сдвинуты), shift НЕ применяется повторно. Два маркера имеют разную семантику:
-- `close_orig` — оригинальная цена ДО shift (для анализа)
-- `_close_shifted` — флаг что shift уже применён
+- `close_orig` -- оригинальная цена ДО shift (для анализа)
+- `_close_shifted` -- флаг что shift уже применён
 
 ---
 
@@ -5390,7 +5390,7 @@ else:
 1. `LongOnlyActionWrapper` устанавливает `action_space = [-1, 1]`
 2. Policy детектирует это и использует `tanh` (выход [-1, 1])
 3. Wrapper маппит [-1, 1] → [0, 1] для TradingEnv
-4. БЕЗ этого фикса: sigmoid [0,1] → mapping → [0.5, 1.0] — **минимум 50% позиции!**
+4. БЕЗ этого фикса: sigmoid [0,1] → mapping → [0.5, 1.0] -- **минимум 50% позиции!**
 
 **Тесты**: `tests/test_long_only_action_space_fix.py` (26 тестов)
 
@@ -5406,8 +5406,8 @@ obs = self._mediator._build_observation(row=next_row, state=state, mark_price=ne
 ```
 
 **Почему это КОРРЕКТНО** (исправлено 2025-11-25):
-1. **Gymnasium семантика**: `step(a)` возвращает `(s_{t+1}, r_t, ...)` — observation **после** действия
-2. До фикса: reset() и step()#1 возвращали obs из одной строки (row[0]) — дубликат!
+1. **Gymnasium семантика**: `step(a)` возвращает `(s_{t+1}, r_t, ...)` -- observation **после** действия
+2. До фикса: reset() и step()#1 возвращали obs из одной строки (row[0]) -- дубликат!
 3. После фикса: reset() → row[0], step()#1 → row[1], step()#2 → row[2]
 4. Terminal case: при next_idx >= len(df), используется последняя доступная строка
 
@@ -5457,7 +5457,7 @@ reward_raw_fraction = math.log(ratio_clipped) * prev_signal_pos
 
 **Почему это BY DESIGN (НЕ баг)**:
 1. **Физика delayed execution**: в CLOSE_TO_OPEN действие исполняется на **следующем** баре
-2. При reset() устанавливается `_pending_action = HOLD(0.0)` — первое действие
+2. При reset() устанавливается `_pending_action = HOLD(0.0)` -- первое действие
 3. Step #1: prev_pos = 0 (initial), action = HOLD(0.0) → reward × 0 = 0
 4. Step #2: prev_pos = 0 (от HOLD), action = A1 → reward × 0 = 0
 5. Step #3: prev_pos = A1, reward × A1 ≠ 0
@@ -5467,9 +5467,9 @@ reward_raw_fraction = math.log(ratio_clipped) * prev_signal_pos
 **Влияние на training**:
 - Короткие эпизоды (< 5 баров) получают мало ненулевых rewards
 - ~2/N долевая потеря sample efficiency для N-bar эпизодов
-- Это **НЕ влияет на качество обучения** — агент учится правильной семантике
+- Это **НЕ влияет на качество обучения** -- агент учится правильной семантике
 
-**Не пытайтесь "исправить"** — это сломает корректность симуляции!
+**Не пытайтесь "исправить"** -- это сломает корректность симуляции!
 
 ---
 
@@ -5484,15 +5484,15 @@ terminated = bool(getattr(state, "is_bankrupt", False))  # всегда False
 **Почему это BY DESIGN (НЕ баг)**:
 1. **Signal_only режим**: агент учится генерировать сигналы без реального execution
 2. Нет реальных позиций → нет реального capital at risk → нет банкротства
-3. Reward = log(price_change) × signal_position — чисто сигнальный training
+3. Reward = log(price_change) × signal_position -- чисто сигнальный training
 4. Эпизоды заканчиваются через **truncation** (`max_steps`), НЕ termination
 
 **Альтернатива**: Добавить "виртуальное банкротство"?
 - Это усложнит семантику без реальной пользы
-- Сигнальный режим не симулирует капитал — банкротство не имеет смысла
+- Сигнальный режим не симулирует капитал -- банкротство не имеет смысла
 - Если нужна проверка drawdown → используйте real execution mode
 
-**Не пытайтесь добавить виртуальное банкротство** — это нарушит принцип signal_only!
+**Не пытайтесь добавить виртуальное банкротство** -- это нарушит принцип signal_only!
 
 ---
 
@@ -5515,13 +5515,13 @@ mapped = self._map_to_long_only(action.volume_frac)  # (x+1)/2
 | 1.0 | 1.0 | 100% long |
 
 **ЧАСТАЯ ОШИБКА**: передача `ActionProto(volume_frac=0.5)` с ожиданием "50% позиции"
-- 0.5 в [-1,1] маппится в 0.75 в [0,1] — это **75%**, не 50%!
+- 0.5 в [-1,1] маппится в 0.75 в [0,1] -- это **75%**, не 50%!
 - Для 50% позиции передавайте `volume_frac=0.0`
 
 **Почему wrapper всегда применяет маппинг**:
 - Wrapper НЕ ЗНАЕТ семантику входящего ActionProto
 - Он ВСЕГДА преобразует [-1,1] → [0,1] согласно API
-- Если вам нужно передать [0,1] напрямую — НЕ используйте LongOnlyActionWrapper
+- Если вам нужно передать [0,1] напрямую -- НЕ используйте LongOnlyActionWrapper
 
 **Тесты**: `tests/test_long_only_action_space_fix.py::test_action_proto_transformation`
 
@@ -5544,7 +5544,7 @@ if self._reward_signal_only:
 
 **Почему это КОРРЕКТНО** (исправлено 2025-11-26):
 
-1. **Gymnasium семантика**: `step(action)` возвращает `s_{t+1}` — состояние **ПОСЛЕ** действия
+1. **Gymnasium семантика**: `step(action)` возвращает `s_{t+1}` -- состояние **ПОСЛЕ** действия
 2. Observation содержит market data из `next_row` (время t+1)
 3. signal_pos в observation должен быть `next_signal_pos` (позиция после step, время t+1)
 4. **До фикса**: market data t+1, signal_pos t → temporal mismatch!
@@ -5649,7 +5649,7 @@ peak = max(max(self._peak_nw_window, default=nw), nw)
 # _peak_nw_window is a deque with maxlen=dd_window
 ```
 
-**Почему это НЕ баг (BY DESIGN)**: Peak вычисляется в пределах **СКОЛЬЗЯЩЕГО ОКНА** (`dd_window` баров). Это **намеренное** поведение для "recent drawdown" метрики. После заполнения окна peak может уменьшиться — это корректно.
+**Почему это НЕ баг (BY DESIGN)**: Peak вычисляется в пределах **СКОЛЬЗЯЩЕГО ОКНА** (`dd_window` баров). Это **намеренное** поведение для "recent drawdown" метрики. После заполнения окна peak может уменьшиться -- это корректно.
 
 Для глобального drawdown: `dd_window: 999999` в configs/risk.yaml.
 
@@ -5672,7 +5672,7 @@ def _trip() -> None:
 - Если _save_state упал → flag file существует
 - При старте проверяются ОБА
 
-I/O внутри lock — trade-off для consistency, не race condition.
+I/O внутри lock -- trade-off для consistency, не race condition.
 
 ---
 
@@ -5824,7 +5824,7 @@ if st["avg_gain"] is None or st["avg_loss"] is None:
 | ... | ... | ... | ❌ |
 | 14 | delta = p14-p13, append | 14 | ✅ SMA computed |
 
-**RSI-14** требует 14 price changes → доступен после 15 prices (bars 0-14). Bar 14 — корректный момент.
+**RSI-14** требует 14 price changes → доступен после 15 prices (bars 0-14). Bar 14 -- корректный момент.
 
 **Референс**: Wilder (1978), "New Concepts in Technical Trading Systems"
 
@@ -5845,10 +5845,10 @@ else:
 | Вариант | vol_proxy | Проблема |
 |---------|-----------|----------|
 | NaN | NaN | Observation crash, NaN propagation |
-| 0.0 | 0.0 | Model видит "нулевая волатильность" — неверно! |
+| 0.0 | 0.0 | Model видит "нулевая волатильность" -- неверно! |
 | **1% price** | ~0.01 | Разумная аппроксимация типичного ATR |
 
-Типичный ATR для crypto: 1-3% от цены. Fallback 1% — консервативная оценка.
+Типичный ATR для crypto: 1-3% от цены. Fallback 1% -- консервативная оценка.
 
 ---
 
@@ -5903,7 +5903,7 @@ is_constant = (not np.isfinite(s)) or (s == 0.0)
 1. `nanmean`/`nanstd` **игнорируют NaN** при вычислении
 2. Shifted data имеет NaN только в первых ~20 rows
 3. Типичный training dataset: 10,000+ rows
-4. Первые 20 NaN rows составляют < 0.2% — negligible impact
+4. Первые 20 NaN rows составляют < 0.2% -- negligible impact
 5. Statistics корректно вычисляются на valid portion
 
 **Edge case**: Если dataset < 100 rows, могут быть issues. Но training datasets всегда >>1000 rows.
@@ -5924,7 +5924,7 @@ next_mark_price = self._resolve_reward_price(obs_row_idx, next_row)  # NEXT row 
 **Почему это НЕ баг**:
 1. `mark_price` (from caller) используется для **текущего** net_worth (line 979)
 2. `next_mark_price` вычисляется для **следующей** строки (Gymnasium semantics: obs = s_{t+1})
-3. Это **разные rows** с разными ценами — повторное вычисление НЕОБХОДИМО
+3. Это **разные rows** с разными ценами -- повторное вычисление НЕОБХОДИМО
 4. `mark_price` также используется как fallback (line 1042) если next invalid
 
 ---
@@ -5940,9 +5940,9 @@ ratio_clipped = float(np.clip(ratio_price, ratio_clip_floor, ratio_clip_ceiling)
 ```
 
 **Почему это BY DESIGN (НЕ баг)**:
-1. Variable named "ratio_clipped" for **API consistency** — info dict always has this key
+1. Variable named "ratio_clipped" for **API consistency** -- info dict always has this key
 2. In signal_only: ratio is **sanitized** (NaN→1.0) but not bounds-clipped
-3. Signal-only mode doesn't simulate extreme price moves — clipping unnecessary
+3. Signal-only mode doesn't simulate extreme price moves -- clipping unnecessary
 4. Comment added to code explaining this design decision
 
 ---
@@ -5956,7 +5956,7 @@ if isinstance(action, np.ndarray):
 ```
 
 **Почему это НЕ баг (корректное поведение)**:
-1. Empty array contains **nothing to map** — no elements to transform
+1. Empty array contains **nothing to map** -- no elements to transform
 2. Mapping formula `(arr + 1.0) / 2.0` on empty array would still produce empty array
 3. Early return preserves type and is more efficient
 4. This is standard defensive programming for edge cases
@@ -5975,7 +5975,7 @@ def _log_sigmoid_jacobian_from_raw(self, raw: torch.Tensor) -> torch.Tensor:
 **Почему это НЕ баг**:
 1. Method is **explicitly marked DEPRECATED** in comment
 2. Delegates to correctly-named `_log_activation_jacobian`
-3. Kept for **backwards compatibility** — external code may reference it
+3. Kept for **backwards compatibility** -- external code may reference it
 4. Will be removed in future major version
 
 ---
@@ -5992,11 +5992,11 @@ entropy_estimate = -(entropy_accum / float(samples))
 ```
 
 **Почему это НЕ проблема**:
-1. Monte Carlo entropy variance scales as O(1/n) — 4 samples gives ~25% relative error
-2. **ent_coef = 0.001** (from configs) — entropy contributes tiny fraction to loss
+1. Monte Carlo entropy variance scales as O(1/n) -- 4 samples gives ~25% relative error
+2. **ent_coef = 0.001** (from configs) -- entropy contributes tiny fraction to loss
 3. Impact on total loss: `0.001 × entropy × (1 ± 0.25)` ≈ negligible
 4. Increasing to 16 samples would 4x compute for <0.1% loss improvement
-5. Trade-off: speed vs accuracy — current choice prioritizes training throughput
+5. Trade-off: speed vs accuracy -- current choice prioritizes training throughput
 
 ---
 
@@ -6008,7 +6008,7 @@ if reduction not in ("none", "mean", "sum"):
 ```
 
 **Почему это НЕ баг (стандартный API design)**:
-1. Follows **PyTorch convention** — exact string matching, no normalization
+1. Follows **PyTorch convention** -- exact string matching, no normalization
 2. `torch.nn.functional.mse_loss(reduction="Mean")` also raises error
 3. Case sensitivity is **intentional** for API strictness
 4. Adding `.lower().strip()` would hide caller bugs and violate principle of least surprise
@@ -6028,9 +6028,9 @@ else:
 ```
 
 **Почему это НЕ баг (defense-in-depth)**:
-1. `bb_valid` checks **indicator computed** — not that bb_width is finite
+1. `bb_valid` checks **indicator computed** -- not that bb_width is finite
 2. Edge case: bb_valid=True but bb_width=inf from overflow in upstream calc
-3. Comment in code explicitly says "Additional safety" — **intentional redundancy**
+3. Comment in code explicitly says "Additional safety" -- **intentional redundancy**
 4. Cost: one `isfinite()` check; Benefit: guaranteed NaN-free output
 5. Defense-in-depth is **best practice** for numerical code
 
@@ -6051,7 +6051,7 @@ ma20 = self._get_safe_float(row, "sma_5040", float('nan'))
    - Trained models expecting this feature order
    - Audit scripts and documentation
 3. Comment added to code explaining the naming
-4. Underlying value (21-bar SMA) is **correct** — only name is historical artifact
+4. Underlying value (21-bar SMA) is **correct** -- only name is historical artifact
 
 ---
 
@@ -6085,7 +6085,7 @@ adv_std = float(np.std(advantages_flat, ddof=1))  # Sample std with Bessel corre
 1. SB3 uses `ddof=0` (population std), our code uses `ddof=1` (sample std)
 2. Difference: factor √(n/(n-1)) ≈ 1.0005 for n=10000
 3. For typical batch sizes (n>1000): difference < 0.1%
-4. Both approaches are valid — this is a philosophical difference
+4. Both approaches are valid -- this is a philosophical difference
 5. ddof=1 gives unbiased estimate, ddof=0 is more common in RL
 
 **Референс**: Bessel's correction, SB3 `on_policy_algorithm.py`
@@ -6177,12 +6177,12 @@ if side_key == "BUY":
 1. Slippage module уже включает **market impact term**: `k * sqrt(participation_ratio)` (impl_slippage.py:2342)
 2. Это стиль **Almgren-Chriss** square-root impact model
 3. `participation_ratio = order_notional / ADV` учитывает размер ордера
-4. Mid-price — только reference point; фактический slippage включает:
+4. Mid-price -- только reference point; фактический slippage включает:
    - Half spread (`half_spread`)
    - Market impact (`k_effective * sqrt(participation_ratio)`)
    - Volatility adjustments
    - Tail shock для extreme conditions
-5. Для полного LOB simulation нужен external LOB — это documented design choice
+5. Для полного LOB simulation нужен external LOB -- это documented design choice
 
 **Референс**: Almgren & Chriss (2001), impl_slippage.py:2290-2354
 
@@ -6203,7 +6203,7 @@ if ratio > 1.0:
 2. Default `False` для performance (production не нуждается в verbose logging)
 3. Throttling предотвращает log spam
 4. Configurable через `execution.intrabar.log_warnings: true`
-5. Clamping at 100% — корректное поведение (исполнение в конце бара)
+5. Clamping at 100% -- корректное поведение (исполнение в конце бара)
 
 **Референс**: execution_sim.py:2555, 2598-2604
 
@@ -6262,7 +6262,7 @@ base_cost = half_spread + impact_term  # Single-term model
 ```
 
 **Почему это BY DESIGN (L2 vs L3 trade-off)**:
-1. L2 uses **simplified Almgren-Chriss**: `k * √participation` — temporary impact only
+1. L2 uses **simplified Almgren-Chriss**: `k * √participation` -- temporary impact only
 2. L3 has full separation in `lob/market_impact.py`:
    - `AlmgrenChrissModel`: `temp = η * σ * (Q/V)^0.5`, `perm = γ * (Q/V)`
    - `GatheralModel`: transient impact with power-law decay `G(t) = (1 + t/τ)^(-β)`
@@ -6400,12 +6400,12 @@ reward = float(np.clip(reward_before_clip, -clip_for_clamp, clip_for_clamp))
 ### ⚠️ Требуется действие
 
 **Переобучите модели**, если они обучены **до 2025-11-26**:
-- **UPGDW min-max normalization fix (2025-11-26)** — weight protection inverted with negative utilities!
-- **Fear & Greed detection fix (2025-11-26)** — FG=50 ошибочно помечался как missing data!
-- **signal_pos in observation fix (2025-11-26)** — obs содержал prev_signal_pos (t), но market data из t+1!
-- **step() observation timing fix (2025-11-25)** — obs был из той же row что reset!
-- **CLOSE_TO_OPEN + SIGNAL_ONLY fix (2025-11-25)** — look-ahead bias в signal position
-- **LongOnlyActionWrapper action space fix (2025-11-25)** — минимальная позиция была 50%!
+- **UPGDW min-max normalization fix (2025-11-26)** -- weight protection inverted with negative utilities!
+- **Fear & Greed detection fix (2025-11-26)** -- FG=50 ошибочно помечался как missing data!
+- **signal_pos in observation fix (2025-11-26)** -- obs содержал prev_signal_pos (t), но market data из t+1!
+- **step() observation timing fix (2025-11-25)** -- obs был из той же row что reset!
+- **CLOSE_TO_OPEN + SIGNAL_ONLY fix (2025-11-25)** -- look-ahead bias в signal position
+- **LongOnlyActionWrapper action space fix (2025-11-25)** -- минимальная позиция была 50%!
 - Data leakage fix (2025-11-23) + close_orig fix (2025-11-25)
 - RSI/CCI initialization fixes (2025-11-24)
 - Twin Critics GAE fix (2025-11-21)
@@ -6469,14 +6469,14 @@ reward = float(np.clip(reward_before_clip, -clip_for_clamp, clip_for_clamp))
 
 ## О проекте
 
-**AI-Powered Quantitative Research Platform** — ML-платформа для количественных исследований и торговли на криптовалютах (Binance spot/futures) и акциях (Alpaca/Polygon), использующая reinforcement learning (Distributional PPO) для принятия торговых решений.
+**AI-Powered Quantitative Research Platform** -- ML-платформа для количественных исследований и торговли на криптовалютах (Binance spot/futures) и акциях (Alpaca/Polygon), использующая reinforcement learning (Distributional PPO) для принятия торговых решений.
 
 ### Основные характеристики
 
 - **Язык**: Python 3.12 + Cython + C++
 - **RL Framework**: Stable-Baselines3 (Distributional PPO with Twin Critics)
-- **Optimizer**: AdaptiveUPGD (default) — continual learning
-- **Gradient Scaling**: VGS v3.2 — automatic per-layer normalization + anti-blocking
+- **Optimizer**: AdaptiveUPGD (default) -- continual learning
+- **Gradient Scaling**: VGS v3.2 -- automatic per-layer normalization + anti-blocking
 - **Training**: PBT + SA-PPO (adversarial training)
 - **Биржа**: Binance (Spot/Futures)
 - **Режимы**: Бэктест, Live trading, Обучение
@@ -6591,9 +6591,9 @@ adversarial:
 Distribution-free uncertainty bounds на CVaR и value estimates.
 
 **Методы**:
-- **CQR** (Conformalized Quantile Regression) — Romano et al., 2019
-- **EnbPI** (Ensemble batch Prediction Intervals) — Xu & Xie, ICML 2021
-- **ACI** (Adaptive Conformal Inference) — Gibbs & Candes, 2021
+- **CQR** (Conformalized Quantile Regression) -- Romano et al., 2019
+- **EnbPI** (Ensemble batch Prediction Intervals) -- Xu & Xie, ICML 2021
+- **ACI** (Adaptive Conformal Inference) -- Gibbs & Candes, 2021
 
 **Архитектура**:
 ```
@@ -6707,13 +6707,13 @@ core_ → impl_ → service_ → strategies → script_
 
 ### 1. Симулятор исполнения
 
-`execution_sim.py` — симуляция LOB, микроструктура, проскальзывание, комиссии.
+`execution_sim.py` -- симуляция LOB, микроструктура, проскальзывание, комиссии.
 
 Алгоритмы: TWAP, POV, VWAP
 
 ### 2. Distributional PPO
 
-`distributional_ppo.py` — PPO с:
+`distributional_ppo.py` -- PPO с:
 - Distributional value head (quantile regression)
 - Twin Critics (default enabled)
 - VGS gradient scaling
@@ -6722,15 +6722,15 @@ core_ → impl_ → service_ → strategies → script_
 
 ### 3. Features Pipeline
 
-`features_pipeline.py` — препроцессинг с проверкой паритета.
+`features_pipeline.py` -- препроцессинг с проверкой паритета.
 
 63 features: price, volume, volatility, momentum, microstructure.
 
 ### 4. Риск-менеджмент
 
-`risk_guard.py` — гварды на позицию/PnL/дроудаун.
+`risk_guard.py` -- гварды на позицию/PnL/дроудаун.
 
-`services/ops_kill_switch.py` — операционный kill switch.
+`services/ops_kill_switch.py` -- операционный kill switch.
 
 ---
 
@@ -6833,16 +6833,16 @@ pytest tests/test_pbt*.py -v           # PBT
 
 ### Основная
 
-- [DOCS_INDEX.md](DOCS_INDEX.md) — Индекс документации
-- [ARCHITECTURE.md](ARCHITECTURE.md) — Архитектура
-- [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md) — Сборка
+- [DOCS_INDEX.md](DOCS_INDEX.md) -- Индекс документации
+- [ARCHITECTURE.md](ARCHITECTURE.md) -- Архитектура
+- [BUILD_INSTRUCTIONS.md](BUILD_INSTRUCTIONS.md) -- Сборка
 
 ### Продвинутые возможности
 
-- [docs/UPGD_INTEGRATION.md](docs/UPGD_INTEGRATION.md) — UPGD Optimizer
-- [docs/twin_critics.md](docs/twin_critics.md) — Twin Critics
-- [docs/pipeline.md](docs/pipeline.md) — Decision pipeline
-- [docs/bar_execution.md](docs/bar_execution.md) — Bar execution
+- [docs/UPGD_INTEGRATION.md](docs/UPGD_INTEGRATION.md) -- UPGD Optimizer
+- [docs/twin_critics.md](docs/twin_critics.md) -- Twin Critics
+- [docs/pipeline.md](docs/pipeline.md) -- Decision pipeline
+- [docs/bar_execution.md](docs/bar_execution.md) -- Bar execution
 
 ### Отчёты об исправлениях
 
@@ -6880,9 +6880,9 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 - [ ] Model trained after 2025-11-25
 
 ### Тестирование
-- [ ] `pytest tests/` — все тесты проходят
-- [ ] `python tools/check_feature_parity.py` — паритет OK
-- [ ] `python tools/verify_fixes.py` — все фиксы работают
+- [ ] `pytest tests/` -- все тесты проходят
+- [ ] `python tools/check_feature_parity.py` -- паритет OK
+- [ ] `python tools/verify_fixes.py` -- все фиксы работают
 
 ### Live Trading
 - [ ] API ключи настроены
@@ -6916,7 +6916,7 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 **Статус**: ✅ Production Ready (567+ test files, Futures Integration complete, Options Phase 1 complete)
 
 ### Изменения в 11.9:
-- **Options Integration Phase 1 COMPLETE** — 240 tests (100% pass rate)
+- **Options Integration Phase 1 COMPLETE** -- 240 tests (100% pass rate)
   - Black-Scholes-Merton pricing with continuous dividends
   - Binomial trees (Leisen-Reimer, CRR)
   - Merton jump-diffusion model
@@ -6933,50 +6933,50 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 - Fixed all 240 test cases (API signature fixes, variance swap integration)
 
 ### Изменения в 11.8:
-- **Phase 10 Validation & Documentation complete** — 171 tests total (125 validation + 46 backward compatibility)
+- **Phase 10 Validation & Documentation complete** -- 171 tests total (125 validation + 46 backward compatibility)
   - Comprehensive validation test suite (test_futures_validation.py)
   - Backward compatibility tests (test_futures_backward_compatibility.py)
   - Performance benchmarks (bench_futures_simulation.py)
   - Integration report (FUTURES_INTEGRATION_REPORT.md)
   - Documentation suite (8 files in docs/futures/)
-- Futures Integration project **COMPLETE** — All 10 phases implemented
+- Futures Integration project **COMPLETE** -- All 10 phases implemented
 - Updated CLAUDE.md with Phase 10 entries in Quick Reference table
 - Total futures tests: 1,365+ across all phases
 - Status changed from "Live Ready" to "Production Ready"
 
 ### Изменения в 11.7:
-- **Добавлена полная документация Phase 9 (Unified Futures Live Trading)** — 81 тестов
-  - FuturesLiveRunner — Main live trading coordinator
-  - FuturesPositionSynchronizer — Position sync with exchange
-  - FuturesMarginMonitor — Real-time margin monitoring
-  - FuturesFundingTracker — Funding rate tracking & predictions
-  - FuturesSyncConfig — Configuration with exchange, futures_type, sync_interval_sec, qty_tolerance_pct
-  - FuturesSyncEventType — 12 event types for position changes, margin calls, ADL
-  - ADLRiskLevel — SAFE, WARNING, DANGER, CRITICAL levels
-  - configs/config_live_futures.yaml — Live trading configuration
+- **Добавлена полная документация Phase 9 (Unified Futures Live Trading)** -- 81 тестов
+  - FuturesLiveRunner -- Main live trading coordinator
+  - FuturesPositionSynchronizer -- Position sync with exchange
+  - FuturesMarginMonitor -- Real-time margin monitoring
+  - FuturesFundingTracker -- Funding rate tracking & predictions
+  - FuturesSyncConfig -- Configuration with exchange, futures_type, sync_interval_sec, qty_tolerance_pct
+  - FuturesSyncEventType -- 12 event types for position changes, margin calls, ADL
+  - ADLRiskLevel -- SAFE, WARNING, DANGER, CRITICAL levels
+  - configs/config_live_futures.yaml -- Live trading configuration
   - 81 тестов (100% pass rate)
-- Обновлена секция "Futures Integration" — Phase 9 теперь ✅ DONE
+- Обновлена секция "Futures Integration" -- Phase 9 теперь ✅ DONE
 - Добавлены Phase 9 entries в Quick Reference таблицу
 - Обновлён FUTURES_INTEGRATION_PLAN.md с Phase 9 completion
 - Status изменён с "Training Ready" на "Live Ready"
 
 ### Изменения в 11.6:
-- **Добавлена полная документация Phase 8 (Multi-Futures Training Pipeline)** — 131 тестов
+- **Добавлена полная документация Phase 8 (Multi-Futures Training Pipeline)** -- 131 тестов
   - FuturesTradingEnv wrapper с leverage, margin tracking, liquidation handling
   - FuturesFeatureFlags system с RolloutStage (DISABLED, SHADOW, CANARY, PRODUCTION)
   - Thread-safe feature flag operations с symbol filtering для CANARY stage
-  - configs/config_train_futures.yaml — Futures training configuration
-  - configs/config_futures_unified.yaml — Unified futures config template
-  - configs/feature_flags_futures.yaml — Feature flags configuration
+  - configs/config_train_futures.yaml -- Futures training configuration
+  - configs/config_futures_unified.yaml -- Unified futures config template
+  - configs/feature_flags_futures.yaml -- Feature flags configuration
   - Integration с train_model_multi_patch.py через create_futures_env()
   - 131 тестов (100% pass rate)
-- Обновлена секция "Futures Integration" — Phase 8 теперь ✅ DONE
+- Обновлена секция "Futures Integration" -- Phase 8 теперь ✅ DONE
 - Добавлены Phase 8 entries в Quick Reference таблицу
 - Обновлён FUTURES_INTEGRATION_PLAN.md с Phase 8 completion
 - Status изменён с "Core Complete" на "Training Ready"
 
 ### Изменения в 11.5:
-- **Добавлена полная документация Phase 7 (Unified Futures Risk Management)** — 290+ строк
+- **Добавлена полная документация Phase 7 (Unified Futures Risk Management)** -- 290+ строк
   - UnifiedFuturesRiskGuard с automatic asset type detection
   - Asset type classification (Crypto Perpetual/Quarterly, CME Index/Metal/Energy/Currency/Bond)
   - Automatic delegation to crypto or CME guards based on symbol
@@ -6985,14 +6985,14 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
   - PortfolioRiskManager для cross-asset correlation handling
   - Configuration с profiles (conservative, aggressive)
   - 116 тестов (100% pass rate)
-- Обновлена секция "Futures Integration" — Phase 7 теперь ✅ DONE
+- Обновлена секция "Futures Integration" -- Phase 7 теперь ✅ DONE
 - Добавлены Phase 7 entries в Quick Reference таблицу
 - Добавлены примеры использования UnifiedFuturesRiskGuard, config profiles
 - Обновлён FUTURES_INTEGRATION_PLAN.md с Phase 6A, 6B, 7 completion
 - Добавлены референсы на Phase 6A/6B, portfolio theory
 
 ### Изменения в 11.4:
-- **Добавлена полная документация Phase 5B (L3 LOB for CME Futures)** — 290+ строк
+- **Добавлена полная документация Phase 5B (L3 LOB for CME Futures)** -- 290+ строк
   - GlobexMatchingEngine с FIFO Price-Time Priority matching
   - Market with Protection (MWP) orders with protection points
   - Stop orders с velocity logic protection
@@ -7000,38 +7000,38 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
   - DailySettlementSimulator с variation margin calculation
   - CMEL3ExecutionProvider combining all L3 CME components
   - 42 тестов (100% pass rate)
-- Обновлена секция "Futures Integration" — Phase 5B теперь ✅ DONE
+- Обновлена секция "Futures Integration" -- Phase 5B теперь ✅ DONE
 - Добавлены примеры использования GlobexMatchingEngine, MWP, stop orders
 - Добавлены референсы на CME Group Globex documentation
 - Добавлены Phase 5B entries в Quick Reference таблицу
 
 ### Изменения в 11.3:
-- **Добавлена полная документация Phase 5A (L3 LOB for Crypto Futures)** — 280+ строк
+- **Добавлена полная документация Phase 5A (L3 LOB for Crypto Futures)** -- 280+ строк
   - LiquidationCascadeSimulator с Kyle price impact model
   - InsuranceFundManager с contribution/payout dynamics
   - ADLQueueManager для auto-deleveraging queue
   - FundingPeriodDynamics для funding window detection
   - FuturesL3ExecutionProvider combining all L3 components
   - 100 тестов (100% pass rate)
-- Обновлена секция "Futures Integration" — Phase 5A теперь ✅ DONE
+- Обновлена секция "Futures Integration" -- Phase 5A теперь ✅ DONE
 - Добавлены примеры использования cascade simulation, insurance fund, ADL queue
 - Добавлены референсы на Kyle (1985), Almgren-Chriss, Binance liquidation protocol
 
 ### Изменения в 11.2:
-- **Добавлена полная документация Phase 4B (CME SPAN Margin & Slippage)** — 300+ строк
+- **Добавлена полная документация Phase 4B (CME SPAN Margin & Slippage)** -- 300+ строк
   - SPAN Margin Calculator с 16-scenario testing
   - Inter/Intra-commodity spread credits
   - CME Slippage Provider с session/settlement факторами
   - CME Circuit Breaker (Rule 80B, overnight limits, velocity logic)
   - CircuitBreakerManager для multi-product
   - 237 тестов (100% pass rate)
-- Обновлена секция "Futures Integration" — Phase 4B теперь ✅ DONE
+- Обновлена секция "Futures Integration" -- Phase 4B теперь ✅ DONE
 - Добавлены Phase 4B entries в Quick Reference таблицу
 - Добавлены примеры использования SPAN margin, circuit breakers
 - Добавлены референсы на CME SPAN, Rule 80B, Velocity Logic
 
 ### Изменения в 11.1:
-- **Добавлена полная документация Phase 3B (IB Adapters & CME Settlement)** — 390+ строк
+- **Добавлена полная документация Phase 3B (IB Adapters & CME Settlement)** -- 390+ строк
   - IB Market Data Adapter с production-grade rate limiting
   - IB Order Execution Adapter (market/limit/bracket orders)
   - CME Settlement Engine с product-specific settlement times
@@ -7039,15 +7039,15 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
   - CME Trading Calendar (Globex hours, holidays, maintenance)
   - 30+ поддерживаемых контрактов (ES, NQ, GC, CL, 6E, ZN и др.)
   - 205 тестов (100% pass rate)
-- Обновлена секция "Futures Integration" — статус изменён с PLANNED на Partial
+- Обновлена секция "Futures Integration" -- статус изменён с PLANNED на Partial
 - Добавлены Phase 3B entries в Quick Reference таблицу
 - Добавлены примеры использования IB adapters, CME settlement, rollover
 - Добавлены референсы на CME Group, IB TWS API, SPAN margin
 - Roadmap с Phase 4A-7B для Binance futures integration
 
 ### Изменения в 11.0:
-- **Добавлена секция Forex Integration (Phase 11)** — L2+ parametric TCA, OANDA adapter
-- **Добавлена секция Futures Integration (PLANNED)** — план для crypto/equity/commodity futures
+- **Добавлена секция Forex Integration (Phase 11)** -- L2+ parametric TCA, OANDA adapter
+- **Добавлена секция Futures Integration (PLANNED)** -- план для crypto/equity/commodity futures
 - Добавлен OANDA в таблицу поддерживаемых бирж
 - Добавлена архитектура adapters/oanda/
 - Добавлены Forex entries в Quick Reference таблицу

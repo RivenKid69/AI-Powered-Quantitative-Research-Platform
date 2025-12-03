@@ -4,9 +4,9 @@ This document outlines ownership and required permissions for major parts of the
 
 ## File Ownership
 
-- Source code (`*.py`, `*.pyx`, `*.cpp`, `*.h`) — owned by the **Core Development team**.
-- Documentation under `docs/` — owned by the **Documentation team**.
-- Continuous integration workflows in `.github/workflows/` — owned by the **DevOps team**.
+- Source code (`*.py`, `*.pyx`, `*.cpp`, `*.h`) -- owned by the **Core Development team**.
+- Documentation under `docs/` -- owned by the **Documentation team**.
+- Continuous integration workflows in `.github/workflows/` -- owned by the **DevOps team**.
 
 Ownership is enforced via the repository's `CODEOWNERS` file.
 

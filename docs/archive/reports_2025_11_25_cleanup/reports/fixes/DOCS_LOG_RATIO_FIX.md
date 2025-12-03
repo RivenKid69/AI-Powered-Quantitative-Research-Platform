@@ -251,4 +251,4 @@ warn/log_ratio_extreme_count: 23
 **The goal is NOT to hide large log_ratio values with aggressive clamping.**
 **The goal is to DETECT them early and warn the user that training is unstable.**
 
-If your log_ratio values are approaching ±20, your training is broken and needs fixing—not masking with aggressive clipping.
+If your log_ratio values are approaching ±20, your training is broken and needs fixing--not masking with aggressive clipping.

@@ -2,7 +2,7 @@
 
 **Date**: 2025-11-21
 **Status**: ✅ FIXED
-**Severity**: HIGH — Policy Collapse Risk
+**Severity**: HIGH -- Policy Collapse Risk
 **Component**: `adversarial/sa_ppo.py`
 
 ---

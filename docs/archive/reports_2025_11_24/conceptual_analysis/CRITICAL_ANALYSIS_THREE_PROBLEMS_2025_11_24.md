@@ -12,7 +12,7 @@ Three potential critical problems were thoroughly investigated. **Final verdict*
 | # | Problem | Status | Severity | Requires Code Changes? |
 |---|---------|--------|----------|----------------------|
 | **#1** | **Look-ahead Bias (Features Shift)** |  **ALREADY FIXED** (2025-11-23) | N/A | **NO** - Fixed in production |
-| **#2** | **VGS Mathematical Formula** | † **NOT A BUG** (Design Choice) | **LOW** | **NO** - Working as designed |
+| **#2** | **VGS Mathematical Formula** |   **NOT A BUG** (Design Choice) | **LOW** | **NO** - Working as designed |
 | **#3** | **Reward Function Discontinuity** |  **NOT A BUG** (Standard Practice) | N/A | **NO** - Intentional design |
 
 **CASE STATUS**: **CLOSED** - No bugs found. System is production-ready. 
@@ -73,11 +73,11 @@ def _columns_to_shift(df: pd.DataFrame) -> List[str]:
 #   t=0: close=100, rsi_14=50 (calculated from close[t-13:t])
 #   t=1: close=105, rsi_14=60 (calculated from close[t-12:t+1])
 #   After shift: close[t]=100 (from t-1), rsi_14[t]=60 (from t)
-#   í Model sees RSI calculated on FUTURE prices (close[t+1])!
+#   ‚Äô Model sees RSI calculated on FUTURE prices (close[t+1])!
 #
 # Correct behavior WITH this fix:
 #   After shift: close[t]=100 (from t-1), rsi_14[t]=50 (from t-1)
-#   í Model sees only PAST information (consistent temporal alignment)
+#   ‚Äô Model sees only PAST information (consistent temporal alignment)
 
 shifted_frames: List[pd.DataFrame] = []
 for frame in frames:
@@ -109,10 +109,10 @@ obs = _build_observation(row=df[t])  # Agent sees period t-1 data
 # Timeline:
 # - Agent sees: all features from period t-1 (OHLC + indicators)
 # - Executes at: price from period t-1 (open[t-1])
-# í Temporally consistent 
+# ‚Äô Temporally consistent 
 ```
 
-**Key Point**: Agent sees data[t-1] AND executes at price[t-1] í **NO LOOK-AHEAD BIAS**.
+**Key Point**: Agent sees data[t-1] AND executes at price[t-1] ‚Äô **NO LOOK-AHEAD BIAS**.
 
 #### Temporal Sequence Diagram
 
@@ -123,16 +123,16 @@ t=1: [close=105, rsi=60]
 t=2: [close=103, rsi=55]
 
 After Shift (features_pipeline.py):
-t=0: [close=NaN,  rsi=NaN]   ê First row becomes NaN (no previous data)
-t=1: [close=100,  rsi=50]    ê Data from t=0
-t=2: [close=105,  rsi=60]    ê Data from t=1
+t=0: [close=NaN,  rsi=NaN]   —í First row becomes NaN (no previous data)
+t=1: [close=100,  rsi=50]    —í Data from t=0
+t=2: [close=105,  rsi=60]    —í Data from t=1
 
 Trading Environment (trading_patchnew.py):
 At step t=2:
   - row_idx = 2
-  - row = df[2] = {close=105, rsi=60, open=105}  ê All from original t=1
-  - exec_price = row["open"] = 105  ê From original t=1
-  - observation = {close=105, rsi=60}  ê From original t=1
+  - row = df[2] = {close=105, rsi=60, open=105}  —í All from original t=1
+  - exec_price = row["open"] = 105  —í From original t=1
+  - observation = {close=105, rsi=60}  —í From original t=1
   - Agent decides action[2] based on t=1 data
   - Action[2] executes at step t=3 using t=2 prices
 
@@ -143,13 +143,13 @@ previous action executed at period t-1 prices 
 #### Historical Context
 
 **Before Fix** (models trained before 2025-11-23):
-- L OHLC shifted í close[t] becomes df[t+1] 
-- L Indicators NOT shifted í RSI[t] stays at df[t] 
+- L OHLC shifted ‚Äô close[t] becomes df[t+1] 
+- L Indicators NOT shifted ‚Äô RSI[t] stays at df[t] 
 - L **DATA LEAKAGE**: At df[t], agent sees close[t-1] but RSI[t] (FUTURE!)
 
 **After Fix** (2025-11-23):
--  OHLC shifted í close[t] becomes df[t+1] 
--  Indicators NOW shifted í RSI[t] becomes df[t+1] 
+-  OHLC shifted ‚Äô close[t] becomes df[t+1] 
+-  Indicators NOW shifted ‚Äô RSI[t] becomes df[t+1] 
 -  **NO LEAKAGE**: At df[t], agent sees close[t-1] AND RSI[t-1] (SAME PERIOD)
 
 #### Documentation Trail
@@ -169,7 +169,7 @@ previous action executed at period t-1 prices 
 **Status**: **CLOSED - FIXED ON 2025-11-23**
 
 **Action Required**:
-- † **RETRAIN all models trained before 2025-11-23**
+-   **RETRAIN all models trained before 2025-11-23**
 - Old models learned from leaked future data
 - Backtest performance was inflated
 - Live trading performance will be degraded
@@ -194,7 +194,7 @@ previous action executed at period t-1 prices 
 H81:0: VGS A<5H8205B ?@>AB@0=AB25==CN 8 2@5<5==CN 48A?5@A8N.
 
 "5:CI0O D>@<C;0 ( ,):
-  Var H EMA(Mean_s(g≤)) - (EMA(Mean_s(g)))≤
+  Var H EMA(Mean_s(g–Ü)) - (EMA(Mean_s(g)))–Ü
 
 45 Mean_s  CA@54=5=85 ?> ?@>AB@0=AB2C (?> 2A5< ?0@0<5B@0< A;>O),
 0 EMA  CA@54=5=85 ?> 2@5<5=8.
@@ -204,7 +204,7 @@ previous action executed at period t-1 prices 
 8 03@5AA82=> C<5=LH05B learning rate.
 
 @028;L=0O D>@<C;0:
-  Var_stochastic H Mean_s(EMA(g≤) - EMA(g)≤)
+  Var_stochastic H Mean_s(EMA(g–Ü) - EMA(g)–Ü)
 
 C6=> A=0G0;0 2KG8A;8BL 48A?5@A8N :064>3> ?0@0<5B@0 2> 2@5<5=8,
 8 B>;L:> ?>B>< CA@54=OBL ?> A;>N.
@@ -212,7 +212,7 @@ previous action executed at period t-1 prices 
 
 ### Investigation Results
 
-**Verdict**: † **NOT A BUG - This is a design choice that could be enhanced**
+**Verdict**:   **NOT A BUG - This is a design choice that could be enhanced**
 
 #### Mathematical Analysis
 
@@ -220,13 +220,13 @@ previous action executed at period t-1 prices 
 
 ```python
 # variance_gradient_scaler.py:287-292
-grad_mean_current = grad.mean().item()          # º_t = mean(g_t) [spatial avg]
-grad_sq_current = (grad ** 2).mean().item()    # s_t = mean(g_t≤) [spatial avg]
+grad_mean_current = grad.mean().item()          # —ò_t = mean(g_t) [spatial avg]
+grad_sq_current = (grad ** 2).mean().item()    # s_t = mean(g_t–Ü) [spatial avg]
 
 # variance_gradient_scaler.py:368-374
-mean_corrected = self._param_grad_mean_ema / bias_correction  # E[º]
+mean_corrected = self._param_grad_mean_ema / bias_correction  # E[—ò]
 sq_corrected = self._param_grad_sq_ema / bias_correction      # E[s]
-variance = sq_corrected - mean_corrected.pow(2)  # Var = E[s] - E[º]≤
+variance = sq_corrected - mean_corrected.pow(2)  # Var = E[s] - E[—ò]–Ü
 ```
 
 **Mathematical Interpretation**:
@@ -234,15 +234,15 @@ variance = sq_corrected - mean_corrected.pow(2)  # Var = E[s] - E[º]≤
 For parameter tensor g with N elements:
 
 1. At each timestep t:
-   - º_t = mean(g_t)     [spatial aggregation]
-   - s_t = mean(g_t≤)    [spatial aggregation of squares]
+   - —ò_t = mean(g_t)     [spatial aggregation]
+   - s_t = mean(g_t–Ü)    [spatial aggregation of squares]
 
 2. Track EMA over time:
-   - E[º] = EMA(º_t)
-   - E[s] = EMA(s_t) = EMA(mean(g≤))
+   - E[—ò] = EMA(—ò_t)
+   - E[s] = EMA(s_t) = EMA(mean(g–Ü))
 
 3. Compute variance:
-   Var_v3.1 = E[s] - E[º]≤ = E[mean(g≤)] - E[mean(g)]≤
+   Var_v3.1 = E[s] - E[—ò]–Ü = E[mean(g–Ü)] - E[mean(g)]–Ü
 
 This equals: Var[mean(g)]  variance of the SPATIAL MEAN over time
 ```
@@ -252,11 +252,11 @@ This equals: Var[mean(g)]  variance of the SPATIAL MEAN over time
 For each element i of parameter tensor g:
 
 1. Track EMA for EACH element:
-   - E[g_i]   ê Per-element mean
-   - E[g_i≤]  ê Per-element squared mean
+   - E[g_i]   —í Per-element mean
+   - E[g_i–Ü]  —í Per-element squared mean
 
 2. Compute per-element variance:
-   - Var[g_i] = E[g_i≤] - E[g_i]≤
+   - Var[g_i] = E[g_i–Ü] - E[g_i]–Ü
 
 3. Aggregate across elements:
    Var_proposed = mean_i(Var[g_i]) = E[Var[g]]
@@ -270,11 +270,11 @@ This equals: E[Var[g]]  mean of per-element variances over time
 Mathematical relationship:
   Var[g] = E[Var[g | aggregation]] + Var[E[g | aggregation]]
          = E[Var[g]]                + Var[mean(g)]
-           ë user proposal            ë v3.1 current
+           ‚Äò user proposal            ‚Äò v3.1 current
 
-For N independent elements with equal variance √≤:
-  Var[mean(g)] = √≤ / N     ê v3.1 computes this
-  E[Var[g]]    = √≤         ê user proposes this
+For N independent elements with equal variance –ì–Ü:
+  Var[mean(g)] = –ì–Ü / N     —í v3.1 computes this
+  E[Var[g]]    = –ì–Ü         —í user proposes this
 
   Ratio: E[Var[g]] / Var[mean(g)] = N
 
@@ -287,18 +287,18 @@ So user is MATHEMATICALLY CORRECT: v3.1 underestimates by factor of N!
 ```python
 # v3.0 (WRONG):
 grad_mean_current = grad.mean().item()
-grad_sq_current = grad_mean_current ** 2  # (E[g])≤ - square of mean L
+grad_sq_current = grad_mean_current ** 2  # (E[g])–Ü - square of mean L
 
-# Result: Var = E[(E[g])≤] - E[E[g]]≤ H 0 (if mean is stable!)
+# Result: Var = E[(E[g])–Ü] - E[E[g]]–Ü H 0 (if mean is stable!)
 # This was COMPLETELY BROKEN
 ```
 
 **v3.1 Fix**:
 ```python
 # v3.1 (CORRECT for what it claims):
-grad_sq_current = (grad ** 2).mean().item()  # E[g≤] - mean of squares 
+grad_sq_current = (grad ** 2).mean().item()  # E[g–Ü] - mean of squares 
 
-# Result: Var = E[mean(g≤)] - E[mean(g)]≤ = Var[mean(g)]
+# Result: Var = E[mean(g–Ü)] - E[mean(g)]–Ü = Var[mean(g)]
 # This is mathematically correct for variance of aggregate gradient
 ```
 
@@ -314,7 +314,7 @@ Difference:    Factor of N (parameter size)
 **Adam Optimizer** (Kingma & Ba, 2015):
 ```python
 # Adam tracks per-element second moment:
-v[t] = beta2 * v[t-1] + (1 - beta2) * g[t]≤  # Element-wise! 
+v[t] = beta2 * v[t-1] + (1 - beta2) * g[t]–Ü  # Element-wise! 
 
 # Adam philosophy: Adapt learning rate PER PARAMETER
 # Similar to user's proposal
@@ -334,7 +334,7 @@ v[t] = beta2 * v[t-1] + (1 - beta2) * g[t]≤  # Element-wise! 
 
 **Arguments for v3.1 (current)**:
 -  Measures stability of **aggregate update** to parameter
--  If aggregate mean is stable í parameter updates in consistent direction í safe LR
+-  If aggregate mean is stable ‚Äô parameter updates in consistent direction ‚Äô safe LR
 -  Computationally efficient (2 scalars per parameter)
 -  Simpler implementation
 -  Works in production without issues
@@ -344,7 +344,7 @@ v[t] = beta2 * v[t-1] + (1 - beta2) * g[t]≤  # Element-wise! 
 -  Detects heterogeneity (some elements noisy, others stable)
 -  More aligned with Adam's per-element philosophy
 -  Better for large parameters (10k+ elements)
-- † Higher memory cost (N scalars vs 2 scalars per parameter)
+-   Higher memory cost (N scalars vs 2 scalars per parameter)
 
 #### Empirical Evidence
 
@@ -359,7 +359,7 @@ v[t] = beta2 * v[t-1] + (1 - beta2) * g[t]≤  # Element-wise! 
 - Both approaches are valid - different philosophies
 - v3.1 works for its intended purpose
 
-### FINAL VERDICT: † NOT A BUG - Design Choice (Enhancement Opportunity)
+### FINAL VERDICT:   NOT A BUG - Design Choice (Enhancement Opportunity)
 
 **Status**: **CLOSED - WORKING AS DESIGNED**
 
@@ -384,7 +384,7 @@ v[t] = beta2 * v[t-1] + (1 - beta2) * g[t]≤  # Element-wise! 
 
 **Recommendation**:
 -  **Short-term**: **NO ACTION REQUIRED** - v3.1 is production-ready
-- =› **Document current behavior** in code and docs (done)
+- =–≠ **Document current behavior** in code and docs (done)
 - =' **Long-term** (optional): Consider VGS v4.0 with per-element variance
   - Timeline: Future enhancement, not urgent
   - Benefit: Better for large layers
@@ -448,7 +448,7 @@ def log_return(double net_worth, double prev_net_worth) noexcept nogil:
 **Final Reward Clipping** (`reward.pyx:265`):
 ```python
 # FIX (MEDIUM #9): Parameterized reward cap
-reward = _clamp(reward, -reward_cap, reward_cap)  # Default: ±10.0
+reward = _clamp(reward, -reward_cap, reward_cap)  # Default: ¬±10.0
 ```
 
 **Reward Landscape**:
@@ -606,7 +606,7 @@ BEFORE hitting hard bankruptcy boundary!
 - This follows ML best practices
 
 **Why This Is Correct**:
-1.  Bankruptcy IS catastrophic í deserves severe penalty
+1.  Bankruptcy IS catastrophic ‚Äô deserves severe penalty
 2.  Standard practice in RL (AlphaStar, OpenAI Five, etc.)
 3.  Potential shaping provides smooth gradient BEFORE bankruptcy
 4.  PPO is robust to reward discontinuities
@@ -648,8 +648,8 @@ BEFORE hitting hard bankruptcy boundary!
 
 | # | Problem | Final Status | Action Required |
 |---|---------|--------------|-----------------|
-| **#1** | **Look-ahead Bias** |  **FIXED (2025-11-23)** | † Retrain old models |
-| **#2** | **VGS Formula** | † **NOT A BUG** (Design Choice) | =› Document (done) |
+| **#1** | **Look-ahead Bias** |  **FIXED (2025-11-23)** |   Retrain old models |
+| **#2** | **VGS Formula** |   **NOT A BUG** (Design Choice) | =–≠ Document (done) |
 | **#3** | **Reward Discontinuity** |  **NOT A BUG** (Best Practice) |  None |
 
 **CASE STATUS**: **CLOSED** 
@@ -715,7 +715,7 @@ $ tail -10000 logs/train_*.log | grep "bankruptcy" | wc -l
 
 2. **Monitor VGS effectiveness**
    - Current v3.1 works well for most cases
-   - If training instability in large layers í consider v4.0
+   - If training instability in large layers ‚Äô consider v4.0
 
 3. **Trust the reward function**
    - -10.0 bankruptcy penalty is intentional
@@ -802,7 +802,7 @@ class VarianceGradientScaler_v4:
     See: features_pipeline.py:320-331                            
                                                                  
  Q: "Does VGS underestimate variance by factor of N?"            
- A: † BY DESIGN - VGS computes Var[mean(g)], not E[Var[g]].   
+ A:   BY DESIGN - VGS computes Var[mean(g)], not E[Var[g]].   
     Both are valid. Current design works in production.          
     See: variance_gradient_scaler.py:32-40                       
                                                                  

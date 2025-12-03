@@ -14,14 +14,14 @@ python -m services.universe \
     --liquidity-threshold 1e6
 ```
 
-* ``--output`` – destination JSON file.  The directory is created if needed.
-* ``--liquidity-threshold`` – minimum 24‑hour quote volume in USDT.  Set to
+* ``--output`` - destination JSON file.  The directory is created if needed.
+* ``--liquidity-threshold`` - minimum 24-hour quote volume in USDT.  Set to
   ``0`` to bypass the liquidity filter and include all trading pairs.
-* ``--force`` – refresh even if the cache is still fresh.
+* ``--force`` - refresh even if the cache is still fresh.
 
 ## Refresh schedule
 
-The default time‑to‑live for the cache is 24 hours.  The module refreshes
+The default time-to-live for the cache is 24 hours.  The module refreshes
 on the first import if the file is stale.  For deterministic updates,
 install a daily cron job:
 

@@ -12,4 +12,4 @@
 
 ## Verdict
 
-- **Status:** PASS — Value distribution uses fixed (albeit dynamically adjusted) bounded support.
+- **Status:** PASS -- Value distribution uses fixed (albeit dynamically adjusted) bounded support.

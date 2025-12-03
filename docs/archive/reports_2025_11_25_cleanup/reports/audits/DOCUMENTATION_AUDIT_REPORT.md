@@ -15,7 +15,7 @@
 
 **Строка в документе:**
 ```markdown
-- Continuous integration workflows in `.github/workflows/` — owned by the **DevOps team**.
+- Continuous integration workflows in `.github/workflows/` -- owned by the **DevOps team**.
 ```
 
 **Проверка:**

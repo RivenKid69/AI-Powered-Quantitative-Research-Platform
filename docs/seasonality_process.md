@@ -3,10 +3,10 @@
 This document describes the review and approval workflow for introducing new seasonality multipliers.
 
 ## Review steps
-1. **Data preparation** – Recompute multipliers from the latest public exchange data and upload the artifacts with matching `.sha256` checksums.
-2. **Validation run** – Execute the seasonality validation script against the proposed multipliers and source dataset (see `seasonality_QA.md`). Archive the command output and checksum files.
-3. **Peer review** – Submit multipliers, validation metrics, and logs for developer review. Address any discrepancies before seeking approval.
-4. **Approval** – Obtain data validation and QA sign-offs prior to merging into `main`.
+1. **Data preparation** - Recompute multipliers from the latest public exchange data and upload the artifacts with matching `.sha256` checksums.
+2. **Validation run** - Execute the seasonality validation script against the proposed multipliers and source dataset (see `seasonality_QA.md`). Archive the command output and checksum files.
+3. **Peer review** - Submit multipliers, validation metrics, and logs for developer review. Address any discrepancies before seeking approval.
+4. **Approval** - Obtain data validation and QA sign-offs prior to merging into `main`.
 
 ## Data validation checklist
 - [ ] Source dataset covers at least 12 months and uses UTC timestamps.

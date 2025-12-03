@@ -23,13 +23,13 @@ python scripts/validate_seasonality.py \
 
 For each available metric (`liquidity`, `spread_bps`, `latency_ms`) the script prints two values:
 
-- `max_rel_diff` – maximum relative difference across all 168 hours of the week.
-- `mean_rel_diff` – average relative difference across the same period.
+- `max_rel_diff` - maximum relative difference across all 168 hours of the week.
+- `mean_rel_diff` - average relative difference across the same period.
 
 A final line indicates overall status:
 
-- `✅ Seasonality validation passed` – all metrics are within the allowed threshold.
-- `❌ Seasonality validation failed` – at least one metric exceeded the threshold.
+- `✅ Seasonality validation passed` - all metrics are within the allowed threshold.
+- `❌ Seasonality validation failed` - at least one metric exceeded the threshold.
 
 ## Acceptance criteria
 

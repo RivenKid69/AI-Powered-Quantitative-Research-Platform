@@ -108,8 +108,8 @@ return expectation / alpha_safe
 **Analysis**:
 -  The fix prevents division by zero
 -  The comment correctly identifies the issue
-- † The threshold `1e-6` is not derived from any mathematical principle
-- † For `alpha < 1e-6`, CVaR computation becomes meaningless (computing mean of 0.0001% worst outcomes)
+-   The threshold `1e-6` is not derived from any mathematical principle
+-   For `alpha < 1e-6`, CVaR computation becomes meaningless (computing mean of 0.0001% worst outcomes)
 
 **Expected Behavior**:
 CVaR alpha should be validated at configuration time to ensure `alpha >= 1e-3` (0.1% minimum).
@@ -162,13 +162,13 @@ The return scale snapshot timing was fixed in 2025-11-23 to eliminate one-step l
 
 **Timing Flow** (CORRECT):
 ```
-train(update=N-1) í update stats í activate snapshot(N-1)
-  ì
-collect_rollouts(rollout=N) í use snapshot(N-1)  [CORRECT: one-step lag eliminated]
-  ì
-train(update=N) í update stats í activate snapshot(N)
-  ì
-collect_rollouts(rollout=N+1) í use snapshot(N)  [CORRECT]
+train(update=N-1) ‚Äô update stats ‚Äô activate snapshot(N-1)
+  ‚Äú
+collect_rollouts(rollout=N) ‚Äô use snapshot(N-1)  [CORRECT: one-step lag eliminated]
+  ‚Äú
+train(update=N) ‚Äô update stats ‚Äô activate snapshot(N)
+  ‚Äú
+collect_rollouts(rollout=N+1) ‚Äô use snapshot(N)  [CORRECT]
 ```
 
 **Issue**:
@@ -187,7 +187,7 @@ This is **technically correct** but could confuse readers:
 **Analysis**:
 -  Implementation is CORRECT
 -  Snapshot timing eliminates one-step lag
-- † Documentation wording could be clearer
+-   Documentation wording could be clearer
 
 **Impact**: MINIMAL (cosmetic documentation issue only)
 
@@ -319,8 +319,8 @@ if np.any(dones):
 
 **Mathematical Correctness**:
 - LSTM hidden states MUST be reset at episode boundaries (Markov property)
-- Without reset: `h_t` contains information from previous episode í violates MDP assumption
-- With reset: Each episode starts with `h_0 = 0` í correct
+- Without reset: `h_t` contains information from previous episode ‚Äô violates MDP assumption
+- With reset: Each episode starts with `h_0 = 0` ‚Äô correct
 
 **Research Support**:
 - Hausknecht & Stone (2015): "Deep Recurrent Q-Learning for POMDPs"
@@ -409,14 +409,14 @@ mean_values_norm = self.policy.predict_values(
 **Implementation**:
 ```python
 # Independent clipping for each critic
-# Q1_clipped = Q1_old + clip(Q1_current - Q1_old, -µ, +µ)
+# Q1_clipped = Q1_old + clip(Q1_current - Q1_old, -¬µ, +¬µ)
 quantiles_1_clipped_raw = old_quantiles_1_raw + torch.clamp(
     current_quantiles_1_raw - old_quantiles_1_raw,
     min=-clip_delta,
     max=clip_delta,
 )
 
-# Q2_clipped = Q2_old + clip(Q2_current - Q2_old, -µ, +µ)
+# Q2_clipped = Q2_old + clip(Q2_current - Q2_old, -¬µ, +¬µ)
 quantiles_2_clipped_raw = old_quantiles_2_raw + torch.clamp(
     current_quantiles_2_raw - old_quantiles_2_raw,
     min=-clip_delta,
@@ -432,7 +432,7 @@ quantiles_2_clipped_raw = old_quantiles_2_raw + torch.clamp(
 -  All VF clipping modes work: per_quantile, mean_only, mean_and_variance
 
 **Mathematical Correctness**:
-- PPO VF clipping formula: `V_clipped = V_old + clip(V - V_old, -µ, +µ)` 
+- PPO VF clipping formula: `V_clipped = V_old + clip(V - V_old, -¬µ, +¬µ)` 
 - Twin Critics: Each critic maintains independence 
 - Using shared `min(Q1_old, Q2_old)` would violate independence 
 
@@ -459,19 +459,19 @@ policy_loss_ppo = -torch.min(policy_loss_1, policy_loss_2).mean()
 
 **Verification**:
 -  Formula matches Schulman et al. (2017) PPO paper
--  `ratio = ¿_new(a|s) / ¿_old(a|s)` computed correctly
+-  `ratio = –ê_new(a|s) / –ê_old(a|s)` computed correctly
 -  Clip range applied to ratio (not advantage)
--  Negative sign for gradient ascent í descent
+-  Negative sign for gradient ascent ‚Äô descent
 -  Element-wise min (pessimistic policy update)
 
 **Mathematical Proof**:
 ```
-L^CLIP(∏) = E_t[min(r_t(∏) * A_t, clip(r_t(∏), 1-µ, 1+µ) * A_t)]
+L^CLIP(—ë) = E_t[min(r_t(—ë) * A_t, clip(r_t(—ë), 1-¬µ, 1+¬µ) * A_t)]
 
 Where:
-- r_t(∏) = ¿_∏(a_t|s_t) / ¿_∏_old(a_t|s_t)
+- r_t(—ë) = –ê_—ë(a_t|s_t) / –ê_—ë_old(a_t|s_t)
 - A_t = advantage at time t
-- µ = clip_range
+- ¬µ = clip_range
 
 Code implementation:  MATCHES PAPER EXACTLY
 ```
@@ -506,20 +506,20 @@ for step in reversed(range(buffer_size)):
 
 **Verification**:
 -  Formula matches Schulman et al. (2016) GAE paper
--  TD error: `¥_t = r_t + ≥*V(s_{t+1}) - V(s_t)` 
--  Advantage: `A_t = ¥_t + (≥ª)*¥_{t+1} + (≥ª)^2*¥_{t+2} + ...` 
+-  TD error: `“ë_t = r_t + —ñ*V(s_{t+1}) - V(s_t)` 
+-  Advantage: `A_t = “ë_t + (—ñ¬ª)*“ë_{t+1} + (—ñ¬ª)^2*“ë_{t+2} + ...` 
 -  Bootstrap with `last_values` at rollout end 
 -  TimeLimit mask correctly overrides terminal flag 
 -  Returns = advantages + values (correct)
 
 **Mathematical Proof**:
 ```
-GAE(≥, ª) = £_{l=0}^ (≥ª)^l * ¥_{t+l}
+GAE(—ñ, ¬ª) = –à_{l=0}^ (—ñ¬ª)^l * “ë_{t+l}
 
 Where:
-- ¥_t = r_t + ≥*V(s_{t+1})*(1 - done) - V(s_t)
-- ≥ = discount factor
-- ª = GAE lambda (exponential weighting)
+- “ë_t = r_t + —ñ*V(s_{t+1})*(1 - done) - V(s_t)
+- —ñ = discount factor
+- ¬ª = GAE lambda (exponential weighting)
 
 Code implementation:  MATCHES PAPER EXACTLY
 ```
@@ -560,7 +560,7 @@ else:
 ```
 
 **Verification**:
--  VF clipping formula: `V_clipped = V_old + clip(V - V_old, -µ, +µ)` 
+-  VF clipping formula: `V_clipped = V_old + clip(V - V_old, -¬µ, +¬µ)` 
 -  Loss computed on BOTH unclipped and clipped predictions 
 -  Element-wise `max(L_unclipped, L_clipped)` (PPO semantics) 
 -  Prevents large value function updates 
@@ -570,7 +570,7 @@ else:
 L^VF-CLIP = E_t[max(L(V(s_t), R_t), L(V_clipped(s_t), R_t))]
 
 Where:
-- V_clipped = V_old + clip(V - V_old, -µ, +µ)
+- V_clipped = V_old + clip(V - V_old, -¬µ, +¬µ)
 - L = loss function (Huber for quantile, cross-entropy for categorical)
 - R_t = target return
 
@@ -589,7 +589,7 @@ Code implementation:  CORRECT
 **Implementation**:
 ```python
 # FIXED formula (Dabney et al. 2018) - DEFAULT:
-#   ¡_ƒ(u) = |ƒ - I{u < 0}| ∑ L_∫(u), where u = target - predicted
+#   –ë_–î(u) = |–î - I{u < 0}| ¬∑ L_—î(u), where u = target - predicted
 if getattr(self, "_use_fixed_quantile_loss_asymmetry", True):
     delta = targets - predicted_quantiles  # FIXED: T - Q (correct asymmetry)
 else:
@@ -607,25 +607,25 @@ loss_per_quantile = torch.abs(tau - indicator) * huber
 
 **Verification**:
 -  Formula matches Dabney et al. (2018) "Implicit Quantile Networks"
--  Asymmetry: `|ƒ - I{u < 0}|` where `u = target - predicted` 
--  Underestimation (Q < T) penalty: `ƒ` 
--  Overestimation (Q e T) penalty: `(1 - ƒ)` 
--  Huber loss smoothing with threshold `∫` 
--  Mean over quantiles (correct for uniform ƒ) 
+-  Asymmetry: `|–î - I{u < 0}|` where `u = target - predicted` 
+-  Underestimation (Q < T) penalty: `–î` 
+-  Overestimation (Q e T) penalty: `(1 - –î)` 
+-  Huber loss smoothing with threshold `—î` 
+-  Mean over quantiles (correct for uniform –î) 
 
 **Mathematical Proof**:
 ```
-¡_ƒ^∫(u) = |ƒ - I{u < 0}| ∑ L_∫(u)
+–ë_–î^—î(u) = |–î - I{u < 0}| ¬∑ L_—î(u)
 
 Where:
 - u = target - predicted (delta in code)
 - I{u < 0} = 1 if predicted > target, else 0
-- L_∫(u) = Huber loss with threshold ∫
-- ƒ = quantile level
+- L_—î(u) = Huber loss with threshold —î
+- –î = quantile level
 
-For ƒ-quantile:
-- If Q < T (underestimation): penalty = ƒ * L_∫(T - Q)
-- If Q e T (overestimation): penalty = (1-ƒ) * L_∫(Q - T)
+For –î-quantile:
+- If Q < T (underestimation): penalty = –î * L_—î(T - Q)
+- If Q e T (overestimation): penalty = (1-–î) * L_—î(Q - T)
 
 Code implementation:  MATCHES PAPER EXACTLY
 ```
@@ -648,7 +648,7 @@ Code implementation:  MATCHES PAPER EXACTLY
 alpha_idx_float = alpha * num_quantiles - 0.5
 
 if alpha_idx_float < 0.0:
-    # Extrapolation case: ± < tau_0
+    # Extrapolation case: ¬± < tau_0
     q0 = predicted_quantiles[:, 0]  # Value at tau_0 = 0.5/N
     q1 = predicted_quantiles[:, 1]  # Value at tau_1 = 1.5/N
     tau_0 = 0.5 / num_quantiles
@@ -660,19 +660,19 @@ if alpha_idx_float < 0.0:
 ```
 
 **Verification**:
--  CVaR formula: `CVaR_±(X) = (1/±) +Ä^± F{π(ƒ) dƒ` 
--  Quantile levels assumption: `ƒ_i = (i + 0.5) / N`  CONSISTENT with QuantileValueHead
--  Extrapolation for `± < ƒ_0`: Linear from first two quantiles 
+-  CVaR formula: `CVaR_¬±(X) = (1/¬±) +–Ç^¬± F{‚Ññ(–î) d–î` 
+-  Quantile levels assumption: `–î_i = (i + 0.5) / N`  CONSISTENT with QuantileValueHead
+-  Extrapolation for `¬± < –î_0`: Linear from first two quantiles 
 -  Integration: Trapezoidal rule (midpoint formula) 
--  Normalization by ± 
+-  Normalization by ¬± 
 
 **Mathematical Correctness**:
 ```
-CVaR_±(X) = E[X | X d VaR_±(X)] = (1/±) +Ä^± F{π(ƒ) dƒ
+CVaR_¬±(X) = E[X | X d VaR_¬±(X)] = (1/¬±) +–Ç^¬± F{‚Ññ(–î) d–î
 
 Discrete approximation:
-- Quantiles at ƒ_i = (i + 0.5) / N represent interval centers
-- CVaR = (1/±) * [£ q_i * (1/N) for i where ƒ_i < ± + partial interval]
+- Quantiles at –î_i = (i + 0.5) / N represent interval centers
+- CVaR = (1/¬±) * [–à q_i * (1/N) for i where –î_i < ¬± + partial interval]
 
 Code uses trapezoidal rule for partial interval:  CORRECT
 ```
@@ -706,7 +706,7 @@ midpoints = 0.5 * (taus[:-1] + taus[1:])  # tau_i = (i + 0.5) / N
 ```
 
 **Verification**:
--  Formula: `ƒ_i = (i + 0.5) / N` for `i = 0, 1, ..., N-1` 
+-  Formula: `–î_i = (i + 0.5) / N` for `i = 0, 1, ..., N-1` 
 -  Uniform coverage: Each quantile represents 1/N probability mass 
 -  Midpoint rule: Optimal for numerical integration 
 -  Consistency: Matches assumptions in `_cvar_from_quantiles` 
@@ -725,8 +725,8 @@ Code implementation:  CORRECT
 ```
 
 **False Alarm Investigation** (2025-11-22):
-- Claimed bug: "ƒ_i = (2i+1)/(2*(N+1)) with ~4-5% bias" L FALSE
-- Reality: Code ALREADY uses `ƒ_i = (i+0.5)/N`  CORRECT
+- Claimed bug: "–î_i = (2i+1)/(2*(N+1)) with ~4-5% bias" L FALSE
+- Reality: Code ALREADY uses `–î_i = (i+0.5)/N`  CORRECT
 - Claimed values (0.0227, 0.9318) do NOT match actual output (0.0238, 0.9762)
 - 26 verification tests confirm correctness
 
@@ -778,11 +778,11 @@ mean_values_norm = self.policy.predict_values(
 
 **Mathematical Correctness**:
 ```
-TD3/SAC Target: y = r + ≥ * min(QÅ(s', a'), QÇ(s', a'))
-PPO GAE: A_t = ¥_t + (≥ª)*¥_{t+1} + ..., where ¥_t = r_t + ≥*V(s_{t+1}) - V(s_t)
+TD3/SAC Target: y = r + —ñ * min(Q–É(s', a'), Q‚Äö(s', a'))
+PPO GAE: A_t = “ë_t + (—ñ¬ª)*“ë_{t+1} + ..., where “ë_t = r_t + —ñ*V(s_{t+1}) - V(s_t)
 
 For Twin Critics:
-- V(s_{t+1}) = min(VÅ(s_{t+1}), VÇ(s_{t+1}))   CORRECT
+- V(s_{t+1}) = min(V–É(s_{t+1}), V‚Äö(s_{t+1}))   CORRECT
 
 Code implementation:  MATCHES RESEARCH
 ```
@@ -802,14 +802,14 @@ Code implementation:  MATCHES RESEARCH
 **Implementation**:
 ```python
 # Independent clipping for each critic
-# Q1_clipped = Q1_old + clip(Q1_current - Q1_old, -µ, +µ)
+# Q1_clipped = Q1_old + clip(Q1_current - Q1_old, -¬µ, +¬µ)
 quantiles_1_clipped_raw = old_quantiles_1_raw + torch.clamp(
     current_quantiles_1_raw - old_quantiles_1_raw,
     min=-clip_delta,
     max=clip_delta,
 )
 
-# Q2_clipped = Q2_old + clip(Q2_current - Q2_old, -µ, +µ)
+# Q2_clipped = Q2_old + clip(Q2_current - Q2_old, -¬µ, +¬µ)
 quantiles_2_clipped_raw = old_quantiles_2_raw + torch.clamp(
     current_quantiles_2_raw - old_quantiles_2_raw,
     min=-clip_delta,
@@ -824,22 +824,22 @@ quantiles_2_clipped_raw = old_quantiles_2_raw + torch.clamp(
 -  Separate old values stored: `old_value_quantiles_critic1/2` 
 
 **Why This Is Correct**:
-- L WRONG: Clip both critics to `min(Q1_old, Q2_old)` í violates independence
--  RIGHT: Clip each critic to its own old values í maintains independence
+- L WRONG: Clip both critics to `min(Q1_old, Q2_old)` ‚Äô violates independence
+-  RIGHT: Clip each critic to its own old values ‚Äô maintains independence
 
 **Mathematical Justification**:
 ```
 PPO VF Clipping (Single Critic):
 L = max(L(V, R), L(V_clipped, R))
-where V_clipped = V_old + clip(V - V_old, -µ, +µ)
+where V_clipped = V_old + clip(V - V_old, -¬µ, +¬µ)
 
 Twin Critics Extension:
-L = 0.5 * [LÅ + LÇ]
+L = 0.5 * [L–É + L‚Äö]
 where:
-- LÅ = max(L(VÅ, R), L(VÅ_clipped, R))
-- LÇ = max(L(VÇ, R), L(VÇ_clipped, R))
-- VÅ_clipped = VÅ_old + clip(VÅ - VÅ_old, -µ, +µ)  ê OWN old values
-- VÇ_clipped = VÇ_old + clip(VÇ - VÇ_old, -µ, +µ)  ê OWN old values
+- L–É = max(L(V–É, R), L(V–É_clipped, R))
+- L‚Äö = max(L(V‚Äö, R), L(V‚Äö_clipped, R))
+- V–É_clipped = V–É_old + clip(V–É - V–É_old, -¬µ, +¬µ)  —í OWN old values
+- V‚Äö_clipped = V‚Äö_old + clip(V‚Äö - V‚Äö_old, -¬µ, +¬µ)  —í OWN old values
 
 Code implementation:  CORRECT
 ```
@@ -922,8 +922,8 @@ def _to_raw_returns(self, x: torch.Tensor) -> torch.Tensor:
 
 **Mathematical Correctness**:
 ```
-Normalization: z = (x - º) / √
-Denormalization: x = z * √ + º   CORRECT
+Normalization: z = (x - —ò) / –ì
+Denormalization: x = z * –ì + —ò   CORRECT
 
 Code implementation:  MATCHES FORMULA
 ```
@@ -992,13 +992,13 @@ log_predictions_1 = F.log_softmax(value_logits_1, dim=1)
 
 **Mathematical Correctness**:
 ```
-Naive: log(softmax(x)) = log(exp(x_i) / £ exp(x_j))
-       = x_i - log(£ exp(x_j))
+Naive: log(softmax(x)) = log(exp(x_i) / –à exp(x_j))
+       = x_i - log(–à exp(x_j))
 
-Problem: For large negative x_i, exp(x_i) í 0, log(0) = -
+Problem: For large negative x_i, exp(x_i) ‚Äô 0, log(0) = -
 
 Stable: log_softmax(x) = x - log_sum_exp(x)
-        where log_sum_exp uses: log(£ exp(x_j)) = max(x) + log(£ exp(x_j - max(x)))
+        where log_sum_exp uses: log(–à exp(x_j)) = max(x) + log(–à exp(x_j - max(x)))
 
 Code implementation:  USES STABLE VERSION
 ```
@@ -1059,8 +1059,8 @@ if not np.all(np.isfinite(time_limit_bootstrap)):
 
 **Key Components**:
 1. Quantile Huber loss:  CORRECT (line 3420-3532)
-2. Asymmetric penalty:  CORRECT (`|ƒ - I{u < 0}|`)
-3. Uniform quantile levels:  CORRECT (`ƒ_i = (i + 0.5) / N`)
+2. Asymmetric penalty:  CORRECT (`|–î - I{u < 0}|`)
+3. Uniform quantile levels:  CORRECT (`–î_i = (i + 0.5) / N`)
 
 **Deviations**: NONE
 
@@ -1084,8 +1084,8 @@ if not np.all(np.isfinite(time_limit_bootstrap)):
 **Paper**: "High-Dimensional Continuous Control Using Generalized Advantage Estimation"
 
 **Key Components**:
-1. TD error formula:  CORRECT (`¥_t = r_t + ≥*V(s_{t+1}) - V(s_t)`)
-2. Exponential weighting:  CORRECT (`A_t = £ (≥ª)^l * ¥_{t+l}`)
+1. TD error formula:  CORRECT (`“ë_t = r_t + —ñ*V(s_{t+1}) - V(s_t)`)
+2. Exponential weighting:  CORRECT (`A_t = –à (—ñ¬ª)^l * “ë_{t+l}`)
 3. Backward recursion:  CORRECT (reversed loop)
 
 **Deviations**: NONE
@@ -1112,7 +1112,7 @@ if not np.all(np.isfinite(time_limit_bootstrap)):
 
 3. **NaN Handling**: 9/10 passed (1 skipped - Cython) 
    - File: `tests/test_nan_handling_external_features.py`
-   - Coverage: External features NaN í 0.0 conversion
+   - Coverage: External features NaN ‚Äô 0.0 conversion
 
 4. **Numerical Stability**: 5/5 passed 
    - File: `tests/test_critical_fixes_volatility.py`
@@ -1194,7 +1194,7 @@ The implementation **EXACTLY MATCHES** formulations from research papers:
 
 2. **Long-term** (future enhancements):
    - Consider re-enabling PopArt if non-stationarity increases
-   - Increase num_quantiles (21í51) for better CVaR accuracy if needed
+   - Increase num_quantiles (21‚Äô51) for better CVaR accuracy if needed
 
 3. **Maintenance**:
    - Keep existing test coverage (prevents regressions)

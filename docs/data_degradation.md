@@ -1,7 +1,7 @@
 # Data degradation
 
 `DataDegradationConfig` injects missing or delayed bars to emulate
-real‑world data issues. All fields are optional; by default the stream is
+real-world data issues. All fields are optional; by default the stream is
 unchanged.
 
 ## Configuration fields

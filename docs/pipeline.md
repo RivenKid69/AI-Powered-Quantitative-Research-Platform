@@ -6,13 +6,13 @@ each part of the process.
 
 ## Order of stages
 
-1. **CLOSED_BAR** – Ensure incoming bars are fully closed before processing.
-2. **WINDOWS** – Skip timestamps falling into configured no-trade windows.
-3. **ANOMALY** – Optional anomaly screens for returns or spread.
-4. **EXTREME** – Optional guards for extreme volatility or spread.
-5. **POLICY** – Generate candidate orders from policies and feature pipes.
-6. **RISK** – Enforce account and position limits on candidate orders.
-7. **PUBLISH** – Throttle, queue or emit orders to downstream services.
+1. **CLOSED_BAR** - Ensure incoming bars are fully closed before processing.
+2. **WINDOWS** - Skip timestamps falling into configured no-trade windows.
+3. **ANOMALY** - Optional anomaly screens for returns or spread.
+4. **EXTREME** - Optional guards for extreme volatility or spread.
+5. **POLICY** - Generate candidate orders from policies and feature pipes.
+6. **RISK** - Enforce account and position limits on candidate orders.
+7. **PUBLISH** - Throttle, queue or emit orders to downstream services.
 
 ## Drop reasons
 
