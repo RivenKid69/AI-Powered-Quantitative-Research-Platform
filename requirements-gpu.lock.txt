@@ -7,6 +7,9 @@
 # Platform: NVIDIA GPU with CUDA 12.1
 # Python: 3.12.x
 #
+# Regenerate with (Python 3.12.x + pip-tools>=7.4):
+#   make lock-gpu
+#
 # Usage:
 #   # Option 1: Direct install from lock file
 #   pip install -r requirements-gpu.lock.txt

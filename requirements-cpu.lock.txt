@@ -7,6 +7,9 @@
 # Platform: CPU-only (no CUDA)
 # Python: 3.12.x
 #
+# Regenerate with (Python 3.12.x + pip-tools>=7.4):
+#   make lock-cpu
+#
 # Usage:
 #   pip install -r requirements-cpu.lock.txt
 #

@@ -15,6 +15,7 @@ __pycache__/
 
 # Build artifacts
 build_hash_report.json
+build_output.txt
 
 # Distribution / packaging
 .Python
@@ -53,6 +54,9 @@ coverage.xml
 *.cover
 *.log
 .pytest_cache/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -85,10 +89,12 @@ Thumbs.db
 *.pkl
 *.pickle
 artifacts/
+cache/
 logs/
 tensorboard/
 tensorboard_logs/
 data/processed/
+data/cache/
 data/fear_greed.csv
 upgd_test_report.txt
 upgd_test_results.log
@@ -108,3 +114,4 @@ test_quick_distppo.py
 /*_SUMMARY*.txt
 /*_FINDINGS*.txt
 /*_ANALYSIS*.txt
+nul

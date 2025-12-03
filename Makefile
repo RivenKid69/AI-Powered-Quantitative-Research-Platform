@@ -38,6 +38,8 @@ endif
 BUILD_DIR := build
 DIST_DIR := dist
 HASH_REPORT := build_hash_report.json
+CLEAN_SCRIPT := tools/clean_artifacts.py
+VERIFY_SCRIPT := tools/verify_hash_report.py
 
 # Colors (for Unix-like systems)
 ifndef NO_COLOR
@@ -52,8 +54,9 @@ else
     NC :=
 endif
 
-.PHONY: all build clean rebuild test verify-hash install-build-deps help
+.PHONY: all build clean check-clean rebuild test verify-hash install-build-deps help
 .PHONY: format lint no-trade-mask-sample check
+.PHONY: lock-cpu lock-gpu lockfiles
 
 # Default target
 all: build
@@ -64,9 +67,12 @@ help:
 	@echo "$(YELLOW)Build targets:$(NC)"
 	@echo "  make build             Build all Cython/C++ extensions in-place"
 	@echo "  make clean             Remove build artifacts and compiled extensions"
+	@echo "  make check-clean       Validate that no generated artifacts remain"
 	@echo "  make rebuild           Clean then build"
 	@echo "  make test              Run tests after building"
 	@echo "  make verify-hash       Verify build hash report exists"
+	@echo "  make lock-cpu          Regenerate requirements-cpu.lock.txt (Python 3.12)"
+	@echo "  make lock-gpu          Regenerate requirements-gpu.lock.txt (Python 3.12)"
 	@echo "  make install-build-deps Install build dependencies"
 	@echo ""
 	@echo "$(YELLOW)Development targets:$(NC)"
@@ -91,29 +97,19 @@ build:
 	@echo "$(YELLOW)This may take a few minutes on first build.$(NC)"
 	$(PYTHON) setup.py build_ext --inplace
 	@echo ""
-	@echo "$(GREEN)✓ Build complete!$(NC)"
+	@echo "$(GREEN)[OK] Build complete!$(NC)"
 	@echo "$(YELLOW)Hash report:$(NC) $(HASH_REPORT)"
 
 # Clean build artifacts
 clean:
 	@echo "$(YELLOW)Cleaning build artifacts...$(NC)"
-ifeq ($(PLATFORM),Windows)
-	-@if exist $(BUILD_DIR) $(RMDIR) $(BUILD_DIR) 2>nul
-	-@if exist $(DIST_DIR) $(RMDIR) $(DIST_DIR) 2>nul
-	-@if exist $(HASH_REPORT) $(RM) $(HASH_REPORT) 2>nul
-	-@for %%f in (*.c) do @$(RM) "%%f" 2>nul
-	-@for %%f in (*.pyd) do @$(RM) "%%f" 2>nul
-	-@for %%f in (*.so) do @$(RM) "%%f" 2>nul
-	-@for %%f in (*.html) do @$(RM) "%%f" 2>nul
-else
-	$(RMDIR) $(BUILD_DIR) $(DIST_DIR) 2>/dev/null || true
-	$(RM) $(HASH_REPORT) 2>/dev/null || true
-	find . -maxdepth 1 -name "*.c" -type f -delete 2>/dev/null || true
-	find . -maxdepth 1 -name "*.so" -type f -delete 2>/dev/null || true
-	find . -maxdepth 1 -name "*.pyd" -type f -delete 2>/dev/null || true
-	find . -maxdepth 1 -name "*.html" -type f -delete 2>/dev/null || true
-endif
-	@echo "$(GREEN)✓ Clean complete.$(NC)"
+	$(PYTHON) $(CLEAN_SCRIPT)
+	@echo "$(GREEN)[OK] Clean complete.$(NC)"
+
+check-clean:
+	@echo "$(YELLOW)Checking for generated artifacts...$(NC)"
+	$(PYTHON) $(CLEAN_SCRIPT) --check-only
+	@echo "$(GREEN)[OK] Worktree free of generated artifacts.$(NC)"
 
 # Rebuild from scratch
 rebuild: clean build
@@ -122,28 +118,18 @@ rebuild: clean build
 test: build
 	@echo "$(GREEN)Running tests...$(NC)"
 	$(PYTHON) -m pytest tests/ -v --tb=short
-	@echo "$(GREEN)✓ Tests complete.$(NC)"
+	@echo "$(GREEN)[OK] Tests complete.$(NC)"
 
 # Verify hash report exists
 verify-hash:
 	@echo "$(YELLOW)Verifying build hash report...$(NC)"
-ifeq ($(PLATFORM),Windows)
-	@if exist $(HASH_REPORT) (echo $(GREEN)✓ Hash report found: $(HASH_REPORT)$(NC)) else (echo $(RED)✗ Hash report not found. Run 'make build' first.$(NC) && exit 1)
-else
-	@if [ -f "$(HASH_REPORT)" ]; then \
-		echo "$(GREEN)✓ Hash report found: $(HASH_REPORT)$(NC)"; \
-		cat $(HASH_REPORT) | $(PYTHON) -m json.tool; \
-	else \
-		echo "$(RED)✗ Hash report not found. Run 'make build' first.$(NC)"; \
-		exit 1; \
-	fi
-endif
-
+	$(PYTHON) $(VERIFY_SCRIPT) --report $(HASH_REPORT) --root . --require-all-artifacts
+	@echo "$(GREEN)[OK] Hash report verified.$(NC)"
 # Quick syntax check (no build)
 check:
 	@echo "$(YELLOW)Running syntax checks...$(NC)"
 	$(PYTHON) -m py_compile setup.py
-	@echo "$(GREEN)✓ Syntax OK.$(NC)"
+	@echo "$(GREEN)[OK] Syntax OK.$(NC)"
 
 # ============================================================================
 # Development Targets (existing)
@@ -152,13 +138,25 @@ check:
 format:
 	@echo "$(GREEN)Formatting code with black...$(NC)"
 	$(PYTHON) -m black .
-	@echo "$(GREEN)✓ Format complete.$(NC)"
+	@echo "$(GREEN)[OK] Format complete.$(NC)"
 
 lint:
 	@echo "$(GREEN)Linting code with flake8...$(NC)"
 	$(PYTHON) -m flake8 --max-line-length=200 config.py transformers.py tune_threshold.py update_and_infer.py utils_time.py validate_processed.py watchdog_vec_env.py
-	@echo "$(GREEN)✓ Lint complete.$(NC)"
+	@echo "$(GREEN)[OK] Lint complete.$(NC)"
 
 no-trade-mask-sample:
 	@echo "$(GREEN)Running no-trade mask sample...$(NC)"
 	$(PYTHON) tests/run_no_trade_mask_sample.py
+
+lock-cpu:
+	@echo "$(GREEN)Regenerating CPU lockfile (Python 3.12.x)...$(NC)"
+	$(PYTHON) -m piptools compile --extra cpu --resolver=backtracking --output-file=requirements-cpu.lock.txt pyproject.toml
+	@echo "$(GREEN)[OK] requirements-cpu.lock.txt updated.$(NC)"
+
+lock-gpu:
+	@echo "$(GREEN)Regenerating GPU lockfile (Python 3.12.x)...$(NC)"
+	$(PYTHON) -m piptools compile --extra gpu --resolver=backtracking --output-file=requirements-gpu.lock.txt pyproject.toml
+	@echo "$(GREEN)[OK] requirements-gpu.lock.txt updated.$(NC)"
+
+lockfiles: lock-cpu lock-gpu

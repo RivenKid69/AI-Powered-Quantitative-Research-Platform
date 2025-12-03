@@ -5,11 +5,13 @@ Minimum system requirements and recommended configurations for the AI-Powered Qu
 ## Table of Contents
 
 - [Python & Runtime](#python--runtime)
+- [Dependency Locking](#dependency-locking)
 - [Hardware Requirements](#hardware-requirements)
 - [Operating System Support](#operating-system-support)
 - [C++ Toolchain](#c-toolchain)
 - [GPU Requirements (Optional)](#gpu-requirements-optional)
 - [Dependency Installation](#dependency-installation)
+- [Build & CI Workflow](#build--ci-workflow)
 - [Verification](#verification)
 
 ---
@@ -40,6 +42,13 @@ python --version
 pip --version
 # pip 23.x or higher
 ```
+
+## Dependency Locking
+
+- Lock files: `requirements-cpu.lock.txt` and `requirements-gpu.lock.txt` (generated with Python 3.12.x + `pip-tools>=7.4`).
+- Regenerate with `make lock-cpu` / `make lock-gpu` after updating dependencies; commit updated files with the refreshed **Generated** date.
+- CI and developers install from the lock files first, then layer `requirements-dev.txt` for tooling.
+- `make verify-hash` enforces that compiled artifacts match the recorded hashes from the build.
 
 ---
 
@@ -118,7 +127,7 @@ Required for building Cython/C++ extensions. See [BUILD_INSTRUCTIONS.md](BUILD_I
 
 **Installation**:
 ```
-Visual Studio Installer → Workloads → "Desktop development with C++"
+Visual Studio Installer -> Workloads -> "Desktop development with C++"
 ```
 
 ### Linux
@@ -220,9 +229,12 @@ pip install -r requirements-gpu.lock.txt
 # Development:
 pip install -r requirements-dev.txt
 
-# 5. Build native extensions
+# 5. Build native extensions (preferred)
 pip install -r requirements-build.txt
-python setup.py build_ext --inplace
+make build         # builds in-place and writes build_hash_report.json
+make verify-hash   # validates recorded hashes
+make test          # runs pytest with compiled extensions
+# (fallback) python setup.py build_ext --inplace
 ```
 
 ### Using pyproject.toml
@@ -257,6 +269,22 @@ For reproducible builds, use lock files:
 
 ---
 
+## Build & CI Workflow
+
+- Canonical commands: `make build`, `make verify-hash`, `make test`, and `make clean && make check-clean` (enforces a clean tree with no generated artifacts).
+- `make verify-hash` re-hashes compiled extensions against `build_hash_report.json` and fails on mismatches.
+- GitHub Actions workflow `.github/workflows/build-and-test.yml` runs on Linux (GCC) and Windows (MSVC) with Python 3.12.x using the CPU lockfile plus `requirements-dev.txt`.
+- Lock files must remain current and include their generation date (see [Dependency Locking](#dependency-locking)).
+
+### Known Good Toolchains (CI baselines)
+
+| Platform | Python | Compiler | Make | Notes |
+|----------|--------|----------|------|-------|
+| Ubuntu 22.04 LTS (CI) | 3.12.1 | GCC 12.3 | GNU Make 4.3 | `ubuntu-latest` runner; validates build, hash report, and pytest |
+| Windows 11/Server 2022 (CI) | 3.12.1 | MSVC v143 (19.38+) | GNU Make 4.4 (Chocolatey) | `windows-latest` runner; builds extensions with Visual Studio 2022 toolchain |
+
+---
+
 ## Verification
 
 ### 1. Python Environment
@@ -288,9 +316,9 @@ python -c "import torch; print(f'GPU: {torch.cuda.get_device_name(0) if torch.cu
 ### 4. Native Extensions
 
 ```bash
-python -c "import obs_builder; print('✓ obs_builder')"
-python -c "import reward; print('✓ reward')"
-python -c "import fast_lob; print('✓ fast_lob')"
+python -c "import obs_builder; print('[OK] obs_builder')"
+python -c "import reward; print('[OK] reward')"
+python -c "import fast_lob; print('[OK] fast_lob')"
 ```
 
 ### 5. Run Tests
@@ -304,6 +332,13 @@ pytest tests/ -v --tb=short
 
 # With coverage
 pytest tests/ --cov=. --cov-report=html
+```
+
+### 6. Cleanliness (no generated files)
+
+```bash
+make clean
+make check-clean  # fails if generated artifacts remain
 ```
 
 ---
@@ -382,6 +417,7 @@ Install Python 3.12:
 
 | Date | Version | Changes |
 |------|---------|---------|
+| 2025-12-03 | 1.1.0 | Added CI build matrix, locking policy, and hash verification requirements |
 | 2025-12-03 | 1.0.0 | Initial comprehensive requirements document |
 
 ---
