@@ -5,8 +5,7 @@
     "distutils": {
         "depends": [],
         "extra_compile_args": [
-            "-O3",
-            "-fvisibility=hidden"
+            "/O2"
         ],
         "include_dirs": [
             "."

@@ -4,11 +4,10 @@
 {
     "distutils": {
         "depends": [
-            "include/execevents_types.h"
+            "include\\execevents_types.h"
         ],
         "extra_compile_args": [
-            "-O3",
-            "-fvisibility=hidden"
+            "/O2"
         ],
         "include_dirs": [
             "."

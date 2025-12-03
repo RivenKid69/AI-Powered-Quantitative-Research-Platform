@@ -68,6 +68,7 @@ def _compute_n_features() -> int:
         0.0, 0.0,  # is_high_importance, time_since_event
         0.0, False, False,  # fear_greed_value, has_fear_greed, risk_off_flag
         0.0, 0.0,  # cash, units
+        0.0,  # signal_pos
         0.0, 0.0,  # last_vol_imbalance, last_trade_intensity
         0.0, 0.0,  # last_realized_spread, last_agent_fill_ratio
         0, max_tokens,  # token_id, max_num_tokens
