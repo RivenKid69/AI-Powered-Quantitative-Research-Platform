@@ -651,6 +651,14 @@ def main() -> None:
         action="store_true",
         help="Use live trading (Alpaca/OANDA, overrides --paper)",
     )
+    asset_group.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Dry-run mode: validate config, connect to exchange, generate signals, "
+            "but DO NOT execute any orders. Useful for testing setup safely."
+        ),
+    )
 
     # ==========================================================================
     # Forex-specific arguments (Phase 6)
@@ -922,9 +930,33 @@ def main() -> None:
     # Get symbols (using asset-class-aware function)
     symbols = _get_symbols_for_asset_class(args, cfg_dict, asset_class)
 
+    # ==========================================================================
+    # Handle dry-run mode
+    # ==========================================================================
+    if args.dry_run:
+        cfg_dict["dry_run"] = True
+        # Set execution to dry-run mode (no actual orders)
+        exec_block = dict(cfg_dict.get("execution", {}) or {})
+        exec_block["dry_run"] = True
+        cfg_dict["execution"] = exec_block
+        logger.warning(
+            "\n"
+            "╔══════════════════════════════════════════════════════════════════╗\n"
+            "║                       DRY-RUN MODE ENABLED                       ║\n"
+            "║                                                                  ║\n"
+            "║  Signals will be generated and logged, but NO ORDERS will be    ║\n"
+            "║  executed. Use this to validate your configuration safely.      ║\n"
+            "║                                                                  ║\n"
+            "║  To run with real orders, remove the --dry-run flag.            ║\n"
+            "╚══════════════════════════════════════════════════════════════════╝"
+        )
+    else:
+        cfg_dict["dry_run"] = False
+
     # Log asset class summary
+    mode_str = "DRY-RUN" if args.dry_run else "LIVE"
     logger.info(
-        f"Live trading starting: asset_class={asset_class}, "
+        f"{mode_str} trading starting: asset_class={asset_class}, "
         f"symbols={len(symbols)}, extended_hours={cfg_dict.get('extended_hours', False)}"
     )
 

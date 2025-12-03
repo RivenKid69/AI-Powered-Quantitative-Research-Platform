@@ -1681,5 +1681,130 @@ class BarExecutor(TradeExecutor):
         return instructions, accumulated_weight, total_notional, accumulated_quantity, None
 
 
-__all__ = ["BarExecutor", "PortfolioState", "RebalanceInstruction", "decide_spot_trade"]
+# =============================================================================
+# DryRunExecutor: Wrapper for safe testing without real order execution
+# =============================================================================
+
+class DryRunExecutor(TradeExecutor):
+    """Wrapper executor that logs orders but does NOT execute them.
+
+    This wrapper is used in dry-run mode to safely test live trading
+    configuration without placing real orders.
+
+    Usage:
+        real_executor = BarExecutor(...)
+        dry_executor = DryRunExecutor(real_executor)
+        # dry_executor.execute(order) will log but not execute
+
+    The wrapper delegates all methods except `execute()` to the wrapped
+    executor, maintaining full compatibility.
+    """
+
+    def __init__(
+        self,
+        wrapped_executor: TradeExecutor,
+        *,
+        log_level: int = logging.INFO,
+        dry_run_logger: Optional[logging.Logger] = None,
+    ) -> None:
+        """Initialize dry-run wrapper.
+
+        Args:
+            wrapped_executor: The real executor to wrap.
+            log_level: Log level for dry-run messages (default: INFO).
+            dry_run_logger: Optional custom logger. If None, uses module logger.
+        """
+        self._wrapped = wrapped_executor
+        self._log_level = log_level
+        self._logger = dry_run_logger or logger
+        self._dry_run_count = 0
+
+    def execute(self, order: Order) -> ExecReport:
+        """Log order details but do NOT execute.
+
+        Returns a synthetic ExecReport with DRY_RUN status.
+        """
+        self._dry_run_count += 1
+
+        # Extract order details for logging
+        symbol = getattr(order, "symbol", "UNKNOWN")
+        side = getattr(order, "side", "UNKNOWN")
+        qty = getattr(order, "quantity", getattr(order, "qty", 0))
+        order_type = getattr(order, "order_type", getattr(order, "type", "UNKNOWN"))
+
+        # Extract payload info if available
+        meta = getattr(order, "meta", None)
+        payload_info = {}
+        if isinstance(meta, Mapping):
+            payload = meta.get("payload", {})
+            if isinstance(payload, Mapping):
+                for key in ("target_weight", "delta_weight", "edge_bps", "cost_bps"):
+                    if key in payload:
+                        payload_info[key] = payload.get(key)
+
+        self._logger.log(
+            self._log_level,
+            "[DRY-RUN #%d] Would execute: symbol=%s, side=%s, qty=%s, type=%s, payload=%s",
+            self._dry_run_count,
+            symbol,
+            side,
+            qty,
+            order_type,
+            payload_info or "N/A",
+        )
+
+        # Return synthetic report indicating dry-run
+        # Use current time in milliseconds for timestamp
+        import time
+        ts_ms = int(time.time() * 1000)
+
+        # Determine side
+        side_val = side
+        if isinstance(side_val, str):
+            side_val = Side.BUY if side_val.upper() == "BUY" else Side.SELL
+        elif not isinstance(side_val, Side):
+            side_val = Side.BUY  # fallback
+
+        # Determine order type
+        ot_val = order_type
+        if isinstance(ot_val, str):
+            ot_val = OrderType.MARKET if ot_val.upper() == "MARKET" else OrderType.LIMIT
+        elif not isinstance(ot_val, OrderType):
+            ot_val = OrderType.MARKET  # fallback
+
+        return ExecReport(
+            ts=ts_ms,
+            run_id="dry_run",
+            symbol=str(symbol),
+            side=side_val,
+            order_type=ot_val,
+            price=Decimal("0"),
+            quantity=Decimal("0"),
+            fee=Decimal("0"),
+            fee_asset=None,
+            exec_status=ExecStatus.NEW,  # Logged but not actually executed
+            order_id=f"dry_run_{self._dry_run_count}",
+            meta={"dry_run_message": f"DRY-RUN: Order logged but not executed (#{self._dry_run_count})"},
+        )
+
+    @property
+    def dry_run_count(self) -> int:
+        """Number of orders intercepted in dry-run mode."""
+        return self._dry_run_count
+
+    # ------------------------------------------------------------------
+    # Delegate all other attributes to wrapped executor
+    # ------------------------------------------------------------------
+    def __getattr__(self, name: str) -> Any:
+        """Delegate attribute access to wrapped executor."""
+        return getattr(self._wrapped, name)
+
+
+__all__ = [
+    "BarExecutor",
+    "DryRunExecutor",
+    "PortfolioState",
+    "RebalanceInstruction",
+    "decide_spot_trade",
+]
 

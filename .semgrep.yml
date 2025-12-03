@@ -1,0 +1,201 @@
+# Semgrep configuration for trading bot security analysis
+# https://semgrep.dev/docs/writing-rules/overview/
+
+rules:
+  # =============================================================================
+  # API Key / Secret Detection
+  # =============================================================================
+  - id: hardcoded-api-key
+    patterns:
+      - pattern-either:
+          - pattern: $VAR = "...$KEY..."
+          - pattern: "$VAR": "...$KEY..."
+    pattern-regex: (api[_-]?key|apikey|secret[_-]?key|api[_-]?secret)\s*[:=]\s*["'][a-zA-Z0-9]{16,}["']
+    message: "Potential hardcoded API key detected. Use environment variables instead."
+    languages: [python, yaml]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+
+  - id: hardcoded-password
+    patterns:
+      - pattern-either:
+          - pattern: password = "..."
+          - pattern: passwd = "..."
+          - pattern: secret = "..."
+    pattern-not: password = ""
+    pattern-not: password = None
+    pattern-not: password = os.getenv(...)
+    pattern-not: password = os.environ.get(...)
+    message: "Potential hardcoded password detected. Use environment variables instead."
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-798: Use of Hard-coded Credentials"
+
+  # =============================================================================
+  # SQL Injection Prevention
+  # =============================================================================
+  - id: sql-injection-format-string
+    patterns:
+      - pattern-either:
+          - pattern: $CURSOR.execute(f"..." % ...)
+          - pattern: $CURSOR.execute("..." % ...)
+          - pattern: $CURSOR.execute(f"...{$VAR}...")
+    message: "Potential SQL injection via string formatting. Use parameterized queries."
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-89: SQL Injection"
+
+  # =============================================================================
+  # Command Injection Prevention
+  # =============================================================================
+  - id: shell-injection-subprocess
+    patterns:
+      - pattern: subprocess.$FUNC(..., shell=True, ...)
+      - pattern-not: subprocess.$FUNC($CONST, shell=True, ...)
+    message: "Subprocess with shell=True and variable input is vulnerable to command injection."
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-78: OS Command Injection"
+
+  - id: dangerous-eval
+    pattern: eval($INPUT)
+    message: "Use of eval() with external input is dangerous. Consider using ast.literal_eval() for data parsing."
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-94: Improper Control of Generation of Code"
+
+  - id: dangerous-exec
+    pattern: exec($INPUT)
+    message: "Use of exec() is dangerous. Avoid executing dynamic code."
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-94: Improper Control of Generation of Code"
+
+  # =============================================================================
+  # Trading-Specific Security Rules
+  # =============================================================================
+  - id: unvalidated-trade-quantity
+    patterns:
+      - pattern: |
+          order = Order(
+            ...,
+            quantity=$QTY,
+            ...
+          )
+      - pattern-not-inside: |
+          if $QTY > 0:
+            ...
+      - pattern-not-inside: |
+          validate_quantity(...)
+    message: "Trade quantity should be validated before creating an order."
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: trading
+      impact: "Unvalidated quantities could lead to unexpected trades"
+
+  - id: missing-api-timeout
+    patterns:
+      - pattern: requests.$METHOD($URL)
+      - pattern-not: requests.$METHOD($URL, ..., timeout=..., ...)
+    message: "HTTP request without timeout. Add timeout parameter to prevent hanging."
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: reliability
+      impact: "Requests without timeout can hang indefinitely"
+
+  - id: log-sensitive-data
+    patterns:
+      - pattern-either:
+          - pattern: logger.$LEVEL(..., api_key=..., ...)
+          - pattern: logger.$LEVEL(..., secret=..., ...)
+          - pattern: logger.$LEVEL(..., password=..., ...)
+          - pattern: logger.$LEVEL(f"...{$SECRET}...")
+    pattern-regex: (api[_-]?key|secret|password|credential)
+    message: "Potentially logging sensitive data. Use secure_logging module to mask secrets."
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-532: Information Exposure Through Log Files"
+
+  - id: float-for-money
+    patterns:
+      - pattern-either:
+          - pattern: price = float(...)
+          - pattern: quantity = float(...)
+          - pattern: fee = float(...)
+          - pattern: balance = float(...)
+    pattern-not-inside: |
+        # Allow float conversion for display/logging only
+        str(float(...))
+    message: "Consider using Decimal for monetary values to avoid floating point precision errors."
+    languages: [python]
+    severity: INFO
+    metadata:
+      category: precision
+      impact: "Floating point errors can accumulate in financial calculations"
+
+  # =============================================================================
+  # Pickle Security
+  # =============================================================================
+  - id: unsafe-pickle-load
+    patterns:
+      - pattern-either:
+          - pattern: pickle.load(...)
+          - pattern: pickle.loads(...)
+    message: "pickle.load() can execute arbitrary code. Only load pickles from trusted sources."
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+
+  # =============================================================================
+  # YAML Security
+  # =============================================================================
+  - id: unsafe-yaml-load
+    patterns:
+      - pattern: yaml.load(..., Loader=yaml.Loader)
+      - pattern: yaml.load(..., Loader=yaml.UnsafeLoader)
+      - pattern: yaml.unsafe_load(...)
+    message: "Use yaml.safe_load() instead of yaml.load() to prevent code execution."
+    languages: [python]
+    severity: ERROR
+    metadata:
+      category: security
+      cwe: "CWE-502: Deserialization of Untrusted Data"
+
+  # =============================================================================
+  # Cryptography Best Practices
+  # =============================================================================
+  - id: weak-hash-md5
+    pattern: hashlib.md5(...)
+    message: "MD5 is cryptographically weak. Use SHA-256 or stronger for security-sensitive hashing."
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-328: Reversible One-Way Hash"
+
+  - id: weak-hash-sha1
+    pattern: hashlib.sha1(...)
+    message: "SHA-1 is cryptographically weak. Use SHA-256 or stronger for security-sensitive hashing."
+    languages: [python]
+    severity: WARNING
+    metadata:
+      category: security
+      cwe: "CWE-328: Reversible One-Way Hash"

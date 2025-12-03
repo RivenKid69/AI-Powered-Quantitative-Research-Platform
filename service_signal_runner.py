@@ -85,7 +85,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing helper
     from sandbox.sim_adapter import SimAdapter  # type: ignore
 else:  # pragma: no cover - runtime placeholder
     SimAdapter = Any  # type: ignore
-from impl_bar_executor import BarExecutor
+from impl_bar_executor import BarExecutor, DryRunExecutor
 from core_models import Bar, Tick
 from core_contracts import FeaturePipe, SignalPolicy
 from services.utils_config import (
@@ -8255,6 +8255,25 @@ def clear_dirty_restart(
                 initial_weights=bar_initial_weights,
                 symbol_specs=self._symbol_specs,
             )
+
+            # Wrap with DryRunExecutor if dry_run mode is enabled
+            dry_run_enabled = False
+            if exec_cfg is not None:
+                if isinstance(exec_cfg, MappingABC):
+                    dry_run_enabled = bool(exec_cfg.get("dry_run", False))
+                else:
+                    dry_run_enabled = bool(getattr(exec_cfg, "dry_run", False))
+            if not dry_run_enabled:
+                dry_run_enabled = bool(getattr(self._run_config, "dry_run", False))
+            if dry_run_enabled:
+                self.logger.warning(
+                    "[DRY-RUN MODE] Orders will be logged but NOT executed. "
+                    "This is a safe testing mode."
+                )
+                executor_for_worker = DryRunExecutor(
+                    executor_for_worker,
+                    dry_run_logger=self.logger,
+                )
 
         bar_timeframe_candidates = (
             getattr(getattr(self.cfg, "timing", None), "timeframe_ms", None),

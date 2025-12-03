@@ -266,12 +266,14 @@ class TradingEnv(gym.Env):
         # Determines asset-class-specific behavior:
         #   - "crypto": 24/7 trading, no dividend adjustment, no trading halts
         #   - "equity": NYSE hours, dividend-adjusted rewards, trading halts (LULD)
+        #   - "forex": 24/5 trading (Sun 5pm - Fri 5pm ET), session-based liquidity,
+        #              no dividend adjustment, swap/rollover costs (Phase 9)
         #
         # If not specified, defaults to "crypto" for backward compatibility.
         # =========================================================================
         _asset_class_raw = asset_class or kwargs.get("asset_class", "crypto")
         self._asset_class: str = str(_asset_class_raw).lower().strip()
-        if self._asset_class not in ("crypto", "equity", "crypto_futures"):
+        if self._asset_class not in ("crypto", "equity", "crypto_futures", "forex"):
             logger.warning(
                 f"Unknown asset_class '{self._asset_class}', defaulting to 'crypto'"
             )

@@ -1,0 +1,237 @@
+name: Security SAST Analysis
+
+on:
+  push:
+    branches: [main, master, develop]
+    paths:
+      - '**.py'
+      - '.bandit'
+      - '.semgrep.yml'
+      - '.github/workflows/security-sast.yml'
+  pull_request:
+    branches: [main, master, develop]
+    paths:
+      - '**.py'
+      - '.bandit'
+      - '.semgrep.yml'
+  schedule:
+    # Run weekly on Sundays at 00:00 UTC
+    - cron: '0 0 * * 0'
+  workflow_dispatch:
+
+jobs:
+  bandit:
+    name: Bandit Security Scanner
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install Bandit
+        run: pip install bandit[toml]
+
+      - name: Run Bandit scan
+        run: |
+          echo "Running Bandit security scan..."
+          bandit -c .bandit -r . -f json -o bandit-results.json || true
+          bandit -c .bandit -r . -f txt -o bandit-results.txt || true
+
+          # Show results in console
+          echo "=== Bandit Results ==="
+          cat bandit-results.txt
+
+          # Check for high severity issues
+          HIGH_COUNT=$(cat bandit-results.json | python -c "import sys,json; d=json.load(sys.stdin); print(len([r for r in d.get('results',[]) if r.get('issue_severity')=='HIGH']))" 2>/dev/null || echo "0")
+          echo "High severity issues: $HIGH_COUNT"
+
+          if [ "$HIGH_COUNT" -gt "0" ]; then
+            echo "::error::Found $HIGH_COUNT high severity security issues"
+            exit 1
+          fi
+
+      - name: Upload Bandit results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bandit-results
+          path: |
+            bandit-results.json
+            bandit-results.txt
+          retention-days: 30
+
+      - name: Comment on PR (if high severity found)
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let results = '';
+            try {
+              results = fs.readFileSync('bandit-results.txt', 'utf8');
+            } catch (e) {
+              results = 'Unable to read results file';
+            }
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 🔴 Bandit Security Scan Failed
+
+Found high severity security issues in this PR.
+
+<details>
+<summary>Click to see details</summary>
+
+\`\`\`
+${results.substring(0, 60000)}
+\`\`\`
+
+</details>
+
+Please fix the security issues before merging.
+`
+            });
+
+  semgrep:
+    name: Semgrep Security Scanner
+    runs-on: ubuntu-latest
+    container:
+      image: returntocorp/semgrep
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Semgrep scan
+        run: |
+          echo "Running Semgrep security scan..."
+
+          # Run with local rules
+          semgrep scan --config .semgrep.yml --json --output semgrep-local-results.json . || true
+
+          # Run with community rules for Python security
+          semgrep scan --config p/python --config p/secrets --json --output semgrep-community-results.json . || true
+
+          # Combine and show results
+          echo "=== Semgrep Local Rules Results ==="
+          semgrep scan --config .semgrep.yml . || true
+
+          echo "=== Semgrep Community Rules Results ==="
+          semgrep scan --config p/python --config p/secrets . || true
+
+      - name: Check for errors
+        run: |
+          # Check for ERROR severity in local results
+          ERROR_COUNT=$(cat semgrep-local-results.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(len([r for r in d.get('results',[]) if r.get('extra',{}).get('severity')=='ERROR']))" 2>/dev/null || echo "0")
+          echo "Error severity issues from local rules: $ERROR_COUNT"
+
+          if [ "$ERROR_COUNT" -gt "0" ]; then
+            echo "::error::Found $ERROR_COUNT error severity security issues"
+            exit 1
+          fi
+
+      - name: Upload Semgrep results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: semgrep-results
+          path: |
+            semgrep-local-results.json
+            semgrep-community-results.json
+          retention-days: 30
+
+      - name: Comment on PR (if errors found)
+        if: failure() && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 🔴 Semgrep Security Scan Failed
+
+Found error severity security issues in this PR.
+
+See the [job logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details.
+
+Please fix the security issues before merging.
+`
+            });
+
+  dependency-check:
+    name: Dependency Security Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+
+      - name: Install safety
+        run: pip install safety
+
+      - name: Check for requirements files
+        id: check-reqs
+        run: |
+          if [ -f "requirements.txt" ] || [ -f "requirements-lock.txt" ] || [ -f "pyproject.toml" ]; then
+            echo "found=true" >> $GITHUB_OUTPUT
+          else
+            echo "found=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run Safety check
+        if: steps.check-reqs.outputs.found == 'true'
+        run: |
+          echo "Running dependency security check..."
+
+          # Check requirements.txt if exists
+          if [ -f "requirements.txt" ]; then
+            echo "Checking requirements.txt..."
+            safety check -r requirements.txt --json --output safety-results.json || true
+            safety check -r requirements.txt || true
+          fi
+
+          # Check requirements-lock.txt if exists
+          if [ -f "requirements-lock.txt" ]; then
+            echo "Checking requirements-lock.txt..."
+            safety check -r requirements-lock.txt || true
+          fi
+        continue-on-error: true
+
+      - name: Upload Safety results
+        uses: actions/upload-artifact@v4
+        if: always() && steps.check-reqs.outputs.found == 'true'
+        with:
+          name: safety-results
+          path: safety-results.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+  summary:
+    name: Security Summary
+    needs: [bandit, semgrep, dependency-check]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check results
+        run: |
+          echo "Security Scan Summary:"
+          echo "  - Bandit: ${{ needs.bandit.result }}"
+          echo "  - Semgrep: ${{ needs.semgrep.result }}"
+          echo "  - Dependency Check: ${{ needs.dependency-check.result }}"
+
+          if [ "${{ needs.bandit.result }}" == "failure" ] || [ "${{ needs.semgrep.result }}" == "failure" ]; then
+            echo "❌ Security issues found"
+            exit 1
+          fi
+
+          echo "✅ Security checks passed"
