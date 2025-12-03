@@ -5,6 +5,7 @@ __pycache__/
 
 # C extensions
 *.so
+*.c  # Generated Cython files
 
 # Distribution / packaging
 .Python
@@ -86,3 +87,15 @@ test_output.log
 pbt_checkpoints/
 test_quick_distppo.py
 /tmp/
+
+# Backup files
+*.backup
+*.v2_backup
+*.bak
+*~
+
+# Temporary reports (keep reports in docs/reports/)
+/*_REPORT*.txt
+/*_SUMMARY*.txt
+/*_FINDINGS*.txt
+/*_ANALYSIS*.txt

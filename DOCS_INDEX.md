@@ -170,6 +170,38 @@ pytest tests/test_data_leakage*.py -v  # Data Leakage
 
 ---
 
+## 🛠️ Инструменты (tools/)
+
+### Основные утилиты
+
+| Инструмент | Описание |
+|------------|----------|
+| [cleanup_project.py](tools/cleanup_project.py) | Очистка build artifacts, бэкапов, организация отчётов |
+| [check_feature_parity.py](tools/check_feature_parity.py) | Проверка паритета features online/offline |
+| [check_encoding.py](tools/check_encoding.py) | Проверка encoding issues (CI/CD) |
+| [normalize_encoding.py](tools/normalize_encoding.py) | Нормализация Unicode → ASCII-safe |
+
+### Детальная документация
+
+- [tools/README.md](tools/README.md) - Полное описание всех инструментов
+- [tools/README_ENCODING.md](tools/README_ENCODING.md) - Encoding tools
+
+### Регулярная поддержка
+
+```bash
+# Еженедельная очистка проекта
+python tools/cleanup_project.py --dry-run
+python tools/cleanup_project.py
+
+# Проверка encoding перед коммитом
+python tools/check_encoding.py
+
+# Проверка feature parity после изменений
+python tools/check_feature_parity.py
+```
+
+---
+
 ## 📍 Навигация
 
 | Задача | Куда смотреть |
