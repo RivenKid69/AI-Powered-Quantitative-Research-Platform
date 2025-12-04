@@ -2,7 +2,7 @@
 
 ## AI-Powered Quantitative Trading Platform
 
-*December 2025 | Pre-Seed Stage*
+*December 2024 | Pre-Seed Stage*
 
 > **Document Status**: This brief describes an early-stage technology company. Financial projections are illustrative and forward-looking. The platform is technically mature but commercially pre-revenue. This document is for informational purposes only and does not constitute an offer to sell securities.
 
@@ -13,14 +13,58 @@
 | Aspect | Status |
 |--------|--------|
 | **Stage** | Pre-seed, seeking seed funding |
-| **Product** | Production-ready trading platform |
-| **Revenue** | Pre-revenue (technical validation complete) |
-| **Ask** | Seed funding for go-to-market |
-| **Primary ICP** | Proprietary trading firms (US/EU) |
+| **Phase** | **Customer validation** (technical foundation complete) |
+| **Revenue** | Pre-revenue; pilot program launching Q1 2025 |
+| **Ask** | Seed funding for customer validation & go-to-market |
+| **Primary ICP** | European proprietary trading firms (5-50 traders) |
 
-**What we've built**: An institutional-grade algorithmic trading platform with research-backed execution simulation, supporting 5 asset classes through a unified codebase. Technical infrastructure equivalent to what Two Sigma or Citadel builds internally.
+**What we've built**: A trading infrastructure platform with built-in risk management that reduces time-to-market from months to days.
 
-**Why it matters**: Prop trading firms and hedge funds currently spend 6-12 months building trading infrastructure before deploying their first strategy. We reduce this to days.
+**Where we are now**: Foundation complete. We are entering the **customer validation phase** — pilot programs with European prop trading firms to validate product-market fit before scaling.
+
+**Why it matters**: Prop trading firms spend 6-12 months and €200K-500K building trading infrastructure. We reduce this to days at a fraction of the cost.
+
+---
+
+## Current Phase: Lean Validation
+
+### Foundation Built — Now Testing with Customers
+
+We have completed the technical foundation. Our focus now is **customer validation**, not feature expansion.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    OUR JOURNEY                               │
+│                                                              │
+│   [✓] Technical       [→] Customer        [ ] Revenue       │
+│       Foundation          Validation          Scale         │
+│                                                              │
+│   • Core platform     • 20+ interviews    • Paying clients  │
+│   • 5 asset classes   • Pilot program     • Repeatable      │
+│   • Risk management   • Feature freeze      sales          │
+│   • Testing infra     • Iterate on PMF                      │
+│                                                              │
+│   COMPLETED           CURRENT PHASE       POST-VALIDATION   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Validation Milestones
+
+| Milestone | Timeline | Success Criteria |
+|-----------|----------|------------------|
+| Customer interviews (20+) | Q4 2024 | Pain points ranked |
+| Pilot launch (3-5 firms) | Q1 2025 | 80% complete onboarding |
+| Feature iteration | Q1-Q2 2025 | Top 3 requests addressed |
+| Conversion validation | Q2 2025 | 50%+ express payment intent |
+| First paying customers | Q2 2025 | 3+ firms at €2K+/month |
+
+### What We're NOT Doing (Until Validated)
+
+- **No new asset classes** until current ones proven with customers
+- **No enterprise features** before SMB validation
+- **No geographic expansion** before EU product-market fit
+- **No hiring spree** before revenue validates demand
+- **Features gated by customer demand** (minimum 3 firms requesting)
 
 ---
 
@@ -52,16 +96,27 @@ We've built a **technically mature platform** that solves infrastructure fragmen
 
 ---
 
-## Product Maturity
+## Technical Foundation
+
+### Why Our Technical Depth is an Asset (Not Over-Engineering)
+
+**The technical foundation enables rapid customer-driven iteration:**
+
+| Asset | Benefit for Validation Phase |
+|-------|------------------------------|
+| Robust architecture | Fast feature changes without breaking production |
+| Extensive test coverage | Confidence to iterate quickly on customer feedback |
+| Multi-asset support | Pivot capability if customers prefer different asset classes |
+| Research-backed algorithms | Credibility with technical buyers (prop firm CTOs) |
 
 ### Development Metrics
 
-| Metric | Value | Industry Benchmark |
-|--------|-------|-------------------|
-| **Automated Tests** | 11,063 | Excellent (>5,000 is enterprise-grade) |
-| **Test Pass Rate** | 97%+ | Above average (>95% is production-ready) |
-| **Asset Classes** | 5 | Comprehensive coverage |
-| **Exchange Integrations** | 6 | Production-ready |
+| Metric | Value | Why It Matters for Customers |
+|--------|-------|------------------------------|
+| **Automated Tests** | 11,063 | Production-ready from day one — no beta quality issues |
+| **Test Pass Rate** | 97%+ | Reliable platform for institutional use |
+| **Asset Classes** | 5 (MVP: Crypto) | Extensibility proven; MVP focused on crypto |
+| **Exchange Integrations** | 6 | Flexibility for customer requirements |
 
 ### Technology Differentiation
 
@@ -113,39 +168,61 @@ Our execution models implement 7+ peer-reviewed papers:
 
 ## Go-to-Market Strategy
 
-### Primary ICP: Proprietary Trading Firms
+### Phase 1: European Pilot Program (Q1 2025)
 
-**Why prop firms first:**
-- Faster sales cycle (weeks vs months for hedge funds)
-- Less regulatory friction (not managing external capital)
-- Clear ROI: infrastructure cost savings + time-to-market
-- Reference-able customers for hedge fund expansion
+**Structured customer validation** before scaling.
 
-**Target profile:**
-- 10-100 traders
-- Multi-asset focus (crypto + equities minimum)
-- Existing quant capability but infrastructure pain
-- US, UK, EU, Singapore based
+| Element | Specification |
+|---------|---------------|
+| **Target** | 3-5 European prop trading firms |
+| **Duration** | 3 months |
+| **Pricing** | €500/month (80% discount) |
+| **Commitment** | Weekly feedback, usage data sharing |
+| **Success criteria** | 50%+ conversion intent, NPS > 40 |
 
-### Secondary ICP: Quantitative Hedge Funds (Phase 2)
+**Why Europe first:**
+- MiFID II regulatory clarity
+- Lower competition vs US
+- Startup visa pathway for team expansion
+- Strong prop trading ecosystem (Amsterdam, Frankfurt, Dublin)
 
-After establishing prop firm references, expand to small-to-mid quant hedge funds ($50M-$500M AUM) seeking infrastructure without building in-house.
+**Target firm profile:**
+- 5-50 traders
+- Crypto-active (primary) or crypto-curious
+- Building or evaluating new infrastructure
+- Budget: €2,000-5,000/month for validated solution
+
+### Phase 2: Early Adopter Revenue (Q2-Q3 2025)
+
+**Post-pilot conversion** to paying customers.
+
+| Milestone | Target |
+|-----------|--------|
+| Paying customers | 10+ firms |
+| Price point | €2,000-3,000/month |
+| ARR | €200K+ |
+
+### Phase 3: Scale (2026+)
+
+- Feature expansion based on validated demand
+- Geographic expansion within EU
+- Enterprise tier for larger firms
 
 ### Revenue Model
 
 | Segment | Model | Illustrative Pricing |
 |---------|-------|---------------------|
-| **Prop Trading Firms** | Per-seat license | $2,000-5,000/seat/month |
-| **Quant Hedge Funds** | Platform license + support | $50,000-200,000/year |
+| **SMB Prop Firms** (5-20 traders) | Monthly subscription | €2,000-3,000/month |
+| **Mid-Size Prop Firms** (20-50 traders) | Annual license | €36,000-60,000/year |
+| **Enterprise** (50+ traders) | Custom | €100,000+/year |
 
-### Sales Channel (Planned)
+### Sales Approach
 
-| Channel | Priority | Approach |
-|---------|----------|----------|
-| Direct outreach | High | Founder-led sales to 50 target firms |
-| Industry conferences | Medium | QuantMinds, TradeTech, FIA Expo |
-| Content marketing | Medium | Technical blog, research papers |
-| Partnerships | Low (Phase 2) | Prime brokers, fund admins |
+| Phase | Approach | Rationale |
+|-------|----------|-----------|
+| **Pilot** | Founder-led | Direct feedback loop |
+| **Early Adopters** | Referrals + direct | Leverage pilot success |
+| **Scale** | Sales hire | After repeatable process proven |
 
 ---
 
@@ -218,40 +295,57 @@ After establishing prop firm references, expand to small-to-mid quant hedge fund
 
 ### Stage Acknowledgment
 
-**Current stage: Pre-revenue, technically validated**
+**Current stage: Pre-revenue, entering customer validation**
 
-We are transparent that this is an early-stage opportunity. The product is complete; commercial validation is pending.
+We are transparent that this is an early-stage opportunity. The technical foundation is complete; we are now focused on customer validation following lean startup principles.
 
-### Development Milestones (Completed)
+### What We've Completed (Technical Foundation)
 
-| Date | Milestone | Evidence |
-|------|-----------|----------|
-| Q1 2024 | Core platform complete | Crypto spot trading functional |
-| Q2 2024 | US equities integration | Alpaca, Polygon adapters |
-| Q3 2024 | Forex & CME futures | OANDA, IB adapters |
-| Q4 2024 | Options support | Deribit, Theta Data adapters |
-| Q1 2025 | 11,000+ tests achieved | CI/CD pipeline, 97%+ pass rate |
+| Phase | Status | Evidence |
+|-------|--------|----------|
+| Core platform | ✅ Complete | Crypto spot/futures functional |
+| Multi-asset architecture | ✅ Complete | 5 asset classes supported |
+| Risk management | ✅ Complete | CVaR optimization, risk guards |
+| Testing infrastructure | ✅ Complete | 11,063 tests, 97%+ pass rate |
+
+### What We're Doing Now (Customer Validation)
+
+| Activity | Status | Target |
+|----------|--------|--------|
+| Customer discovery interviews | 🔄 In progress | 20+ by end of Q4 2024 |
+| Pain point validation | 🔄 In progress | Ranked problem list |
+| Pilot program design | ✅ Complete | 3-month structured program |
+| MVP scope definition | ✅ Complete | Crypto execution + risk mgmt |
+
+### What's Next (Revenue Validation)
+
+| Milestone | Timeline | Success Criteria |
+|-----------|----------|------------------|
+| Pilot launch | Q1 2025 | 3-5 firms onboarded |
+| Pilot completion | Q2 2025 | 50%+ conversion intent |
+| First paying customers | Q2 2025 | 3+ firms at €2K+/month |
+| €100K ARR | Q3-Q4 2025 | Repeatable sales process |
 
 ### Technical Validation (Internal)
 
 | Metric | Result | Methodology |
 |--------|--------|-------------|
 | Backtesting vs Paper Trading | <3% deviation | 6-month parallel run |
-| Execution Cost Accuracy | ±2 bps vs fills | Binance paper trading comparison |
-| Risk Management | Zero margin calls | Stress testing with historical crashes |
-| Uptime | 99.9% | 3-month paper trading environments |
+| Execution Cost Accuracy | ±2 bps vs fills | Binance paper trading |
+| Risk Management | Zero margin calls | Historical crash stress tests |
+| Uptime | 99.9% | 3-month paper trading |
 
-*Note: These metrics are from internal testing. Production validation with paying customers is the next milestone.*
+*Note: Internal metrics. Customer validation is the current priority.*
 
-### Commercial Validation (Pending)
+### Lean Validation Approach
 
-| Milestone | Status | Timeline |
-|-----------|--------|----------|
-| First paid pilot | Not started | Q1 2025 post-funding |
-| 3 paying customers | Not started | Q2 2025 |
-| $100K ARR | Not started | Q3 2025 |
+**Build-Measure-Learn cycle:**
 
-*We believe technical maturity de-risks the product; customer acquisition is the primary remaining risk.*
+1. **Build**: MVP deployed (crypto execution + risk management)
+2. **Measure**: Activation, retention, NPS from pilot customers
+3. **Learn**: Iterate based on feedback, not assumptions
+
+**Pivot criteria defined**: If 70%+ of prospects want different asset classes or price sensitivity prevents conversion, we will pivot based on data.
 
 ---
 

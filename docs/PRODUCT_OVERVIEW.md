@@ -14,18 +14,16 @@ Current solutions are inadequate:
 |----------|------------|
 | **QuantConnect** | Basic execution models, no risk-aware ML |
 | **Alpaca** | Broker only, no intelligence |
-| **In-house development** | $500K-2M cost, 12+ months |
+| **In-house development** | €200K-500K cost, 12+ months |
 | **Academic tools** | Not production-ready |
 
 ---
 
 ## Our Solution
 
-**An institutional-grade platform that reduces infrastructure development from months to days, while providing capabilities unavailable anywhere else.**
+**A platform that reduces trading infrastructure development from months to days, with built-in risk management unavailable elsewhere.**
 
-### Three Breakthrough Innovations
-
-#### 1. Risk-Aware Artificial Intelligence
+### Core Innovation: Risk-Aware Execution
 
 **Traditional ML**: Optimizes average returns → ignores catastrophic risks
 
@@ -43,65 +41,85 @@ We solve:   maximize E[Return] subject to CVaR₅%[Return] ≥ threshold
 
 ---
 
-#### 2. Research-Grade Execution Simulation
+## Current Phase: Validation
 
-**Traditional platforms**: Fixed 2-5 basis points slippage
+### Foundation Built — Now Testing with Customers
 
-**Our Platform**: 6-9 factor dynamic models adapting to market conditions
+We have completed the technical foundation. Our focus now is **customer validation**, not feature expansion.
 
-| Factor | Traditional | Ours |
-|--------|-------------|------|
-| Time of day | Ignored | Open: 1.5×, Midday: 1.0×, Close: 1.3× |
-| Volatility | Ignored | LOW: 0.8×, NORMAL: 1.0×, HIGH: 1.5× |
-| Order size | Ignored | √(order/ADV) market impact |
-| Market cap | Ignored | MEGA: 0.7×, MICRO: 2.5× |
-| Events | Ignored | Earnings: 2.5× |
+| Phase | Status | Focus |
+|-------|--------|-------|
+| ~~Technical Development~~ | ✅ Complete | Core platform built |
+| **Customer Discovery** | 🔄 Active | 20+ interviews planned |
+| **Pilot Program** | 🔜 Q1 2025 | 3-5 European firms |
+| Revenue Validation | Planned | Post-pilot |
 
-**Result**: Significantly improved backtest-to-live accuracy compared to fixed-slippage models.
+### MVP Scope (What We're Launching)
 
-**Academic basis**: Almgren-Chriss (2001), Kyle (1985), Hasbrouck (2007)
+| Feature | Status | Customer Value |
+|---------|--------|----------------|
+| Crypto execution (Binance) | ✅ Ready | Days to go live |
+| Risk-aware position sizing | ✅ Ready | Built-in compliance |
+| CVaR optimization | ✅ Ready | Downside protection |
+| Backtesting | ✅ Ready | Strategy validation |
+| Real-time monitoring | ✅ Ready | Operational visibility |
 
----
+### Deferred Features (Post-Validation)
 
-#### 3. Multi-Asset Unified Architecture
-
-**Traditional**: Separate systems per asset class
-
-**Our Platform**: Single codebase for 5 asset classes
-
-| Asset Class | Exchange | Status |
-|-------------|----------|--------|
-| Crypto Spot | Binance | Production |
-| Crypto Futures | Binance USDT-M | Production |
-| US Equities | Alpaca, Polygon | Production |
-| Forex | OANDA | Production |
-| CME Futures | Interactive Brokers | Production |
-
-**Result**: Strategy portability, cross-asset risk management, single training pipeline.
+| Feature | When | Trigger |
+|---------|------|---------|
+| US Equities | After EU validation | Customer demand |
+| CME Futures | After 10 paying customers | Enterprise requests |
+| Options | Based on pilot feedback | 3+ firm requests |
 
 ---
 
-## Competitive Differentiation
+## Target Market: European Prop Trading Firms
+
+### Why Europe First
+
+| Factor | Europe | US |
+|--------|--------|-----|
+| Regulatory clarity | MiFID II framework | Fragmented |
+| Competition | Lower density | Saturated |
+| Market access | Startup visa pathway | Complex |
+| Language | English common | English native |
+
+### Target Customer
+
+| Attribute | Profile |
+|-----------|---------|
+| **Company** | Proprietary trading firm |
+| **Size** | 5-50 traders |
+| **Location** | Netherlands, Germany, Ireland, France |
+| **Need** | Fast infrastructure for new strategies |
+| **Budget** | €2,000-5,000/month |
+
+---
+
+## Competitive Positioning
 
 | Capability | Our Platform | QuantConnect | Alpaca |
 |------------|--------------|--------------|--------|
 | Risk-aware ML | **CVaR-constrained RL** | None | None |
-| Execution fidelity | **6-9 factor TCA** | Fixed spread | N/A |
-| Asset classes | **5 unified** | 2-3 separate | 1 |
-| Uncertainty quantification | **Conformal prediction** | None | None |
-| Automated tests | **11,063** | ~1,000 | N/A |
+| Execution modeling | **Multi-factor TCA** | Fixed spread | N/A |
+| Time to market | **Days** | Weeks | N/A |
+| Target customer | Institutional | Retail | Retail/SMB |
 
 ---
 
-## Technical Maturity
+## Technical Foundation
 
-| Metric | Value | Significance |
-|--------|-------|--------------|
-| **Automated Tests** | 11,063 | Enterprise-grade quality |
-| **Test Pass Rate** | 97%+ | Production-ready |
-| **Academic Papers Implemented** | 7+ | Research-backed |
-| **Development Time** | 2+ years | Significant barrier to entry |
-| **Lines of Code** | 100,000+ | Comprehensive platform |
+Our technical depth is an **asset for fast iteration**, not a goal in itself.
+
+| Asset | Benefit |
+|-------|---------|
+| Robust architecture | Rapid feature changes without breaking production |
+| Extensive test coverage | Confidence to iterate quickly |
+| Research-backed algorithms | Credibility with technical buyers |
+| MiFID II alignment | Regulatory readiness for EU market |
+
+*Technical depth enables customer focus, not delays it.*
 
 ---
 
@@ -109,59 +127,84 @@ We solve:   maximize E[Return] subject to CVaR₅%[Return] ≥ threshold
 
 ### Novel Algorithms
 
-1. **Twin Critics + Distributional PPO + CVaR**: Risk-aware value estimation
-2. **AdaptiveUPGD**: Continual learning preventing catastrophic forgetting
-3. **VGS v3.2**: Per-parameter gradient variance tracking
-4. **Parametric TCA**: Market-adaptive slippage modeling
+1. **CVaR-Constrained RL**: Risk-aware decision making
+2. **Parametric TCA**: Market-adaptive cost modeling
+3. **Twin Critics**: Reduced overestimation in value learning
 
 ### Academic Foundation
 
-- 7+ peer-reviewed papers implemented in production
-- References: Almgren-Chriss, Kyle, Dabney, Chow, Romano, Gatheral, Moallemi
+- Research-backed approach (Almgren-Chriss, Kyle, Dabney, Chow)
+- Defensible through complexity and trade secrets
 
 ---
 
 ## Market Opportunity
 
-**Global algorithmic trading market**: $31.49B by 2028 (CAGR 12.2%, Allied Market Research)
+**European algorithmic trading market**: Growing segment of €31B global market
 
-**Our focus**: 500+ proprietary trading firms in US/EU seeking:
+**Our focus**: 500+ prop trading firms in EU seeking:
 - Faster time-to-market
-- Superior execution modeling
-- Multi-asset capabilities
-- ML-driven strategies
+- Superior risk management
+- Regulatory compliance (MiFID II)
 
 ---
 
-## Why Now?
+## Go-to-Market Strategy
 
-1. **Institutional crypto adoption**: ETF approvals driving infrastructure demand
-2. **AI/ML maturity**: Production-ready frameworks now available
-3. **Market complexity**: Multi-asset strategies require sophisticated tools
-4. **Regulatory push**: MiFID II best execution, SEC 15c3-5 market access rules
+### Phase 1: Pilot (Q1 2025)
+
+| Element | Specification |
+|---------|---------------|
+| Cohort size | 3-5 firms |
+| Duration | 3 months |
+| Pricing | €500/month (discounted) |
+| Commitment | Weekly feedback |
+
+### Phase 2: Early Adopters (Q2-Q3 2025)
+
+| Element | Target |
+|---------|--------|
+| Paying customers | 10+ firms |
+| Price point | €2,000-3,000/month |
+| ARR target | €200K+ |
+
+### Phase 3: Scale (2026+)
+
+- Expand feature set based on validated demand
+- Geographic expansion within EU
+- Enterprise tier development
 
 ---
 
-## Summary: Why This Is Innovative
+## What We Will NOT Do (Until Validated)
 
-| Criterion | Evidence |
-|-----------|----------|
-| **Novel technology** | Among the first production CVaR-constrained RL implementations for trading |
-| **Academic grounding** | 7+ peer-reviewed papers implemented |
-| **Technical depth** | 11,063 automated tests, 2+ years development |
-| **Growth potential** | 5 asset classes → commodities, fixed income, options |
-| **Defensible IP** | Proprietary algorithms, trade secrets, complexity barrier |
-
-**This is not another algorithmic trading platform.**
-
-This is among the first integrations of risk-aware reinforcement learning with research-grade market microstructure simulation — capabilities that are not available in typical open-source or commercial solutions.
+- Add new asset classes without customer demand
+- Build enterprise features before SMB validation
+- Expand geographically before EU product-market fit
+- Prioritize features over customer feedback
 
 ---
 
-*For detailed technical documentation, see [INNOVATION_STATEMENT.md](INNOVATION_STATEMENT.md)*
+## Summary
+
+| Question | Answer |
+|----------|--------|
+| **What is it?** | Trading infrastructure platform with built-in risk management |
+| **Who is it for?** | European prop trading firms (5-50 traders) |
+| **What problem?** | 6-12 months to build infrastructure → days |
+| **What's different?** | Risk-aware ML, multi-factor execution modeling |
+| **What's next?** | Pilot program with 3-5 European firms |
+| **What's the ask?** | Introductions to prop trading CTOs in EU |
+
+---
+
+*For detailed validation strategy, see [LEAN_VALIDATION_STRATEGY.md](LEAN_VALIDATION_STRATEGY.md)*
+
+*For pilot program details, see [PILOT_PROGRAM.md](PILOT_PROGRAM.md)*
 
 *For investor materials, see [INVESTOR_BRIEF.md](INVESTOR_BRIEF.md)*
 
 ---
 
-*Last Updated: December 2025*
+*Last Updated: December 2024*
+
