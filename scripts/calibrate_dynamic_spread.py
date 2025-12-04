@@ -80,7 +80,7 @@ def _compute_mid(df: pd.DataFrame) -> pd.Series:
 
     mid_col = _pick_column(df, ["mid", "mid_price", "mid_px", "price", "close"])
     if mid_col:
-        return df[mid_col]
+        return df[mid_col].copy().rename(None)
 
     raise KeyError(
         "Unable to infer mid price column. Provide bid/ask or a mid/close column."
@@ -89,7 +89,7 @@ def _compute_mid(df: pd.DataFrame) -> pd.Series:
 
 def _compute_spread_bps(df: pd.DataFrame, mid: pd.Series) -> Optional[pd.Series]:
     if "spread_bps" in df.columns:
-        return df["spread_bps"]
+        return df["spread_bps"].copy().rename(None)
 
     bid_col = _pick_column(df, ["bid", "best_bid", "bid_price", "bid_px"])
     ask_col = _pick_column(df, ["ask", "best_ask", "ask_price", "ask_px"])
@@ -99,7 +99,16 @@ def _compute_spread_bps(df: pd.DataFrame, mid: pd.Series) -> Optional[pd.Series]
 
     raw_spread_col = _pick_column(df, ["spread", "spread_abs"])
     if raw_spread_col:
-        return (df[raw_spread_col] / mid) * 1e4
+        return ((df[raw_spread_col] / mid) * 1e4).rename(None)
+
+    # Fallback: approximate spread from bar range when bid/ask is unavailable.
+    if "high" in df.columns and "low" in df.columns:
+        with np.errstate(invalid="ignore"):
+            bar_range = pd.to_numeric(df["high"], errors="coerce") - pd.to_numeric(
+                df["low"], errors="coerce"
+            )
+        spread_est = (bar_range / mid) * 1e4
+        return spread_est.rename(None)
 
     return None
 
@@ -121,19 +130,25 @@ def _prepare_dataframe(
         raise KeyError("Bar data must contain 'high' and 'low' columns")
 
     mid = _compute_mid(result)
-    result = result.assign(mid=mid)
-    mask = (
-        result["mid"].notna()
-        & result["mid"].astype(float).replace([np.inf, -np.inf], np.nan).notna()
-        & result["mid"] > 0
-        & result["high"].notna()
-        & result["low"].notna()
-    )
-    result = result.loc[mask]
+    mid_numeric = pd.to_numeric(mid, errors="coerce")
+    high_numeric = pd.to_numeric(result["high"], errors="coerce")
+    low_numeric = pd.to_numeric(result["low"], errors="coerce")
 
-    high = pd.to_numeric(result["high"], errors="coerce")
-    low = pd.to_numeric(result["low"], errors="coerce")
-    mid_clean = pd.to_numeric(result["mid"], errors="coerce")
+    mask = (
+        mid_numeric.notna()
+        & np.isfinite(mid_numeric)
+        & (mid_numeric > 0)
+        & high_numeric.notna()
+        & low_numeric.notna()
+        & np.isfinite(high_numeric)
+        & np.isfinite(low_numeric)
+    )
+    result = result.loc[mask].copy()
+
+    mid_clean = mid_numeric.loc[result.index]
+    high = high_numeric.loc[result.index]
+    low = low_numeric.loc[result.index]
+    result = result.assign(mid=mid_clean)
 
     price_range = high - low
     price_range = price_range.astype(float)
@@ -157,9 +172,9 @@ def _prepare_dataframe(
 
 def _select_volatility(df: pd.DataFrame, metric: str) -> pd.Series:
     if metric == "range_ratio_bps":
-        return df["range_ratio_bps"]
+        return df["range_ratio_bps"].copy().rename(None)
     if metric in df.columns:
-        return df[metric]
+        return df[metric].copy().rename(None)
 
     raise KeyError(
         f"Volatility metric '{metric}' not found. Available columns: {', '.join(df.columns)}"
@@ -173,8 +188,12 @@ def _clip_percentiles(series: pd.Series, lower: float, upper: float) -> pd.Serie
     if cleaned.empty:
         return series
     try:
-        lower_bound = np.nanpercentile(cleaned, lower)
-        upper_bound = np.nanpercentile(cleaned, upper)
+        lower_bound = np.nanquantile(cleaned, lower / 100.0, method="nearest")
+        upper_bound = np.nanquantile(cleaned, upper / 100.0, method="nearest")
+    except TypeError:
+        # numpy<1.22 fallback
+        lower_bound = np.nanpercentile(cleaned, lower, interpolation="nearest")
+        upper_bound = np.nanpercentile(cleaned, upper, interpolation="nearest")
     except IndexError:
         return series
     if lower_bound == upper_bound:
