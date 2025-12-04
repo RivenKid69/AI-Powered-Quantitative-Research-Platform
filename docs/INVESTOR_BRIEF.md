@@ -491,34 +491,91 @@ Targeting 18-24 month runway to reach Series A milestones. Conservative burn ass
 
 ## Financial Model (Illustrative)
 
-> **Important**: These projections are illustrative scenarios, not forecasts. As a pre-revenue company, actual results will depend on execution and market conditions. These figures are for modeling purposes only.
+> **Important**: These projections are illustrative scenarios grounded in bottom-up analysis, not top-down aspirations. As a pre-revenue company, actual results will depend on execution and market conditions. We present conservative and downside scenarios to demonstrate business viability under various conditions.
 
-### Scenario: Conservative Case
+### Bottom-Up Revenue Logic
 
-| Year | Customers | ARR | Assumptions |
-|------|-----------|-----|-------------|
-| Y1 | 5 | $100K | 5 pilot customers at $20K avg |
-| Y2 | 20 | $400K | Conversion + expansion |
-| Y3 | 50 | $1.2M | Scalable sales process |
+**Target Market**: ~200 European prop trading firms (Amsterdam 22+, London 100+, Frankfurt/Paris/Dublin 40+)
+**Serviceable Market**: ~60 firms (5-50 traders, tech-forward, budget available)
 
-### Scenario: Base Case
+**Funnel Assumptions** (industry-benchmarked):
+| Stage | Our Rate | Industry Range | Source |
+|-------|----------|----------------|--------|
+| Outreach→Meeting | 10% | 5-15% | [Gradient Works](https://www.gradient.works/blog/2024-b2b-sales-benchmarks) |
+| Meeting→Pilot | 25% | 20-30% | [First Page Sage](https://firstpagesage.com/seo-blog/b2b-saas-funnel-conversion-benchmarks-fc/) |
+| Pilot→Paid | 60% | 50-70% | [SaaStr](https://www.saastr.com/what-is-the-typical-conversion-from-paid-pilot-to-annual-contract-in-b2b-saas/) |
+| Sales Cycle | 4-6 mo | 3-9 mo | [Databox](https://databox.com/saas-sales-benchmarks) |
 
-| Year | Customers | ARR | Assumptions |
-|------|-----------|-----|-------------|
-| Y1 | 10 | $200K | Faster sales execution |
-| Y2 | 40 | $800K | Product-market fit achieved |
-| Y3 | 100 | $2.5M | Sales team expansion |
+### Scenario Analysis
 
-### Unit Economics Model (Industry Benchmarks)
+#### Conservative Scenario (50% below base)
 
-| Metric | Our Target | Industry Range | Source |
-|--------|------------|----------------|--------|
-| CAC | <$10,000 | $5-20K | Openview SaaS Benchmarks |
-| LTV | >$50,000 | $30-100K | ProfitWell |
-| LTV:CAC | >5:1 | 3-5:1 | David Skok, Matrix Partners |
-| Gross Margin | >80% | 70-85% | SaaS Capital |
+| Year | Customers | ARR (EUR) | Key Assumptions |
+|------|-----------|-----------|-----------------|
+| Y1 | 2 | €48K | 2 customers × 8 seats × €2K/seat |
+| Y2 | 8 | €200K | +6 net new, slower expansion |
+| Y3 | 18 | €500K | Founder-led sales, 50% pilot conversion |
 
-*These targets are aspirational. Actual unit economics will be validated through commercial operations.*
+#### Base Scenario
+
+| Year | Customers | ARR (EUR) | Key Assumptions |
+|------|-----------|-----------|-----------------|
+| Y1 | 3 | €80K | 3 customers × 10 seats × €2K/seat |
+| Y2 | 12 | €360K | +9 net new, sales hire |
+| Y3 | 25 | €850K | 60% pilot conversion, 110% NRR |
+
+#### Stress Test: Downside Scenario (70% below base)
+
+| Year | Customers | ARR (EUR) | Monthly Burn | Response |
+|------|-----------|-----------|--------------|----------|
+| Y1 | 1 | €24K | €35K | Reduce to €25K/mo |
+| Y2 | 4 | €100K | €40K | Delay sales hire |
+| Y3 | 10 | €280K | €45K | Break-even at €300K ARR |
+
+**Downside assumptions**: 40% pilot conversion, 8-10 month sales cycle, crypto winter conditions
+
+### Contingency Measures
+
+| Trigger | Response |
+|---------|----------|
+| Y1 ARR < €50K | Cut burn 45% (€45K→€25K/mo), extend runway to 20 months |
+| Pilot conversion <40% | Pivot to adjacent segment (hedge funds, family offices) |
+| Market downturn | Emphasize multi-asset flexibility, cost-savings narrative |
+
+**Burn Reduction Levers**: Delay sales hire (-€80K/yr), remote-first (-€24K/yr), founder salary cut (-€30K/yr) = **€134K savings**
+
+### Unit Economics (Industry-Benchmarked)
+
+| Metric | Our Target | Industry Benchmark | Source |
+|--------|------------|-------------------|--------|
+| **CAC** | €8-12K | €5-15K (SMB), €15K+ (Enterprise) | [Powered by Search](https://www.poweredbysearch.com/learn/b2b-saas-cac-benchmarks/), [First Page Sage](https://firstpagesage.com/reports/average-customer-acquisition-cost-cac-by-industry-b2b-edition-fc) |
+| **LTV** | €45-60K | €30-100K | [ProfitWell](https://profitwell.com) |
+| **LTV:CAC** | 4:1-5:1 | 3:1 (min), 4:1 (B2B SaaS), 5:1 (Fintech) | [Phoenix Strategy Group](https://www.phoenixstrategy.group/blog/ltvcac-ratio-saas-benchmarks-and-insights) |
+| **Gross Margin** | 82-85% | 70-85% | [SaaS Capital](https://www.saas-capital.com/blog-posts/benchmarking-metrics-for-bootstrapped-saas-companies/) |
+| **Payback** | 12-15 mo | 12-18 mo (healthy) | [OpenView Partners](https://openviewpartners.com) |
+| **Annual Churn** | 8-12% | 5-7% (ent), 10-15% (SMB) | [SaaS Capital](https://www.saas-capital.com) |
+| **NRR** | 105-110% | 100-120% (enterprise) | [KeyBanc](https://www.key.com/kco/images/2023_SaaS_Survey_Results.pdf) |
+
+### Runway Analysis
+
+| Funding | Burn Rate | Runway | Milestone |
+|---------|-----------|--------|-----------|
+| €500K | Full (€45K/mo) | 14 mo | €150K ARR |
+| €500K | Reduced (€25K/mo) | 20 mo | €100K ARR |
+| €750K | Full (€45K/mo) | 18 mo | €250K ARR |
+
+### Why These Numbers Are Credible
+
+| Projection | Industry Norm | Assessment |
+|------------|---------------|------------|
+| Y1 customers: 2-3 | Early SaaS: 1-10 | ✅ Conservative |
+| Y1 ARR: €48-80K | Pre-seed: €0-200K | ✅ Realistic |
+| CAC: €10K | Fintech SMB: €5-15K | ✅ Within range |
+| LTV:CAC: 5:1 | Fintech: 4-6:1 | ✅ Industry standard |
+
+*Growth rates benchmarked against [SaaS Capital 2024](https://www.saas-capital.com/blog-posts/growth-benchmarks-for-private-saas-companies/), [High Alpha 2024](https://www.highalpha.com/2024-saas-benchmarks-report), [Growth Unhinged](https://www.growthunhinged.com/p/your-guide-to-the-2024-saas-benchmarks)*
+
+**Our commitment**: Sustainable unit economics over growth-at-all-costs. Detailed projections in [BUSINESS_PLAN_EU_VISA.md](BUSINESS_PLAN_EU_VISA.md) Section 8.
 
 ---
 

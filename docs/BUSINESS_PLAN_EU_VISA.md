@@ -758,6 +758,13 @@ Per-parameter variance tracking with anti-blocking protection for stable trainin
 
 ## 8. Revenue Model and Financial Projections
 
+> **Important Note for Visa Committees**: This section presents *illustrative scenarios* to demonstrate business viability and planning rigor—not definitive forecasts. As emphasized throughout this document, we are a pre-revenue startup entering customer validation. Our projections are grounded in:
+> - Bottom-up market analysis (not top-down aspirations)
+> - Industry benchmark data from reputable sources
+> - Conservative assumptions with explicit contingency planning
+>
+> We believe sustainable business fundamentals matter more than aggressive ARR targets for long-term success.
+
 ### 8.1 Revenue Model
 
 #### 8.1.1 Pricing Structure
@@ -778,54 +785,213 @@ Per-parameter variance tracking with anti-blocking protection for stable trainin
 | **Training Programs** | EUR 5,000/session | 80% |
 | **Priority Support** | 15% of license fee | 90% |
 
-### 8.2 Financial Projections
+### 8.2 Bottom-Up Market Sizing & Revenue Logic
+
+> **Methodology**: We derive revenue projections from bottom-up funnel analysis, not top-down market share assumptions. This approach provides realistic targets grounded in achievable sales activities.
+
+#### 8.2.1 Total Addressable Market (Europe)
+
+| Segment | Firm Count | Source |
+|---------|------------|--------|
+| **Amsterdam Hub** | 22+ firms | APT Association (Association of Proprietary Traders) |
+| **London Hub** | 100+ firms | FIA Europe, City of London estimates |
+| **Frankfurt/Paris/Dublin** | 40+ firms | MiFID II registrations, industry associations |
+| **Nordics (Stockholm, Copenhagen)** | 15+ firms | Nordic Trading Association |
+| **Other EU** | 30+ firms | Scattered across Zurich, Milan, Warsaw |
+| **Total Primary Market** | **~200+ firms** | European prop trading ecosystem |
+
+*Sources: [Tradermath Prop Firm Directory](https://www.tradermath.org/proprietary-trading-firms/amsterdam), [FIA Europe](https://www.fia.org), APT Association, MiFID II public registrations*
+
+#### 8.2.2 Serviceable Addressable Market (SAM)
+
+| Filter | Firms | Logic |
+|--------|-------|-------|
+| Starting pool | 200+ | European prop trading firms |
+| Size filter (5-50 traders) | 120 | Exclude micro (<5) and enterprise (>50) |
+| Technology adoption readiness | 80 | ~67% actively evaluating new platforms |
+| Budget availability | 60 | ~75% with discretionary tech budget |
+| **SAM** | **~60 firms** | Realistic target market in Years 1-3 |
+
+#### 8.2.3 Bottom-Up Revenue Build (Year 1)
+
+**Funnel Assumptions (Industry-Benchmarked)**:
+
+| Stage | Metric | Our Assumption | Industry Benchmark | Source |
+|-------|--------|----------------|-------------------|--------|
+| **Outreach → Meeting** | Conversion | 10% | 5-15% | [Gradient Works 2024](https://www.gradient.works/blog/2024-b2b-sales-benchmarks) |
+| **Meeting → Pilot** | Conversion | 25% | 20-30% | [First Page Sage B2B](https://firstpagesage.com/seo-blog/b2b-saas-funnel-conversion-benchmarks-fc/) |
+| **Pilot → Paid** | Conversion | 60% | 50-70% | [SaaStr Paid Pilots](https://www.saastr.com/what-is-the-typical-conversion-from-paid-pilot-to-annual-contract-in-b2b-saas/) |
+| **Sales Cycle** | Duration | 4-6 months | 3-9 months (enterprise) | [Databox SaaS Sales](https://databox.com/saas-sales-benchmarks) |
+
+**Year 1 Detailed Build**:
+
+| Activity | Q1 | Q2 | Q3 | Q4 | Total |
+|----------|----|----|----|----|-------|
+| **Outreach (firms contacted)** | 30 | 40 | 40 | 30 | 140 |
+| **Meetings booked (10%)** | 3 | 4 | 4 | 3 | 14 |
+| **Pilots started (25%)** | 0 | 1 | 1 | 2 | 4 |
+| **Paid conversions (60%)** | 0 | 0 | 1 | 1-2 | 2-3 |
+| **Cumulative paying customers** | 0 | 0 | 1 | 2-3 | **2-3** |
+
+**Year 1 Revenue Range**:
+- **Conservative**: 2 customers × 8 seats avg × EUR 2,000/seat × 6 months = **EUR 48,000 ARR**
+- **Base**: 3 customers × 10 seats avg × EUR 2,000/seat × 8 months = **EUR 80,000 ARR**
+
+*Note: First revenue expected H2 Y1 due to 4-6 month sales cycles.*
+
+#### 8.2.4 Year 2-3 Growth Logic
+
+| Metric | Y1 End | Y2 End | Y3 End | Growth Driver |
+|--------|--------|--------|--------|---------------|
+| **Customers (Conservative)** | 2-3 | 8-10 | 18-22 | +5-6 net new/year |
+| **Customers (Base)** | 3-4 | 12-15 | 25-30 | +8-10 net new/year |
+| **Avg Seats/Customer** | 8 | 10 | 12 | Expansion within accounts |
+| **Net Revenue Retention** | N/A | 105% | 110% | Seat expansion, upsells |
+
+**Why These Numbers Are Achievable**:
+1. **Founder-led sales in Y1**: ~40 qualified conversations achievable by single founder
+2. **Reference customers in Y2**: First customers drive 30-40% of new deals via referrals
+3. **Sales hire in Y2**: Dedicated sales adds 50% pipeline capacity
+4. **Amsterdam density**: 22+ firms within commuting distance for in-person relationship building
+
+### 8.3 Financial Projections (Scenario Analysis)
 
 > **Disclaimer**: These projections are illustrative scenarios for planning purposes. As a pre-revenue company, actual results will depend on execution, market conditions, and many factors beyond our control. These figures are not forecasts.
 
-#### 8.2.1 Conservative Scenario
+#### 8.3.1 Conservative Scenario (50% Below Base)
 
-| Year | Customers | Seats | ARR (EUR) | MRR (EUR) |
-|------|-----------|-------|-----------|-----------|
-| **Y1** | 5 | 40 | 100,000 | 8,333 |
-| **Y2** | 15 | 120 | 350,000 | 29,167 |
-| **Y3** | 35 | 280 | 900,000 | 75,000 |
+*Assumes: slower sales cycles, lower conversion rates, extended pilot periods*
 
-**Assumptions**: Slow sales execution, longer pilots, conservative expansion
+| Year | Customers | Seats | ARR (EUR) | MRR (EUR) | Growth |
+|------|-----------|-------|-----------|-----------|--------|
+| **Y1** | 2 | 16 | 48,000 | 4,000 | — |
+| **Y2** | 8 | 80 | 200,000 | 16,667 | 317% |
+| **Y3** | 18 | 200 | 500,000 | 41,667 | 150% |
 
-#### 8.2.2 Base Scenario
+**Key Assumptions**:
+- Pilot→Paid conversion: 50% (vs 60% base)
+- Sales cycle: 6-8 months (vs 4-6 months)
+- Single founder sales through Y2
 
-| Year | Customers | Seats | ARR (EUR) | MRR (EUR) |
-|------|-----------|-------|-----------|-----------|
-| **Y1** | 8 | 60 | 180,000 | 15,000 |
-| **Y2** | 25 | 200 | 600,000 | 50,000 |
-| **Y3** | 60 | 500 | 1,600,000 | 133,333 |
+#### 8.3.2 Base Scenario
 
-**Assumptions**: Successful pilot conversions, word-of-mouth growth
+| Year | Customers | Seats | ARR (EUR) | MRR (EUR) | Growth |
+|------|-----------|-------|-----------|-----------|--------|
+| **Y1** | 3 | 30 | 80,000 | 6,667 | — |
+| **Y2** | 12 | 130 | 360,000 | 30,000 | 350% |
+| **Y3** | 25 | 300 | 850,000 | 70,833 | 136% |
 
-#### 8.2.3 Optimistic Scenario
+**Key Assumptions**:
+- Pilot→Paid conversion: 60%
+- Sales cycle: 4-6 months
+- Sales hire in H2 Y1 or Q1 Y2
+- Net Revenue Retention: 105-110%
 
-| Year | Customers | Seats | ARR (EUR) | MRR (EUR) |
-|------|-----------|-------|-----------|-----------|
-| **Y1** | 12 | 100 | 300,000 | 25,000 |
-| **Y2** | 40 | 350 | 1,000,000 | 83,333 |
-| **Y3** | 100 | 900 | 2,800,000 | 233,333 |
+#### 8.3.3 Optimistic Scenario
 
-**Assumptions**: Strong product-market fit, rapid expansion
+| Year | Customers | Seats | ARR (EUR) | MRR (EUR) | Growth |
+|------|-----------|-------|-----------|-----------|--------|
+| **Y1** | 5 | 50 | 130,000 | 10,833 | — |
+| **Y2** | 20 | 220 | 600,000 | 50,000 | 362% |
+| **Y3** | 45 | 500 | 1,400,000 | 116,667 | 133% |
 
-### 8.3 Unit Economics (Targets)
+**Key Assumptions**:
+- Strong product-market fit signals
+- 70% pilot conversion
+- Successful expansion via referrals
 
-| Metric | Target | Industry Benchmark | Source |
-|--------|--------|-------------------|--------|
-| **CAC** | < EUR 10,000 | EUR 5,000-20,000 | Openview SaaS |
-| **LTV** | > EUR 50,000 | EUR 30,000-100,000 | ProfitWell |
-| **LTV:CAC Ratio** | > 5:1 | 3:1-5:1 | Matrix Partners |
-| **Gross Margin** | > 80% | 70-85% | SaaS Capital |
-| **Payback Period** | < 12 months | 12-18 months | Industry |
-| **Net Revenue Retention** | > 110% | 100-120% | KeyBanc |
+### 8.4 Stress Test: Downside Scenario & Contingencies
 
-### 8.4 Cost Structure
+> **Purpose**: Demonstrate business viability even under adverse conditions. EU visa committees prioritize sustainable business models over aggressive growth.
 
-#### 8.4.1 Year 1 Operating Costs (Base Scenario)
+#### 8.4.1 Downside Scenario (70% Below Base)
+
+*Assumes: significant headwinds, extended sales cycles, market downturn*
+
+| Year | Customers | Seats | ARR (EUR) | MRR (EUR) | Monthly Burn |
+|------|-----------|-------|-----------|-----------|--------------|
+| **Y1** | 1 | 8 | 24,000 | 2,000 | 35,000 |
+| **Y2** | 4 | 40 | 100,000 | 8,333 | 40,000 |
+| **Y3** | 10 | 110 | 280,000 | 23,333 | 45,000 |
+
+**Downside Scenario Assumptions**:
+- Only 40% pilot conversion rate
+- 8-10 month average sales cycle (crypto winter / market downturn)
+- Only 1 paying customer in Y1 (vs 3 base)
+- Minimal seat expansion (8 seats avg vs 10)
+
+#### 8.4.2 Contingency Measures
+
+**Trigger Points & Responses**:
+
+| Trigger | Condition | Response |
+|---------|-----------|----------|
+| **Revenue miss >30%** | Y1 ARR < EUR 50K | Reduce burn to EUR 30K/month, extend runway |
+| **Conversion miss >40%** | Pilot→Paid < 40% | Pivot to different segment (hedge funds, family offices) |
+| **Churn spike** | >15% annual churn | Halt new sales, focus on customer success |
+| **Market downturn** | Crypto winter + equity bear | Emphasize multi-asset flexibility, cost savings narrative |
+
+**Burn Rate Reduction Levers**:
+
+| Lever | Impact | Timeline |
+|-------|--------|----------|
+| **Delay Sales hire** | -EUR 80K/year | Immediate |
+| **Remote-first (no office)** | -EUR 24K/year | Immediate |
+| **Reduce cloud spend** | -EUR 20K/year | 30 days |
+| **Founder salary cut** | -EUR 30K/year | Immediate |
+| **Total potential savings** | **EUR 154K/year** | — |
+
+**Reduced Burn Scenario**:
+- Minimum viable burn: **EUR 25,000/month** (EUR 300K/year)
+- With EUR 500K seed: **20-month runway** (vs 14 months at full burn)
+- Break-even possible at **EUR 300K ARR** (vs EUR 550K at full burn)
+
+#### 8.4.3 Runway Extension Options
+
+| Option | Amount | Likelihood | Notes |
+|--------|--------|------------|-------|
+| **Revenue (Conservative Y2)** | EUR 200K | Medium | Customer payments |
+| **Government Grants (EU)** | EUR 50-100K | Medium | Horizon Europe, national programs |
+| **Convertible Note** | EUR 200-300K | Medium | Bridge if traction positive |
+| **Reduced Burn** | +6 months | High | Built-in flexibility |
+
+### 8.5 Unit Economics (Industry-Benchmarked)
+
+| Metric | Our Target | Industry Benchmark | Source | Notes |
+|--------|------------|-------------------|--------|-------|
+| **CAC** | EUR 8,000-12,000 | EUR 5,000-15,000 (SMB), EUR 15,000+ (Enterprise) | [Powered by Search](https://www.poweredbysearch.com/learn/b2b-saas-cac-benchmarks/), [First Page Sage](https://firstpagesage.com/reports/average-customer-acquisition-cost-cac-by-industry-b2b-edition-fc) | Fintech typically higher |
+| **LTV** | EUR 45,000-60,000 | EUR 30,000-100,000 | [ProfitWell](https://profitwell.com), industry surveys | 3-year avg customer lifetime |
+| **LTV:CAC Ratio** | 4:1 - 5:1 | 3:1 (minimum viable), 4:1 (B2B SaaS), 5:1 (Fintech) | [Phoenix Strategy Group](https://www.phoenixstrategy.group/blog/ltvcac-ratio-saas-benchmarks-and-insights) | Fintech achieves 5:1+ |
+| **Gross Margin** | 82-85% | 70-85% | [SaaS Capital](https://www.saas-capital.com/blog-posts/benchmarking-metrics-for-bootstrapped-saas-companies/) | Pure software, no COGS |
+| **Payback Period** | 12-15 months | 12-18 months | [OpenView Partners](https://openviewpartners.com) | Healthy range |
+| **Net Revenue Retention** | 105-110% | 100-120% (enterprise), 90-100% (SMB) | [KeyBanc](https://www.key.com/kco/images/2023_SaaS_Survey_Results.pdf) | Conservative assumption |
+| **Annual Churn** | 8-12% | 5-7% (enterprise), 10-15% (SMB) | [SaaS Capital](https://www.saas-capital.com) | Blended assumption |
+| **Sales Cycle** | 4-6 months | 3-9 months (enterprise SaaS) | [Databox](https://databox.com/saas-sales-benchmarks), [HubSpot](https://hubspot.com) | Mid-market focus |
+
+#### 8.5.1 LTV Calculation (Conservative)
+
+```
+LTV = (ARPU × Gross Margin × Customer Lifetime)
+    = (EUR 2,500/month × 85% × 24 months)
+    = EUR 51,000
+
+With 5% annual upsell:
+LTV = EUR 51,000 × 1.05 = EUR 53,550
+```
+
+#### 8.5.2 CAC Calculation (Target)
+
+```
+Target CAC = LTV / 5 (for 5:1 ratio)
+           = EUR 53,550 / 5
+           = EUR 10,710
+
+Allowable Sales & Marketing spend per customer: EUR 10,000-12,000
+```
+
+### 8.6 Cost Structure
+
+#### 8.6.1 Year 1 Operating Costs (Base Scenario)
 
 | Category | Monthly | Annual | % of Costs |
 |----------|---------|--------|------------|
@@ -837,20 +1003,74 @@ Per-parameter variance tracking with anti-blocking protection for stable trainin
 | **Contingency** | 2,000 | 24,000 | 4% |
 | **Total** | **45,500** | **546,000** | 100% |
 
-#### 8.4.2 Break-Even Analysis
+#### 8.6.2 Reduced Burn Scenario (Contingency)
 
-| Scenario | Break-Even ARR | Break-Even Timeline |
-|----------|----------------|---------------------|
-| **Conservative** | EUR 550,000 | Month 30 |
-| **Base** | EUR 550,000 | Month 20 |
-| **Optimistic** | EUR 550,000 | Month 14 |
+| Category | Monthly | Annual | Reduction |
+|----------|---------|--------|-----------|
+| **Personnel (founder only)** | 12,000 | 144,000 | -52% |
+| **Infrastructure** | 3,000 | 36,000 | -40% |
+| **Sales & Marketing** | 5,000 | 60,000 | -38% |
+| **Legal & Compliance** | 2,000 | 24,000 | -33% |
+| **Office (remote-first)** | 1,000 | 12,000 | -60% |
+| **Contingency** | 2,000 | 24,000 | — |
+| **Total** | **25,000** | **300,000** | **-45%** |
 
-### 8.5 Funding Requirements
+#### 8.6.3 Break-Even Analysis
+
+| Scenario | Break-Even ARR | Break-Even Timeline | Monthly Burn |
+|----------|----------------|---------------------|--------------|
+| **Downside (reduced burn)** | EUR 300,000 | Month 36 | EUR 25,000 |
+| **Conservative** | EUR 400,000 | Month 30 | EUR 35,000 |
+| **Base** | EUR 550,000 | Month 22 | EUR 45,000 |
+| **Optimistic** | EUR 550,000 | Month 16 | EUR 45,000 |
+
+### 8.7 Funding Requirements
 
 | Round | Amount | Use | Timeline |
 |-------|--------|-----|----------|
 | **Pre-Seed/Seed** | EUR 500,000-750,000 | MVP launch, first customers | Now |
-| **Series A** | EUR 2M-3M | Scale sales, engineering | Y2 |
+| **Series A** | EUR 2M-3M | Scale sales, engineering | Y2-Y3 |
+
+**Runway Analysis**:
+
+| Funding | Burn Rate | Runway | Milestone Target |
+|---------|-----------|--------|------------------|
+| EUR 500K | Full (EUR 45K/mo) | 14 months | EUR 150K ARR |
+| EUR 500K | Reduced (EUR 25K/mo) | 20 months | EUR 100K ARR |
+| EUR 750K | Full (EUR 45K/mo) | 18 months | EUR 250K ARR |
+| EUR 750K | Reduced (EUR 25K/mo) | 30 months | EUR 200K ARR |
+
+### 8.8 Why These Projections Are Credible
+
+#### 8.8.1 Benchmark Alignment
+
+| Our Projection | Industry Norm | Assessment |
+|----------------|---------------|------------|
+| Y1 customers: 2-5 | Early SaaS: 1-10 | ✅ Realistic |
+| Y1 ARR: EUR 50-130K | Pre-seed: EUR 0-200K | ✅ Conservative |
+| Y1-Y2 growth: 300-400% | <$1M SaaS: 100-300% | ⚠️ Slightly above (AI-native premium) |
+| CAC: EUR 10K | Fintech SMB: EUR 5-15K | ✅ Within range |
+| LTV:CAC: 5:1 | Fintech: 4-6:1 | ✅ Industry standard |
+
+*Sources: [SaaS Capital 2024](https://www.saas-capital.com/blog-posts/growth-benchmarks-for-private-saas-companies/), [High Alpha 2024](https://www.highalpha.com/2024-saas-benchmarks-report), [Eleken SaaS Growth](https://www.eleken.co/blog-posts/average-saas-growth-rate-brief-guide-for-startups)*
+
+#### 8.8.2 Why Conservative Assumptions Are Appropriate
+
+1. **Pre-revenue reality**: No historical data to calibrate; err on side of caution
+2. **Enterprise sales complexity**: Financial services requires trust-building
+3. **Regulatory environment**: MiFID II compliance adds friction
+4. **Single founder sales**: Limited bandwidth in Y1
+5. **EU visa requirement**: Demonstrate sustainability over aggression
+
+#### 8.8.3 Risk Acknowledgment for Visa Committees
+
+We acknowledge that achieving projections depends on multiple factors:
+- Successfully validating product-market fit with pilot customers
+- Hiring effective sales talent (critical post-Y1)
+- Favorable market conditions (not crypto winter)
+- Execution quality on technical and sales fronts
+
+**Our commitment**: Focus on sustainable unit economics rather than growth-at-all-costs. We prefer profitable EUR 500K ARR to unprofitable EUR 2M ARR.
 
 **Runway Target**: 18-24 months to Series A milestones
 
