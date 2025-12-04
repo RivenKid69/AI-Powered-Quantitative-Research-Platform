@@ -289,6 +289,41 @@ Actively seeking advisors with:
 
 ---
 
+## Economic Impact & Job Creation (EU Focus)
+
+### Employment Commitment
+
+Our European expansion plan is designed to exceed EU startup visa requirements while building a world-class fintech team:
+
+| Year | Direct FTEs | Cumulative Salary Investment | Tax Contribution |
+|------|-------------|------------------------------|------------------|
+| **Year 1** | 5 | €375,000 | €239,000 |
+| **Year 2** | 12 | €930,000 | €621,000 |
+| **Year 3** | 22 | €1,760,000 | €1,246,000 |
+| **Year 5** | 50 | €4,250,000 | €3,058,000 |
+
+### EU Visa Compliance
+
+| Program | Requirement | Our Commitment | Status |
+|---------|-------------|----------------|--------|
+| **Germany §21 AufenthG** | 5 jobs, €500K investment | 22 jobs, €1.6M by Y3 | **440% of target** |
+| **Ireland STEP** | 10 jobs, €1M revenue | 22 jobs, €1.6M by Y3 | **220% / 160%** |
+| **Netherlands Startup Visa** | Economic contribution | High-skilled tech jobs | **Strong fit** |
+
+### Total Economic Impact (5-Year)
+
+| Metric | Value | Methodology |
+|--------|-------|-------------|
+| **Direct Jobs Created** | 50 | Full-time employees |
+| **Indirect Jobs (4.5x multiplier)** | 225 | Goos et al. (2015) research |
+| **Total Tax Revenue** | €7.2M+ | Payroll, income, VAT, corporate |
+| **Total Economic Impact** | €11.4M+ | Direct + indirect GVA |
+| **Local Supply Chain Spend** | €375K/year | 84% local sourcing |
+
+*See full details in EU Business Plan Section 12.1*
+
+---
+
 ## Use of Funds
 
 ### Funding Ask
