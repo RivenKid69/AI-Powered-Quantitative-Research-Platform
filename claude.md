@@ -148,6 +148,58 @@
 | `strategies/*` | Стратегии | Все предыдущие | `strategies/base.py`, `strategies/momentum.py` |
 | `script_*` | CLI точки входа | Все | `script_backtest.py`, `script_live.py`, `script_eval.py` |
 
+### 🚀 Quick Start (5 минут до первого бэктеста)
+
+**Полное руководство**: [QUICK_START.md](QUICK_START.md)
+
+**CLI инструмент**: `python scripts/quickstart.py`
+
+```bash
+# Проверить готовность среды
+python scripts/quickstart.py check crypto_momentum
+
+# Список доступных пресетов
+python scripts/quickstart.py list
+
+# Информация о пресете
+python scripts/quickstart.py info equity_swing
+
+# Запустить бэктест
+python scripts/quickstart.py run crypto_momentum
+
+# Обучить модель
+python scripts/quickstart.py train forex_carry
+```
+
+### 📦 Reference Pipelines (Quick Start Configs)
+
+| Пресет | Asset Class | Стратегия | Конфиг | Сложность |
+|--------|-------------|-----------|--------|-----------|
+| `crypto_momentum` | Crypto Spot | Momentum (BTC, ETH) | [crypto_momentum.yaml](configs/quickstart/crypto_momentum.yaml) | ⭐⭐ Beginner |
+| `equity_swing` | US Equity | Mean-Reversion (SPY, AAPL) | [equity_swing.yaml](configs/quickstart/equity_swing.yaml) | ⭐⭐ Beginner |
+| `forex_carry` | Forex OTC | Carry + Momentum | [forex_carry.yaml](configs/quickstart/forex_carry.yaml) | ⭐⭐⭐ Intermediate |
+| `crypto_perp` | Crypto Futures | Funding Arbitrage | [crypto_perp.yaml](configs/quickstart/crypto_perp.yaml) | ⭐⭐⭐⭐ Advanced |
+| `cme_index` | CME Futures | Equity Index Momentum | [cme_index.yaml](configs/quickstart/cme_index.yaml) | ⭐⭐⭐⭐⭐ Expert |
+
+**Быстрый старт для каждого asset class**:
+
+```bash
+# 🪙 Crypto Spot (Binance) - Beginner friendly
+python scripts/quickstart.py run crypto_momentum
+
+# 📈 US Equity (Alpaca) - Commission-free
+python scripts/quickstart.py run equity_swing
+
+# 💱 Forex (OANDA) - 24/5 trading
+python scripts/quickstart.py run forex_carry
+
+# 🔮 Crypto Perpetuals (Binance USDT-M) - Advanced
+python scripts/quickstart.py run crypto_perp
+
+# 🏛️ CME Futures (Interactive Brokers) - Expert
+python scripts/quickstart.py run cme_index
+```
+
 ### 📁 Project Organization (Updated 2025-11-30)
 
 **ВАЖНО**: Проект реорганизован (commit db9655a). Файлы перемещены:
@@ -182,6 +234,12 @@ TradingBot2/
 ### ⚡ Критические команды
 
 ```bash
+# Quick Start (5 минут до первого бэктеста)
+python scripts/quickstart.py list                # Список пресетов
+python scripts/quickstart.py check crypto_momentum  # Проверка среды
+python scripts/quickstart.py run crypto_momentum    # Бэктест
+python scripts/quickstart.py train equity_swing     # Обучение
+
 # Тестирование
 pytest tests/                                    # Все тесты
 pytest tests/test_execution*.py -v               # Execution тесты
@@ -7266,6 +7324,16 @@ pytest tests/test_conformal_prediction.py -v
 | `config_eval.yaml` | Оценка модели |
 | `config_train_forex.yaml` | Обучение forex (OANDA) |
 | `config_backtest_forex.yaml` | Бэктест forex |
+
+### Quick Start конфиги (Reference Pipelines)
+
+| Файл | Asset Class | Описание |
+|------|-------------|----------|
+| `quickstart/crypto_momentum.yaml` | Crypto Spot | Momentum на BTC/ETH (Binance) |
+| `quickstart/equity_swing.yaml` | US Equity | Mean-reversion на SPY/AAPL (Alpaca) |
+| `quickstart/forex_carry.yaml` | Forex OTC | Carry + Momentum (OANDA) |
+| `quickstart/crypto_perp.yaml` | Crypto Futures | Funding Arbitrage (Binance USDT-M) |
+| `quickstart/cme_index.yaml` | CME Futures | Equity Index Momentum (IB) |
 
 ### Asset Class конфигурация
 

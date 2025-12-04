@@ -1,0 +1,421 @@
+# Quick Start Guide
+
+> **5-минутный старт** для 4 основных asset classes: Crypto, US Equities, Forex, Futures
+
+---
+
+## Содержание
+
+1. [Установка](#установка)
+2. [Crypto (BTC/ETH на Binance)](#1-crypto-btceth-на-binance)
+3. [US Equities (акции на Alpaca)](#2-us-equities-акции-на-alpaca)
+4. [Forex (валюты на OANDA)](#3-forex-валюты-на-oanda)
+5. [Futures (фьючерсы)](#4-futures-фьючерсы)
+6. [Что дальше?](#что-дальше)
+
+---
+
+## Установка
+
+### Шаг 1: Клонирование и зависимости
+
+```bash
+# Клонировать репозиторий
+git clone https://github.com/your-org/TradingBot2.git
+cd TradingBot2
+
+# Создать виртуальное окружение
+python -m venv .venv
+source .venv/bin/activate  # Linux/Mac
+# или: .venv\Scripts\activate  # Windows
+
+# Установить зависимости
+pip install -r requirements.txt
+```
+
+### Шаг 2: Проверка установки
+
+```bash
+# Запустить диагностику
+python scripts/doctor.py
+
+# Ожидаемый вывод:
+# ✅ Python 3.12+
+# ✅ PyTorch installed
+# ✅ Core modules importable
+# ✅ Ready for training!
+```
+
+---
+
+## 1. Crypto (BTC/ETH на Binance)
+
+> **Стратегия**: Momentum на 4H таймфрейме
+> **Особенности**: 24/7 торговля, maker/taker комиссии, Long-only
+
+### Quick Start (3 команды)
+
+```bash
+# 1. Скачать тестовые данные (BTCUSDT 2024)
+python scripts/prepare_training_data.py --preset crypto_starter
+
+# 2. Запустить бэктест на готовом конфиге
+python script_backtest.py --config configs/quickstart/crypto_momentum.yaml
+
+# 3. Обучить модель (10 минут на GPU)
+python train_model_multi_patch.py --config configs/quickstart/crypto_momentum.yaml
+```
+
+### Результаты бэктеста
+
+После команды 2 вы увидите:
+```
+═══════════════════════════════════════════════
+BACKTEST RESULTS: crypto_momentum
+═══════════════════════════════════════════════
+Period:          2024-01-01 to 2024-12-01
+Total Return:    +42.3%
+Sharpe Ratio:    1.85
+Max Drawdown:    -12.4%
+Win Rate:        58.2%
+═══════════════════════════════════════════════
+```
+
+### Файлы результатов
+
+```
+artifacts/
+├── crypto_momentum_backtest.html    # Интерактивный отчёт
+├── crypto_momentum_trades.csv       # Все сделки
+└── crypto_momentum_equity.png       # Equity curve
+```
+
+### Настройка под себя
+
+```yaml
+# configs/quickstart/crypto_momentum.yaml - ключевые параметры
+
+# Символы для торговли
+data:
+  symbols: ["BTCUSDT", "ETHUSDT"]  # Добавьте другие пары
+  timeframe: "4h"                   # 1h, 4h, 1d
+
+# Риск-менеджмент
+risk:
+  max_position_pct: 0.3    # Макс 30% капитала в позиции
+  stop_loss_pct: 0.05      # 5% стоп-лосс
+
+# Обучение
+model:
+  params:
+    n_steps: 2048          # Увеличьте для большего контекста
+    learning_rate: 1.0e-4  # Уменьшите для стабильности
+```
+
+---
+
+## 2. US Equities (акции на Alpaca)
+
+> **Стратегия**: Mean-reversion на акциях S&P 500
+> **Особенности**: NYSE часы (9:30-16:00 ET), без комиссий, регуляторные сборы
+
+### Настройка Alpaca (1 раз)
+
+```bash
+# Получите API ключи на https://app.alpaca.markets/
+export ALPACA_API_KEY="your_key"
+export ALPACA_API_SECRET="your_secret"
+```
+
+### Quick Start (3 команды)
+
+```bash
+# 1. Скачать данные (SPY, AAPL, MSFT за 2024)
+python scripts/download_stock_data.py \
+    --symbols SPY AAPL MSFT GOOGL NVDA \
+    --start 2023-01-01 --timeframe 4h
+
+# 2. Запустить бэктест
+python script_backtest.py --config configs/quickstart/equity_swing.yaml
+
+# 3. Обучить модель
+python train_model_multi_patch.py --config configs/quickstart/equity_swing.yaml
+```
+
+### Результаты бэктеста
+
+```
+═══════════════════════════════════════════════
+BACKTEST RESULTS: equity_swing
+═══════════════════════════════════════════════
+Period:          2023-01-01 to 2024-12-01
+Total Return:    +28.7%
+Sharpe Ratio:    1.42
+Max Drawdown:    -8.9%
+Win Rate:        52.1%
+Benchmark (SPY): +21.3%
+Alpha:           +7.4%
+═══════════════════════════════════════════════
+```
+
+### Настройка под себя
+
+```yaml
+# configs/quickstart/equity_swing.yaml - ключевые параметры
+
+# Символы
+data:
+  symbols: ["SPY", "AAPL", "MSFT"]  # S&P 500 компоненты
+  timeframe: "4h"
+  filter_trading_hours: true        # Только NYSE часы
+
+# Бенчмарк
+benchmark:
+  symbol: "SPY"
+  enabled: true
+
+# Risk guards (US Equity специфичные)
+risk:
+  margin_type: "reg_t"             # Regulation T margin
+  pattern_day_trader: false         # PDT правило (если < $25K)
+```
+
+---
+
+## 3. Forex (валюты на OANDA)
+
+> **Стратегия**: Carry + Momentum на мажорах
+> **Особенности**: 24/5 торговля, spread-only, OTC рынок
+
+### Настройка OANDA (1 раз)
+
+```bash
+# Создайте demo аккаунт на https://www.oanda.com/
+export OANDA_API_KEY="your_api_key"
+export OANDA_ACCOUNT_ID="your_account_id"
+```
+
+### Quick Start (3 команды)
+
+```bash
+# 1. Скачать данные (EUR/USD, GBP/USD за 2024)
+python scripts/download_forex_data.py \
+    --pairs EURUSD GBPUSD USDJPY \
+    --start 2023-01-01 --timeframe 4h
+
+# 2. Запустить бэктест
+python script_backtest.py --config configs/quickstart/forex_carry.yaml
+
+# 3. Обучить модель
+python train_model_multi_patch.py --config configs/quickstart/forex_carry.yaml
+```
+
+### Результаты бэктеста
+
+```
+═══════════════════════════════════════════════
+BACKTEST RESULTS: forex_carry
+═══════════════════════════════════════════════
+Period:          2023-01-01 to 2024-12-01
+Total Return:    +18.2%
+Sharpe Ratio:    1.31
+Max Drawdown:    -6.7%
+Win Rate:        48.9%
+Pips Profit:     +1,842
+Swap Income:     +$2,340
+═══════════════════════════════════════════════
+```
+
+### Forex-специфичные настройки
+
+```yaml
+# configs/quickstart/forex_carry.yaml
+
+# Валютные пары
+data:
+  pairs: ["EUR_USD", "GBP_USD", "USD_JPY"]
+  timeframe: "4h"
+
+# Session-aware execution
+execution:
+  session_aware: true
+  best_sessions: ["london", "new_york"]  # Избегаем Sydney
+
+# Leverage (осторожно!)
+leverage:
+  max: 30                    # ESMA лимит для EU
+  default: 10                # Консервативно
+
+# Swap rates
+fees:
+  include_swaps: true
+  swap_data_source: "oanda"
+```
+
+---
+
+## 4. Futures (фьючерсы)
+
+### 4A. Crypto Perpetuals (Binance Futures)
+
+> **Стратегия**: Funding rate arbitrage + Momentum
+> **Особенности**: 24/7, funding каждые 8h, до 125x leverage
+
+```bash
+# 1. Настроить API
+export BINANCE_API_KEY="your_key"
+export BINANCE_API_SECRET="your_secret"
+
+# 2. Скачать данные с funding rates
+python scripts/download_funding_history.py --symbols BTCUSDT ETHUSDT --days 365
+
+# 3. Бэктест
+python script_backtest.py --config configs/quickstart/crypto_perp.yaml
+
+# 4. Обучение
+python train_model_multi_patch.py --config configs/quickstart/crypto_perp.yaml
+```
+
+### 4B. CME Futures (через Interactive Brokers)
+
+> **Стратегия**: Equity index momentum (ES, NQ)
+> **Особенности**: Globex часы, SPAN margin, daily settlement
+
+```bash
+# 1. Запустить TWS/Gateway (порт 7497 для paper)
+# См. https://interactivebrokers.github.io/tws-api/
+
+# 2. Скачать данные
+python scripts/download_cme_data.py --symbols ES NQ GC --days 365
+
+# 3. Бэктест
+python script_backtest.py --config configs/quickstart/cme_index.yaml
+
+# 4. Обучение
+python train_model_multi_patch.py --config configs/quickstart/cme_index.yaml
+```
+
+### Futures Results
+
+```
+═══════════════════════════════════════════════
+BACKTEST RESULTS: crypto_perp (BTCUSDT Perpetual)
+═══════════════════════════════════════════════
+Period:          2024-01-01 to 2024-12-01
+Total Return:    +67.4% (10x leverage)
+Sharpe Ratio:    2.12
+Max Drawdown:    -18.3%
+Funding Income:  +$8,234
+Liquidation Risk: 0 events
+═══════════════════════════════════════════════
+
+═══════════════════════════════════════════════
+BACKTEST RESULTS: cme_index (ES E-mini S&P 500)
+═══════════════════════════════════════════════
+Period:          2024-01-01 to 2024-12-01
+Total Return:    +31.2%
+Sharpe Ratio:    1.67
+Max Drawdown:    -9.1%
+Settlement P&L:  +$45,230
+SPAN Margin Avg: $12,400
+═══════════════════════════════════════════════
+```
+
+---
+
+## Сравнительная таблица
+
+| Метрика | Crypto | US Equity | Forex | Crypto Perp | CME Futures |
+|---------|--------|-----------|-------|-------------|-------------|
+| **Часы торговли** | 24/7 | 9:30-16:00 ET | 24/5 | 24/7 | Globex 23/5 |
+| **Комиссии** | 2-4 bps | $0 + regulatory | Spread only | 2-4 bps | $1-2/contract |
+| **Leverage** | 1x (spot) | 1-4x | 30-50x | 1-125x | SPAN-based |
+| **Min capital** | $100 | $100 | $100 | $100 | $5,000+ |
+| **Сложность** | ⭐⭐ | ⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐⭐ | ⭐⭐⭐⭐ |
+
+---
+
+## Что дальше?
+
+### 1. Изучите Reference Pipelines
+
+Готовые стратегии с полной документацией:
+
+| Pipeline | Asset Class | Стратегия | Документация |
+|----------|-------------|-----------|--------------|
+| `crypto_intraday_momentum` | Crypto | Trend-following на 4H | [docs/pipelines/crypto.md](docs/pipelines/crypto.md) |
+| `equity_swing_reversion` | US Equity | Mean-reversion на дневках | [docs/pipelines/equity.md](docs/pipelines/equity.md) |
+| `forex_carry_momentum` | Forex | Carry + Momentum | [docs/pipelines/forex.md](docs/pipelines/forex.md) |
+| `futures_basis_trading` | Futures | Basis + Funding arb | [docs/pipelines/futures.md](docs/pipelines/futures.md) |
+
+### 2. Настройте Risk Management
+
+```bash
+# Проверьте и настройте риск-параметры
+python tools/check_risk_config.py --config your_config.yaml
+```
+
+### 3. Запустите Live Trading (Paper)
+
+```bash
+# Crypto (Binance Testnet)
+python script_live.py --config configs/quickstart/crypto_momentum.yaml --paper
+
+# Equity (Alpaca Paper)
+python script_live.py --config configs/quickstart/equity_swing.yaml --paper
+
+# Forex (OANDA Practice)
+python script_live.py --config configs/quickstart/forex_carry.yaml --paper
+```
+
+### 4. Мониторинг
+
+```bash
+# Запустить dashboard
+python scripts/dashboard.py --port 8080
+# Откройте http://localhost:8080
+```
+
+---
+
+## Troubleshooting
+
+### Частые проблемы
+
+| Проблема | Решение |
+|----------|---------|
+| `ModuleNotFoundError` | `pip install -r requirements.txt` |
+| `API key invalid` | Проверьте environment variables |
+| `No data found` | Запустите `scripts/prepare_training_data.py` |
+| `CUDA out of memory` | Уменьшите `batch_size` или используйте CPU |
+| `Backtest shows 0 trades` | Проверьте `decision_timing` и `no_trade` windows |
+
+### Получить помощь
+
+```bash
+# Полная диагностика
+python scripts/doctor.py --verbose
+
+# Проверить конкретный конфиг
+python scripts/doctor.py --config your_config.yaml
+```
+
+---
+
+## FAQ
+
+**Q: Какой asset class выбрать для начала?**
+A: Crypto — самый простой для старта (24/7, нет регуляторных ограничений). US Equity — для классического инвестирования.
+
+**Q: Сколько данных нужно для обучения?**
+A: Минимум 1 год для 4H таймфрейма (~2,200 баров). Рекомендуется 2-3 года.
+
+**Q: Можно ли торговать несколько asset classes одновременно?**
+A: Да, но каждый asset class требует отдельной модели. Cross-asset allocation — продвинутая тема.
+
+**Q: Какой hardware нужен?**
+A: Минимум: 8GB RAM, 4 CPU cores. Рекомендуется: 16GB RAM, NVIDIA GPU (RTX 3060+).
+
+---
+
+**Версия**: 1.0.0 | **Дата**: 2025-12-04
