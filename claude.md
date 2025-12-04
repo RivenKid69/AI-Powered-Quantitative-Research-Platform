@@ -130,8 +130,11 @@
 | **IB Options adapter** | `adapters/ib/options.py` | `pytest tests/test_options_adapters.py::TestIBOptionsAdapter` |
 | **IB Options rate limiter** | `adapters/ib/options_rate_limiter.py` | `pytest tests/test_options_adapters.py::TestIBOptionsRateLimiter` |
 | **IB Options combo orders** | `adapters/ib/options_combo.py` | `pytest tests/test_options_adapters.py::TestIBOptionsCombo` |
-| **Theta Data options** | `adapters/theta_data/options.py` | `pytest tests/test_options_adapters.py::TestThetaDataOptions` |
+| **Theta Data options** | `adapters/theta_data/options.py` | `pytest tests/test_deribit_options.py::TestThetaDataAdapter` |
 | **Polygon options** | `adapters/polygon/options.py` | `pytest tests/test_options_adapters.py::TestPolygonOptions` |
+| **Deribit options** | `adapters/deribit/options.py` | `pytest tests/test_deribit_options.py::TestDeribitMarketData` |
+| **Deribit inverse margin** | `adapters/deribit/margin.py` | `pytest tests/test_deribit_options.py::TestInverseMargin` |
+| **Deribit WebSocket** | `adapters/deribit/websocket.py` | `pytest tests/test_deribit_options.py::TestWebSocketClient` |
 | **Options registry** | `adapters/registry.py` | `pytest tests/test_options_adapters.py::TestOptionsRegistry` |
 | **OCC symbology** | `adapters/ib/options.py` | `pytest tests/test_options_adapters.py::TestOCCSymbology` |
 
@@ -5455,6 +5458,201 @@ pytest tests/test_options_adapters.py::TestEdgeCases -v
 
 ---
 
+## 📈 Options Integration (Phase 2B: Deribit Crypto Options - COMPLETED)
+
+**Статус**: ✅ Production Ready | **Тесты**: 118/118 (100% pass) | **Date**: 2025-12-03
+
+Phase 2B implements Deribit integration for BTC/ETH options with inverse settlement and DVOL integration.
+
+### Компоненты
+
+| Компонент | Файл | Описание |
+|-----------|------|----------|
+| **Deribit Market Data** | `adapters/deribit/options.py` | BTC/ETH option chains, quotes, Greeks |
+| **Deribit Order Execution** | `adapters/deribit/options.py` | Single-leg orders, combo orders |
+| **Inverse Margin Calculator** | `adapters/deribit/margin.py` | P&L in BTC/ETH (not USD) |
+| **WebSocket Streaming** | `adapters/deribit/websocket.py` | Real-time market data & order updates |
+| **Theta Data Adapter** | `adapters/theta_data/options.py` | Cost-effective US options data |
+
+### Key Features
+
+#### 1. Inverse Settlement
+
+Unlike traditional USD-settled options, Deribit options settle in BTC/ETH:
+
+```python
+from adapters.deribit import DeribitOptionsAdapter, DeribitInverseMarginCalculator
+from decimal import Decimal
+
+adapter = DeribitOptionsAdapter(
+    api_key="...",
+    api_secret="...",
+    testnet=True,
+)
+
+# P&L is in BTC, not USD
+margin_calc = DeribitInverseMarginCalculator()
+margin = margin_calc.calculate_margin(
+    position_qty=Decimal("10"),  # 10 BTC options
+    entry_price=Decimal("0.05"),  # 0.05 BTC premium
+    mark_price=Decimal("0.06"),   # Current mark
+    underlying_price=Decimal("45000"),  # BTC price in USD
+)
+# margin.pnl is in BTC
+print(f"P&L: {margin.pnl} BTC")
+```
+
+#### 2. DVOL Integration
+
+Deribit Volatility Index (DVOL) for IV surface calibration:
+
+```python
+# Get DVOL for BTC
+dvol = adapter.get_dvol("BTC")
+print(f"30-day IV: {dvol.volatility_30d:.2%}")
+print(f"IV term structure: {dvol.term_structure}")
+
+# Use DVOL for IV surface initialization
+from impl_ssvi import SSVICalibrator
+calibrator = SSVICalibrator(atm_vol=dvol.volatility_30d)
+```
+
+#### 3. WebSocket Streaming
+
+Real-time market data for BTC/ETH options:
+
+```python
+from adapters.deribit.websocket import DeribitWebSocketClient
+
+async def on_quote(data):
+    print(f"BTC option: bid={data['bid']}, ask={data['ask']}")
+
+client = DeribitWebSocketClient(
+    on_quote=on_quote,
+    testnet=True,
+)
+
+await client.connect()
+await client.subscribe_quotes(["BTC-27DEC24-50000-C"])
+```
+
+#### 4. European Exercise, 24/7 Trading
+
+```python
+# Deribit options characteristics
+chain = adapter.get_option_chain("BTC", expiry=date(2024, 12, 27))
+
+# All options are European style
+assert all(c.exercise_style == "european" for c in chain.contracts)
+
+# 24/7 trading (no US market hours restrictions)
+quote = adapter.get_option_quote("BTC-27DEC24-50000-C")
+# Available anytime, not just 9:30-16:00 ET
+```
+
+### Registry Integration
+
+```python
+from adapters.registry import create_options_market_data_adapter
+from adapters.models import ExchangeVendor, MarketType
+
+# Via registry
+adapter = create_options_market_data_adapter(
+    vendor="deribit",
+    config={
+        "api_key": "...",
+        "api_secret": "...",
+        "testnet": True,
+    }
+)
+
+# New enums
+ExchangeVendor.DERIBIT  # Deribit exchange
+MarketType.CRYPTO_OPTIONS  # Crypto options market type
+```
+
+### Theta Data Adapter
+
+Cost-effective US options data provider:
+
+```python
+from adapters.theta_data import ThetaDataOptionsAdapter
+
+adapter = ThetaDataOptionsAdapter(api_key="...")
+
+# Get full option chain
+chain = adapter.get_option_chain("AAPL", expiry=date(2024, 12, 20))
+
+# Historical data (2015+)
+quotes = adapter.get_historical_quotes(
+    occ_symbol="AAPL  241220C00200000",
+    start_date=date(2024, 1, 1),
+    end_date=date(2024, 12, 3),
+)
+
+# End-of-day pricing (much cheaper than real-time)
+eod_prices = adapter.get_eod_prices("AAPL", date(2024, 12, 3))
+```
+
+### Test Categories
+
+| Category | Tests | Coverage |
+|----------|-------|----------|
+| Deribit Market Data | 20 | Chain, quotes, DVOL, streaming |
+| Deribit Order Execution | 18 | Market/limit orders, margin queries |
+| Inverse Margin Calculator | 15 | BTC/ETH P&L, margin requirements |
+| WebSocket Client | 15 | Connection, subscriptions, reconnect |
+| Theta Data Adapter | 25 | Chain, historical, EOD, streaming |
+| Registry Integration | 12 | Factory functions, vendor enums |
+| Edge Cases | 8 | Network errors, invalid symbols |
+| Integration | 5 | End-to-end workflows |
+
+### Тестирование
+
+```bash
+# All Phase 2B tests (118 tests)
+pytest tests/test_deribit_options.py -v
+
+# By category
+pytest tests/test_deribit_options.py::TestDeribitMarketData -v
+pytest tests/test_deribit_options.py::TestDeribitExecution -v
+pytest tests/test_deribit_options.py::TestInverseMargin -v
+pytest tests/test_deribit_options.py::TestWebSocketClient -v
+pytest tests/test_deribit_options.py::TestThetaDataAdapter -v
+```
+
+### Ключевые файлы
+
+| Файл | Описание |
+|------|----------|
+| `adapters/deribit/options.py` | Deribit market data & execution (~1762 lines) |
+| `adapters/deribit/margin.py` | Inverse margin calculator (~783 lines) |
+| `adapters/deribit/websocket.py` | WebSocket client (~777 lines) |
+| `adapters/theta_data/options.py` | Theta Data adapter (~1063 lines) |
+| `tests/test_deribit_options.py` | 118 comprehensive tests |
+
+### Ключевые отличия: US Options vs Crypto Options
+
+| Аспект | US Options (IB, Polygon) | Crypto Options (Deribit) |
+|--------|--------------------------|--------------------------|
+| **Settlement** | USD cash-settled | BTC/ETH inverse settled |
+| **Exercise** | American (most), European (index) | European only |
+| **Trading Hours** | 9:30-16:00 ET (+ extended) | 24/7 |
+| **Expiration** | Monthly, weekly | Daily, weekly, monthly, quarterly |
+| **Margin** | CBOE/OCC STANS | Portfolio margin (inverse) |
+| **Volatility Index** | VIX (S&P 500) | DVOL (Deribit) |
+| **Data Cost** | $100-500/month (real-time) | Free (Deribit), $50/month (Theta EOD) |
+
+### Референсы
+
+- Deribit: "Options API Documentation"
+- Deribit: "DVOL Volatility Index Methodology"
+- Deribit: "Inverse Futures and Options Settlement"
+- Theta Data: "Options Data API Reference"
+- Theta Data: "Historical Options Pricing"
+
+---
+
 ## 🛡️ Критические правила (НЕ НАРУШАТЬ!)
 
 1. **ActionProto.volume_frac = TARGET position, НЕ DELTA!**
@@ -6711,11 +6909,11 @@ reward = float(np.clip(reward_before_clip, -clip_for_clamp, clip_for_clamp))
 
 ---
 
-## 📊 СТАТУС ПРОЕКТА (2025-11-30)
+## 📊 СТАТУС ПРОЕКТА (2025-12-03)
 
 ### ✅ Production Ready
 
-Все критические исправления применены и протестированы. **557 test files** с 97%+ pass rate.
+Все критические исправления применены и протестированы. **560+ test files** с 97%+ pass rate.
 
 | Компонент | Статус | Тесты |
 |-----------|--------|-------|
