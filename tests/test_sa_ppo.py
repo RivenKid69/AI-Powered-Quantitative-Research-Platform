@@ -64,10 +64,19 @@ class TestStateAdversarialPPO:
 
     @pytest.fixture
     def mock_model(self):
-        """Create a mock PPO model."""
+        """Create a mock PPO model.
+
+        The mock needs to have proper values for n_steps, total_timesteps etc.
+        because StateAdversarialPPO._compute_max_updates() uses these to
+        determine epsilon schedule parameters.
+        """
         model = MagicMock()
         policy = MagicMock()
         model.policy = policy
+        # Set proper integer values for schedule computation
+        model.n_steps = 2048
+        model.total_timesteps = 1_000_000
+        model.num_timesteps = 0
         return model
 
     @pytest.fixture
@@ -273,12 +282,17 @@ class TestStateAdversarialPPO:
         assert abs(epsilon - 0.05) < 1e-3
 
     def test_update_epsilon_schedule(self, sa_ppo):
-        """Test epsilon schedule update."""
+        """Test epsilon schedule update.
+
+        Note: max_updates is computed as total_timesteps // n_steps = 1_000_000 // 2048 = 488.
+        We set update_count=244 (half of 488) to get 50% progress.
+        """
         sa_ppo.config.adaptive_epsilon = True
         sa_ppo.config.epsilon_schedule = "linear"  # Use linear schedule
         sa_ppo.config.perturbation.epsilon = 0.1
         sa_ppo.config.epsilon_final = 0.05
-        sa_ppo._update_count = 500  # Halfway through (max_updates=1000)
+        # max_updates = 1_000_000 // 2048 = 488, so 50% = 244
+        sa_ppo._update_count = 244
 
         initial_epsilon = sa_ppo.config.perturbation.epsilon
         sa_ppo._update_epsilon_schedule()

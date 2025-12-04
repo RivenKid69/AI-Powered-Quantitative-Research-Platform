@@ -40,7 +40,7 @@ def test_maxlen_fix():
 
     print(f"\n✅ Final bar (bar 6):")
     print(f"   taker_buy_ratio: {final_ratio:.3f}")
-    print(f"   taker_buy_ratio_momentum_24h: {final_momentum:.6f if str(final_momentum) != 'nan' else 'NaN'}")
+    print(f"   taker_buy_ratio_momentum_24h: {'NaN' if str(final_momentum) == 'nan' else f'{final_momentum:.6f}'}")
 
     # Should NOT be NaN on bar 6 (have 7 bars total, enough for window=6)
     if str(final_momentum) == "nan":

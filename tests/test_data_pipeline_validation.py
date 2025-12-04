@@ -247,10 +247,27 @@ class TestP1_FeatureGeneration:
         assert calculate_parkinson_volatility(bars, 10) is None
 
     def test_calculate_garch_volatility_insufficient_data(self):
-        """Проверка: GARCH возвращает None при недостаточных данных."""
+        """Проверка: GARCH использует fallback стратегию при недостаточных данных.
+
+        calculate_garch_volatility имеет cascading fallback:
+        1. GARCH(1,1) - если n >= 50 и данных >= 50
+        2. EWMA - если данных 2-49
+        3. Historical Volatility - финальный fallback
+        4. None - ТОЛЬКО если данных < 2
+
+        При 10 наблюдениях функция использует EWMA fallback, а не возвращает None.
+        """
         prices = [29000.0 + i * 10 for i in range(10)]
-        # Требуется минимум 50 наблюдений
-        assert calculate_garch_volatility(prices, 50) is None
+        # С 10 точками GARCH использует fallback (EWMA или Historical Vol)
+        result = calculate_garch_volatility(prices, 50)
+        assert result is not None, "С 10 точками данных должен использоваться fallback"
+        assert isinstance(result, float), "Результат должен быть числом"
+        assert result > 0, "Волатильность должна быть положительной"
+        assert np.isfinite(result), "Волатильность должна быть конечным числом"
+
+        # None возвращается ТОЛЬКО при < 2 точек данных
+        assert calculate_garch_volatility([29000.0], 50) is None, "С 1 точкой должен вернуть None"
+        assert calculate_garch_volatility([], 50) is None, "С пустым списком должен вернуть None"
 
 
 # ============================================================================

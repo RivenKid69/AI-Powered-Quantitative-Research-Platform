@@ -155,28 +155,42 @@ class TestDataValidatorOHLCInvariants:
 
     def test_high_less_than_open(self, validator, valid_df):
         """Test detection of high < open."""
-        valid_df.loc[1, 'high'] = 49000.0  # Lower than open
+        # Set high between low and open so it only violates high >= open, not high >= low
+        # open[1]=50100, low[1]=50000, close[1]=50200
+        # Set high to 50050 which is > low but < open
+        valid_df.loc[1, 'high'] = 50050.0  # Greater than low[1]=50000, but less than open[1]=50100
 
         with pytest.raises(ValueError, match="high >= open"):
             validator._check_ohlc_invariants(valid_df)
 
     def test_high_less_than_close(self, validator, valid_df):
         """Test detection of high < close."""
-        valid_df.loc[2, 'high'] = 49000.0  # Lower than close
+        # For row 2: open=50200, close=50300, low=50100
+        # Set high between max(open, low) and close so only high >= close fails
+        # high must be >= low (50100) and >= open (50200) but < close (50300)
+        valid_df.loc[2, 'high'] = 50250.0  # > low and > open, but < close
 
         with pytest.raises(ValueError, match="high >= close"):
             validator._check_ohlc_invariants(valid_df)
 
     def test_low_greater_than_open(self, validator, valid_df):
         """Test detection of low > open."""
-        valid_df.loc[0, 'low'] = 51000.0  # Higher than open
+        # For row 0: open=50000, high=50200, low=49900, close=50100
+        # Set low between open and high so only low <= open fails
+        # low must be <= high (50200) and <= close (50100) but > open (50000)
+        valid_df.loc[0, 'low'] = 50050.0  # > open, but < high and < close
 
         with pytest.raises(ValueError, match="low <= open"):
             validator._check_ohlc_invariants(valid_df)
 
     def test_low_greater_than_close(self, validator, valid_df):
         """Test detection of low > close."""
-        valid_df.loc[1, 'low'] = 51000.0  # Higher than close
+        # For row 1: open=50100, high=50300, low=50000, close=50200
+        # To test "low <= close" specifically, we need low > close but low <= open
+        # Since close > open in the fixture, we must create a down-bar first
+        # Set close to be < open, then set low between close and open
+        valid_df.loc[1, 'close'] = 50050.0  # Now: open=50100, close=50050 (down-bar)
+        valid_df.loc[1, 'low'] = 50075.0   # > close (50050), < open (50100), < high (50300)
 
         with pytest.raises(ValueError, match="low <= close"):
             validator._check_ohlc_invariants(valid_df)
@@ -391,7 +405,7 @@ class TestDataValidatorIntegration:
             'number_of_trades': np.random.randint(500, 2000, 100),
             'taker_buy_base_asset_volume': np.random.uniform(50, 500, 100),
             'taker_buy_quote_asset_volume': np.random.uniform(2500000, 25000000, 100),
-        }).set_index('timestamp')
+        }).set_index('timestamp', drop=False)  # Keep timestamp as column for schema check
 
         # Fix OHLC invariants
         df['high'] = df[['open', 'high', 'close']].max(axis=1)
@@ -414,7 +428,7 @@ class TestDataValidatorIntegration:
             'number_of_trades': [1000] * 10,
             'taker_buy_base_asset_volume': [50.0] * 10,
             'taker_buy_quote_asset_volume': [2500000.0] * 10,
-        }).set_index('timestamp')
+        }).set_index('timestamp', drop=False)  # Keep timestamp as column for schema check
 
         # Should fail at null check, not positive check
         with pytest.raises(ValueError, match="NaN"):
@@ -453,7 +467,7 @@ class TestEdgeCases:
             'number_of_trades': [1000],
             'taker_buy_base_asset_volume': [50.0],
             'taker_buy_quote_asset_volume': [2500000.0],
-        }).set_index('timestamp')
+        }).set_index('timestamp', drop=False)  # Keep timestamp as column for schema check
 
         validator.validate(df)
 
@@ -472,7 +486,7 @@ class TestEdgeCases:
             'number_of_trades': [1000] * n,
             'taker_buy_base_asset_volume': [50.0] * n,
             'taker_buy_quote_asset_volume': [2500000.0] * n,
-        }).set_index('timestamp')
+        }).set_index('timestamp', drop=False)  # Keep timestamp as column for schema check
 
         validator.validate(df, frequency='1min')
 

@@ -601,7 +601,17 @@ class TestIndependence:
     """Test independence: each critic clipped relative to its OWN old values."""
 
     def test_critics_clipped_independently(self, simple_env, quantile_policy_config):
-        """Test that each critic is clipped relative to its OWN old values, not shared."""
+        """Test that each critic is clipped relative to its OWN old values, not shared.
+
+        Note (2025-12-04): Original test used symmetric old_quantiles (c1 centered at -4,
+        c2 centered at +4) with target=0. This led to equal losses due to quantile Huber
+        loss symmetry when averaged over uniformly distributed quantile levels.
+
+        Fixed by using ASYMMETRIC old_quantiles that don't produce symmetric errors:
+        - c1: centered at -4 (far from target 0)
+        - c2: centered at +1 (closer to target 0)
+        This ensures genuinely different clipped losses proving independent clipping.
+        """
         model = DistributionalPPO(
             CustomActorCriticPolicy,
             simple_env,
@@ -620,9 +630,11 @@ class TestIndependence:
         latent_vf = torch.randn(batch_size, latent_dim, device=device)
         targets = torch.zeros(batch_size, 1, device=device)
 
-        # Create VERY DIFFERENT old quantiles for c1 and c2
+        # Create ASYMMETRIC old quantiles for c1 and c2 to avoid symmetric loss cancellation
+        # c1: far from target (centered at -4)
+        # c2: closer to target (centered at +1)
         old_quantiles_c1 = torch.linspace(-5.0, -3.0, num_quantiles, device=device).unsqueeze(0).expand(batch_size, -1)
-        old_quantiles_c2 = torch.linspace(3.0, 5.0, num_quantiles, device=device).unsqueeze(0).expand(batch_size, -1)
+        old_quantiles_c2 = torch.linspace(0.0, 2.0, num_quantiles, device=device).unsqueeze(0).expand(batch_size, -1)
 
         clip_delta = 0.5
 
@@ -637,9 +649,13 @@ class TestIndependence:
             mode="per_quantile",
         )
 
-        # Verify losses are different (because old values are very different)
-        # If using shared old values, losses would be more similar
-        assert loss_c1 != loss_c2  # Should be different due to different old quantiles
+        # Verify losses are different (because old values are asymmetrically different)
+        # c1's clipped values will be far from target → high loss
+        # c2's clipped values will be closer to target → lower loss
+        assert loss_c1 != loss_c2, (
+            f"Expected different losses for critics with asymmetric old values, "
+            f"got loss_c1={loss_c1}, loss_c2={loss_c2}"
+        )
 
 
 class TestEdgeCases:

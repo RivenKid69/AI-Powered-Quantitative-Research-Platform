@@ -12,7 +12,7 @@ def test_code_review_vf_clipping():
     """
     Review the actual distributional_ppo.py code to verify the fix.
     """
-    with open("distributional_ppo.py", "r") as f:
+    with open("distributional_ppo.py", "r", encoding="utf-8") as f:
         code = f.read()
 
     print("🔍 Reviewing VF clipping implementation...\n")
@@ -127,7 +127,7 @@ def test_trace_vf_clipping_flow():
     """
     print("\n🔍 Tracing VF clipping flow...\n")
 
-    with open("distributional_ppo.py", "r") as f:
+    with open("distributional_ppo.py", "r", encoding="utf-8") as f:
         lines = f.readlines()
 
     # Find key sections

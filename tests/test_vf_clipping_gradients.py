@@ -122,8 +122,16 @@ def test_vf_clipping_gradients_basic():
         within_trust = abs(new_val - old_val) <= clip_d
         gradient_nonzero = abs(new_value.grad.item()) > 1e-6
 
-        # Verify correctness: gradient should be nonzero iff within trust region
-        correct = (gradient_nonzero == within_trust)
+        # PPO VF clipping blocks gradient when:
+        # 1. Value is outside trust region AND
+        # 2. loss_clipped > loss_unclipped (happens when moving toward target fast)
+        # When moving AWAY from target, loss_unclipped > loss_clipped, so gradient flows
+        # This is CORRECT - we want to allow correction of worsening values!
+        loss_clipped_higher = loss_clipped.item() >= loss_unclipped.item() - 1e-6
+        should_be_blocked = (not within_trust) and loss_clipped_higher
+
+        # Verify correctness based on actual PPO VF clipping semantics
+        correct = (gradient_nonzero != should_be_blocked)
 
         print(f"\n{i}. {desc}")
         print(f"   old={old_val:.2f}, new={new_val:.2f}, target={target_val:.2f}")

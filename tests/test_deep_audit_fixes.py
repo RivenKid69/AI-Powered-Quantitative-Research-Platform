@@ -29,7 +29,7 @@ def test_feature_name_consistency():
         print(f"  {i+1}. {name} (окно={window} минут = {window/1440:.2f} дней)")
 
     # Читаем mediator.py и проверяем какие имена используются
-    with open("mediator.py", "r") as f:
+    with open("mediator.py", "r", encoding="utf-8") as f:
         mediator_content = f.read()
 
     expected_names = ["garch_200h", "garch_14d", "garch_30d"]  # 50 баров = 12000 мин = 200h, минимум для GARCH на 4h
@@ -140,7 +140,7 @@ def test_mediator_norm_cols_indices():
     print("=" * 80)
 
     # Читаем код mediator.py
-    with open("mediator.py", "r") as f:
+    with open("mediator.py", "r", encoding="utf-8") as f:
         content = f.read()
 
     # Ожидаемые признаки для каждого индекса
@@ -197,7 +197,7 @@ def test_comment_accuracy():
     print("ТЕСТ 4: Проверка точности комментариев")
     print("=" * 80)
 
-    with open("transformers.py", "r") as f:
+    with open("transformers.py", "r", encoding="utf-8") as f:
         content = f.read()
 
     # Проверяем что старый неточный комментарий исправлен

@@ -316,16 +316,27 @@ def test_both_fixes_are_present():
 def test_documentation_exists():
     """
     Verify that documentation for fixes exists.
+
+    Note: Documentation files have been moved to archive as part of project
+    reorganization (2025-11-25). Test updated to check correct archive paths.
     """
     import os
 
-    # Check for analysis report
-    analysis_exists = os.path.exists("CRITICAL_BUGS_ANALYSIS_2025_11_23.md")
-    assert analysis_exists, "Analysis report not found!"
+    # Check for analysis report (moved to archive 2025-11-25)
+    analysis_paths = [
+        "CRITICAL_BUGS_ANALYSIS_2025_11_23.md",  # Original location
+        "docs/archive/verification_2025_11/bug_analysis/CRITICAL_BUGS_ANALYSIS_2025_11_23.md",  # Archive
+    ]
+    analysis_exists = any(os.path.exists(p) for p in analysis_paths)
+    assert analysis_exists, f"Analysis report not found in any of: {analysis_paths}"
 
-    # Check for implementation report
-    impl_exists = os.path.exists("CRITICAL_BUGS_FIX_IMPLEMENTATION_REPORT_2025_11_23.md")
-    assert impl_exists, "Implementation report not found!"
+    # Check for implementation report (moved to archive 2025-11-25)
+    impl_paths = [
+        "CRITICAL_BUGS_FIX_IMPLEMENTATION_REPORT_2025_11_23.md",  # Original location
+        "docs/archive/verification_2025_11/implementation/CRITICAL_BUGS_FIX_IMPLEMENTATION_REPORT_2025_11_23.md",  # Archive
+    ]
+    impl_exists = any(os.path.exists(p) for p in impl_paths)
+    assert impl_exists, f"Implementation report not found in any of: {impl_paths}"
 
     print("[OK] Documentation exists for all fixes!")
 

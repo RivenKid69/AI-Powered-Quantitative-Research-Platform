@@ -25,30 +25,43 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 class TestCodeInspection:
     """Verify that critical fixes are present in actual source code."""
 
-    def test_yang_zhang_bessel_correction_in_code(self):
+    def test_yang_zhang_rogers_satchell_denominator(self):
         """
-        CRITICAL FIX #2: Verify Bessel's correction is in transformers.py.
+        Verify Rogers-Satchell component uses correct denominator in transformers.py.
 
-        Read actual source and check for (rs_count - 1) instead of rs_count.
+        UPDATED 2025-12-04: The original "CRITICAL FIX #2" applied Bessel's correction
+        to Rogers-Satchell, but this was INCORRECT. RS is an uncentered average of
+        products, NOT a centered sample variance, so it should use n (not n-1).
+
+        FIX (2025-11-26): Rogers-Satchell now correctly uses n per Yang-Zhang (2000).
+
+        Key insight:
+        - σ_o and σ_c are CENTERED estimators (subtract mean) → use (n-1)
+        - σ_rs is an UNCENTERED sum → uses n, not (n-1)
+
+        References:
+        - Yang, D. & Zhang, Q. (2000) "Drift-Independent Volatility Estimation"
+        - Rogers, L.C.G. & Satchell, S.E. (1991) "Estimating Variance from HLOC"
         """
         with open("transformers.py", "r", encoding="utf-8") as f:
             source = f.read()
 
-        # Should have the fix comment
-        assert "CRITICAL FIX #2" in source, "Missing CRITICAL FIX #2 comment"
-        assert "Bessel's correction to Rogers-Satchell" in source, "Missing Bessel's description"
+        # Should have the fix comment (2025-11-26 version)
+        assert "FIX (2025-11-26)" in source, "Missing FIX (2025-11-26) comment"
+        assert "Rogers-Satchell uses n, NOT (n-1)" in source, "Missing RS formula clarification"
 
-        # Should check rs_count < 2
-        assert "if rs_count < 2:" in source, "Missing rs_count < 2 check"
+        # Should explain why RS uses n instead of (n-1)
+        assert "UNCENTERED" in source or "uncentered" in source, \
+            "Missing explanation that RS is uncentered"
 
-        # Should use (rs_count - 1) for division
-        assert "rs_sum / (rs_count - 1)" in source, "Missing Bessel's correction (rs_count - 1)"
+        # Should use rs_sum / rs_count (CORRECT formula)
+        assert "rs_sum / rs_count" in source, "Missing correct RS formula: rs_sum / rs_count"
 
-        # Should NOT use rs_sum / rs_count (old bug)
-        # Count occurrences - should only be in old code comments
-        lines = source.split('\n')
-        bug_pattern_count = sum(1 for line in lines if "rs_sum / rs_count" in line and "//" not in line and "#" not in line)
-        assert bug_pattern_count == 0, f"Found {bug_pattern_count} instances of old buggy pattern 'rs_sum / rs_count'"
+        # Overnight and open-close should still use (n-1) - these ARE centered
+        assert "(len(overnight_returns) - 1)" in source, \
+            "Overnight component should use Bessel's correction (centered)"
+        assert "(len(oc_returns) - 1)" in source, \
+            "Open-close component should use Bessel's correction (centered)"
 
     def test_ewma_robust_initialization_in_code(self):
         """
@@ -90,11 +103,12 @@ class TestCodeInspection:
         make_targets_start = source.find("def make_targets(self, df:")
         assert make_targets_start != -1, "Cannot find make_targets method"
 
-        # Extract make_targets method (rough approximation)
-        make_targets_section = source[make_targets_start:make_targets_start + 2000]
+        # Extract make_targets method (larger section to capture np.log line)
+        make_targets_section = source[make_targets_start:make_targets_start + 4000]
 
-        # Should use np.log for targets
-        assert "np.log(future_price" in make_targets_section, "Missing np.log() for targets"
+        # Should use np.log for targets (can be np.log(future_price.div or np.log(future_price/
+        assert "np.log(future_price" in make_targets_section or "np.log( future_price" in make_targets_section, \
+            "Missing np.log() for targets"
 
         # Should NOT use old linear formula (future_price / price - 1.0)
         # Check that old pattern is only in comments
@@ -213,7 +227,7 @@ class TestFeaturePipeIntegration:
 
 class TestYangZhangIntegration:
     """
-    Integration test for Yang-Zhang Bessel's correction.
+    Integration test for Yang-Zhang volatility estimator.
 
     Note: Cannot import calculate_yang_zhang_volatility directly due to arch dependency.
     Instead, verify code inspection and behavior through indirect means.
@@ -223,8 +237,15 @@ class TestYangZhangIntegration:
         """
         Verify Yang-Zhang function has correct structure in source.
 
-        Checks that all three components use consistent (n-1) denominator.
+        UPDATED 2025-12-04: The three components use DIFFERENT denominators:
+        - σ_o (overnight) and σ_c (open-close) are CENTERED → use (n-1) Bessel's correction
+        - σ_rs (Rogers-Satchell) is UNCENTERED → uses n (not n-1)
+
         The fix is in _try_calculate_yang_zhang (internal function).
+
+        References:
+        - Yang, D. & Zhang, Q. (2000) "Drift-Independent Volatility Estimation"
+        - Rogers, L.C.G. & Satchell, S.E. (1991) "Estimating Variance from HLOC"
         """
         with open("transformers.py", "r", encoding="utf-8") as f:
             lines = f.readlines()
@@ -242,21 +263,22 @@ class TestYangZhangIntegration:
         function_lines = lines[yang_zhang_start:yang_zhang_start + 100]
         function_text = ''.join(function_lines)
 
-        # Check all three components
-        # 1. Overnight: should use (len - 1)
+        # Check all three components with CORRECT denominators
+        # 1. Overnight: should use (len - 1) - this IS a centered estimator
         assert "(len(overnight_returns) - 1)" in function_text, \
             "Overnight component missing Bessel's correction"
 
-        # 2. Open-close: should use (len - 1)
+        # 2. Open-close: should use (len - 1) - this IS a centered estimator
         assert "(len(oc_returns) - 1)" in function_text, \
             "Open-close component missing Bessel's correction"
 
-        # 3. Rogers-Satchell: should use (rs_count - 1) WITH the fix
-        assert "(rs_count - 1)" in function_text, \
-            "Rogers-Satchell component missing Bessel's correction (CRITICAL FIX #2)"
+        # 3. Rogers-Satchell: should use rs_count (NOT rs_count - 1)
+        # RS is UNCENTERED, so no Bessel's correction per original formula
+        assert "rs_sum / rs_count" in function_text, \
+            "Rogers-Satchell should use n (not n-1) - it's an uncentered estimator"
 
-        # Check for rs_count < 2 guard
-        assert "rs_count < 2" in function_text, \
+        # Check for rs_count == 0 guard (even 1 sample is valid for RS since no Bessel's correction)
+        assert "rs_count == 0" in function_text, \
             "Missing minimum sample size check for rs_count"
 
 
