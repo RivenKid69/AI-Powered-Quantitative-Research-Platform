@@ -75,10 +75,34 @@ import gymnasium as gym
 import numpy as np
 import torch
 import torch.nn.functional as F
-from sb3_contrib import RecurrentPPO
-from sb3_contrib.common.recurrent.policies import RecurrentActorCriticPolicy
-from sb3_contrib.common.recurrent.buffers import RecurrentRolloutBuffer
-from sb3_contrib.common.recurrent.type_aliases import RNNStates
+
+# RecurrentPPO import shim: prefer sb3_contrib, fallback to stable_baselines3 if contrib
+# build lacks the attribute. This keeps tests working even when optional deps differ.
+try:
+    from sb3_contrib import RecurrentPPO
+    from sb3_contrib.common.recurrent.policies import RecurrentActorCriticPolicy
+    from sb3_contrib.common.recurrent.buffers import RecurrentRolloutBuffer
+    from sb3_contrib.common.recurrent.type_aliases import RNNStates
+    _RECURRENT_BACKEND = "sb3_contrib"
+except ImportError:
+    warnings.warn(
+        "sb3_contrib.RecurrentPPO not available, falling back to stable_baselines3.",
+        ImportWarning,
+        stacklevel=2,
+    )
+    try:
+        from stable_baselines3 import RecurrentPPO  # type: ignore
+        from stable_baselines3.common.policies import RecurrentActorCriticPolicy  # type: ignore
+        from stable_baselines3.common.buffers import RecurrentRolloutBuffer  # type: ignore
+        from stable_baselines3.common.type_aliases import RNNStates  # type: ignore
+        _RECURRENT_BACKEND = "stable_baselines3"
+    except Exception as exc:  # pragma: no cover - hard failure path
+        raise ImportError(
+            "RecurrentPPO is unavailable. Install sb3-contrib>=2.2.0 or "
+            "stable-baselines3>=2.2. "
+            "This module requires a recurrent PPO backend."
+        ) from exc
+
 from stable_baselines3.common.callbacks import BaseCallback, CallbackList, EvalCallback
 from stable_baselines3.common.vec_env import VecEnv
 from stable_baselines3.common.vec_env.vec_normalize import VecNormalize

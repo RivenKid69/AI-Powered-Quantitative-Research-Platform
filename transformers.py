@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import math
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 import warnings
 
@@ -607,7 +607,13 @@ class FeatureSpec:
       - Исходные значения в минутах сохраняются в _*_minutes полях для именования признаков
     """
 
-    lookbacks_prices: List[int]
+    lookbacks_prices: List[int] = field(default_factory=list)
+    sma_windows: Optional[List[int]] = None  # legacy alias for lookbacks_prices (minutes)
+    ret_windows: Optional[List[int]] = None  # legacy alias for return windows (minutes)
+    bid_ask_spread_windows: Optional[List[int]] = None  # compatibility placeholder
+    volume_windows: Optional[List[int]] = None  # compatibility placeholder
+    vwap_windows: Optional[List[int]] = None  # compatibility placeholder
+    intrabar_range_windows: Optional[List[int]] = None  # compatibility placeholder
     rsi_period: int = 14
     yang_zhang_windows: Optional[List[int]] = None
     parkinson_windows: Optional[List[int]] = None
@@ -626,31 +632,44 @@ class FeatureSpec:
     _taker_buy_ratio_momentum_minutes: Optional[List[int]] = None
     _cvd_windows_minutes: Optional[List[int]] = None
 
+    
+    
     def __post_init__(self) -> None:
-        if (
-            not isinstance(self.lookbacks_prices, list)
-            or len(self.lookbacks_prices) == 0
-        ):
-            # Для 4h интервала: окна для SMA и returns (ПОЛНЫЙ НАБОР)
-            # 1 бар 4h = 240 минут
-            # 4h = 1 бар = 240 минут (ret_4h, sma_240)
-            # 12h = 3 бара = 720 минут (ret_12h, sma_720)
-            # 20h = 5 баров = 1200 минут (ret_20h, sma_1200) - SMA краткосрочный
-            # 24h = 6 баров = 1440 минут (ret_24h, sma_1440)
-            # 3.5d = 21 бар = 5040 минут (ret_3.5d, sma_5040) - SMA среднесрочный
-            # 7d = 42 бара = 10080 минут (ret_7d, sma_10080) - returns долгосрочный
-            # 200h = 50 баров = 12000 минут (ret_200h, sma_12000) - SMA долгосрочный
+        legacy_lookbacks: list[int] = []
+        if self.sma_windows is not None:
+            legacy_lookbacks.extend(
+                [int(abs(x)) for x in self.sma_windows if int(abs(x)) > 0]
+            )
+        if self.ret_windows is not None:
+            legacy_lookbacks.extend(
+                [int(abs(x)) for x in self.ret_windows if int(abs(x)) > 0]
+            )
+
+        user_supplied_any = (
+            bool(self.lookbacks_prices)
+            or self.sma_windows is not None
+            or self.ret_windows is not None
+        )
+
+        if not isinstance(self.lookbacks_prices, list):
+            self.lookbacks_prices = []
+
+        if not self.lookbacks_prices and legacy_lookbacks:
+            # Legacy API: map sma_windows/ret_windows -> lookbacks_prices (minutes)
+            self.lookbacks_prices = legacy_lookbacks
+
+        if not self.lookbacks_prices and not user_supplied_any:
+            # Default 4h windows for SMA/returns when nothing provided (minutes)
             self.lookbacks_prices = [240, 720, 1200, 1440, 5040, 10080, 12000]
+
         self.lookbacks_prices = [
             int(abs(x)) for x in self.lookbacks_prices if int(abs(x)) > 0
         ]
 
-        # CRITICAL FIX #1: Сохраняем исходные значения в минутах для именования признаков
+        # Preserve original minute windows for naming
         self._lookbacks_prices_minutes = list(self.lookbacks_prices)
 
-        # CRITICAL FIX #1 (ENHANCED): Конвертируем окна из минут в бары с валидацией
-        # Проверяем кратность окон bar_duration_minutes для предотвращения несоответствия
-        # Для 4h интервала (bar_duration_minutes=240): 240 минут = 1 бар
+        # Convert minute windows to bars with validation
         self.lookbacks_prices = [
             _convert_minutes_to_bars_with_validation(
                 w, self.bar_duration_minutes, "lookbacks_prices"
@@ -660,7 +679,7 @@ class FeatureSpec:
 
         self.rsi_period = int(self.rsi_period)
 
-        # Инициализация окон Yang-Zhang для 4h интервала: 48ч, 7д, 30д в минутах
+        # Yang-Zhang для 4h интервала: 48ч, 7д, 30д в минутах
         # 48h = 12 баров = 2880 минут
         # 7d = 42 бара = 10080 минут
         # 30d = 180 баров = 43200 минут

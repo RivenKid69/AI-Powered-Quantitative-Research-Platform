@@ -266,8 +266,6 @@ class TestMA20Audit(unittest.TestCase):
         )
         transform = OnlineFeatureTransform(spec)
 
-        # Создаем ступенчатое изменение цены: 100 -> 200
-        # Первые 30 баров = 100.0, затем 30 баров = 200.0
         for i in range(60):
             price = 100.0 if i < 30 else 200.0
             feats = transform.update(
@@ -276,31 +274,39 @@ class TestMA20Audit(unittest.TestCase):
                 close=price
             )
 
-            # На баре 30 (первый бар со 200.0): SMA начнет расти
+            # Bar 30: SMA starts moving but still lags far behind the jump
             if i == 30:
                 # SMA_21 = (20*100.0 + 1*200.0) / 21 ≈ 104.76
                 self.assertLess(
                     feats["sma_5040"],
                     150.0,
-                    msg="SMA_21 должен отставать от резкого изменения"
+                    msg="SMA_21 should lag behind the sharp move at bar 30"
                 )
 
-            # На баре 50 (20 баров после изменения): SMA почти догонит
-            elif i == 50:
+            # Bar 49: one old price remains in the window -> lag persists
+            elif i == 49:
                 # SMA_21 = (1*100.0 + 20*200.0) / 21 ≈ 195.24
                 self.assertGreater(
                     feats["sma_5040"],
                     180.0,
-                    msg="SMA_21 должен почти догнать через 20 баров"
+                    msg="SMA_21 should have mostly caught up after 20 bars"
                 )
                 self.assertLess(
                     feats["sma_5040"],
                     200.0,
-                    msg="SMA_21 еще не должен достичь новой цены"
+                    msg="SMA_21 should retain some lag with one old value remaining"
                 )
 
-        print("✅ Lag свойство SMA_21 работает как ожидается (~10 баров)")
+            # Bar 50: window fully refreshed with new level -> SMA reaches 200
+            elif i == 50:
+                self.assertAlmostEqual(
+                    feats["sma_5040"],
+                    200.0,
+                    places=6,
+                    msg="SMA_21 should reach the new price once the full window is updated"
+                )
 
+        print("Lag property for SMA_21 behaves as expected (~10 bars)")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -259,6 +259,7 @@ class ServiceTrain:
         # Логирование информации о признаках перед обучением
         self._log_feature_statistics(X)
 
+        
         # FIX (2025-11-21): Filter rows with NaN in features
         # Neural networks cannot handle NaN inputs and will crash or produce NaN gradients
         # We apply conservative row-wise filtering: remove ANY row with NaN in features
@@ -271,69 +272,63 @@ class ServiceTrain:
 
         # Check if X has ANY NaN values
         if X.isna().any().any():
-            # Identify columns with NaN
+            # Drop columns that are entirely NaN (optional indicators that never materialized)
+            all_nan_columns = [col for col in X.columns if X[col].isna().all()]
+            if all_nan_columns:
+                logger.warning(
+                    "Dropping %d all-NaN feature column(s): %s",
+                    len(all_nan_columns),
+                    all_nan_columns,
+                )
+                X = X.drop(columns=all_nan_columns)
+
+            # Identify columns/rows with remaining NaN
             nan_columns = X.columns[X.isna().any()].tolist()
             nan_counts_per_col = X[nan_columns].isna().sum().to_dict()
-
-            # Count rows with ANY NaN
             rows_with_nan_mask = X.isna().any(axis=1)
-            n_rows_with_nan = rows_with_nan_mask.sum()
+            n_rows_with_nan = int(rows_with_nan_mask.sum())
 
             logger.warning(
                 f"Found NaN values in {len(nan_columns)} feature column(s): {nan_columns}"
             )
-            logger.warning(
-                f"NaN counts per column: {nan_counts_per_col}"
-            )
-            logger.warning(
-                f"Removing {n_rows_with_nan} rows with NaN in features "
-                f"({n_rows_with_nan / n_before_nan_filter * 100:.2f}% of total). "
-                f"Neural networks cannot handle NaN inputs."
-            )
+            logger.warning(f"NaN counts per column: {nan_counts_per_col}")
 
-            # Filter rows with NaN
-            valid_rows_mask = ~rows_with_nan_mask
-            X = X[valid_rows_mask].reset_index(drop=True)
-
-            # Also filter y to maintain alignment
-            if y is not None:
-                y = y[valid_rows_mask].reset_index(drop=True)
-
-            # Verify alignment
-            if y is not None and len(X) != len(y):
-                logger.error(
-                    f"Shape mismatch after NaN filtering: X={len(X)}, y={len(y)}"
-                )
-                raise ValueError(
-                    f"X and y have different lengths after NaN filtering: {len(X)} != {len(y)}"
-                )
-
-            # Check that we still have data
-            if len(X) == 0:
-                logger.error("All rows have NaN in features - no valid samples remaining!")
-                raise ValueError(
-                    "No valid samples remaining after NaN filtering. "
-                    "All rows contain NaN in at least one feature. "
-                    "Please check data quality or consider imputation."
-                )
-
-            # Warn if we removed >10% of data
-            removal_pct = n_rows_with_nan / n_before_nan_filter * 100
-            if removal_pct > 10.0:
+            if n_rows_with_nan > 0:
+                # Preserve row count: impute warm-up NaNs instead of dropping samples
                 logger.warning(
-                    f"NaN filtering removed {removal_pct:.1f}% of training data! "
-                    f"Consider investigating data quality issues or implementing imputation. "
-                    f"Affected columns: {nan_columns}"
+                    f"Imputing {n_rows_with_nan} row(s) with NaN features "
+                    f"({n_rows_with_nan / n_before_nan_filter * 100:.2f}% of total) to avoid data loss."
                 )
+                X = X.ffill().fillna(0.0)
+                if y is not None:
+                    # y was already aligned earlier; just reset index to match X after ffill
+                    y = y.reset_index(drop=True)
+
+                # Verify alignment and ensure no NaNs remain
+                if y is not None and len(X) != len(y):
+                    logger.error(
+                        f"Shape mismatch after NaN handling: X={len(X)}, y={len(y)}"
+                    )
+                    raise ValueError(
+                        f"X and y have different lengths after NaN handling: {len(X)} != {len(y)}"
+                    )
+                if X.isna().any().any():
+                    logger.warning(
+                        "NaN values remain after imputation; dropping residual NaN rows."
+                    )
+                    rows_with_nan_mask = X.isna().any(axis=1)
+                    valid_rows_mask = ~rows_with_nan_mask
+                    X = X[valid_rows_mask].reset_index(drop=True)
+                    if y is not None:
+                        y = y[valid_rows_mask].reset_index(drop=True)
 
             logger.info(
-                f"Retained {len(X)} valid samples for training "
-                f"(removed {n_rows_with_nan} rows with NaN features)."
+                f"Retained {len(X)} valid samples for training after feature NaN handling."
             )
         else:
             logger.info("No NaN values found in features - all samples are valid.")
 
-        # сохранение датасета
+        
         ts = int(time.time())
         ds_base = os.path.join(self.cfg.artifacts_dir, f"{self.cfg.dataset_name}_{ts}")
         X_path = ds_base + "_X.parquet"
@@ -342,7 +337,20 @@ class ServiceTrain:
         if y is not None:
             pd.DataFrame({"y": y}).to_parquet(y_path, index=False)
 
-        # обучение модели
+        if len(X) == 0:
+            logger.error(
+                "No valid samples remaining after preprocessing; skipping training run."
+            )
+            return {
+                "dataset_X": X_path,
+                "dataset_y": (y_path if y is not None else None),
+                "model_path": None,
+                "n_samples": 0,
+                "n_features": int(len(X.columns)),
+                "effective_samples": 0,
+            }
+
+        # ???????????????? ????????????
         self.trainer.fit(X, y, sample_weight=weights)
         model_path = os.path.join(self.cfg.artifacts_dir, f"{self.cfg.model_name}_{ts}.bin")
         saved_path = self.trainer.save(model_path)
