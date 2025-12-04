@@ -4,7 +4,31 @@
 
 ---
 
-## 📊 Статус проекта (2025-12-01)
+## 🚀 Start Here
+
+### For New Users
+| Document | Description |
+|----------|-------------|
+| [PRODUCT_OVERVIEW.md](PRODUCT_OVERVIEW.md) | ⭐ **High-level product overview** - capabilities, architecture, competitive advantages |
+| [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) | ⭐ **Step-by-step guide** - from zero to first backtest in 30 minutes |
+| [QUICK_START.md](QUICK_START.md) | Quick reference for common commands |
+
+### For Investors
+| Document | Description |
+|----------|-------------|
+| [docs/INVESTOR_BRIEF.md](docs/INVESTOR_BRIEF.md) | ⭐ **Investment highlights** - market opportunity, metrics, roadmap |
+| [PRODUCT_OVERVIEW.md](PRODUCT_OVERVIEW.md) | Technical capabilities and differentiation |
+
+### For Developers
+| Document | Description |
+|----------|-------------|
+| [CLAUDE.md](CLAUDE.md) | ⭐ **Master technical reference** - complete API documentation (RU) |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture and design patterns |
+| [docs/AI_GUIDE.md](docs/AI_GUIDE.md) | AI agent context and instructions (EN) |
+
+---
+
+## 📊 Статус проекта (2025-12-04)
 
 **Production Ready** - Все критические исправления применены и протестированы.
 
@@ -218,6 +242,6 @@ python tools/check_feature_parity.py
 
 ---
 
-**Last Updated**: 2025-12-01 (Verified Fixes)
+**Last Updated**: 2025-12-04 (Added user-friendly documentation)
 **Status**: ✅ Production Ready
-**Version**: 4.1 (Stable + Verified UPGD/Twin Critics/VGS)
+**Version**: 4.2 (Added PRODUCT_OVERVIEW, GETTING_STARTED, INVESTOR_BRIEF)
