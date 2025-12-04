@@ -154,7 +154,7 @@
 
 ```
 TradingBot2/
-├── tests/              # 557 test files (moved from root)
+├── tests/              # 597 test files, 11,063 test functions
 │   ├── test_*.py       # All test files
 │   └── conftest.py     # Pytest fixtures
 ├── tools/              # 34 utility scripts (moved from root)
@@ -6913,7 +6913,7 @@ reward = float(np.clip(reward_before_clip, -clip_for_clamp, clip_for_clamp))
 
 ### ✅ Production Ready
 
-Все критические исправления применены и протестированы. **560+ test files** с 97%+ pass rate.
+Все критические исправления применены и протестированы. **597 test files, 11,063 tests** с 97%+ pass rate.
 
 | Компонент | Статус | Тесты |
 |-----------|--------|-------|
@@ -7427,8 +7427,19 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-12-03
-**Версия документации**: 11.10 (Options Integration Phase 2)
-**Статус**: ✅ Production Ready (567+ test files, Futures Integration complete, Options Phase 1+2 complete)
+**Версия документации**: 11.11 (Test Count Update)
+**Статус**: ✅ Production Ready (597 test files, 11,063 tests | Futures Integration complete, Options Phase 1+2+2B complete)
+
+### Изменения в 11.11:
+- **Обновлён счётчик тестов** -- точный подсчёт всех тестов в проекте
+  - Test files: 597 (было: ~560)
+  - Test functions: 11,063 (полный подсчёт через `grep -r "def test_"`)
+  - Обновлены все упоминания в документации:
+    - Структура проекта (line 157)
+    - Статус проекта (line 6916)
+    - История изменений (line 7584)
+  - Phase 2B (Deribit) documentation fully integrated
+  - OPTIONS_INTEGRATION_PLAN.md updated with Phase 1, 2, 2B completion status
 
 ### Изменения в 11.10:
 - **Options Integration Phase 2 COMPLETE** -- 165 tests (100% pass rate)
@@ -7581,4 +7592,4 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 - Добавлены Forex entries в Quick Reference таблицу
 - Добавлены Forex commands (training, backtest, live)
 - Добавлены forex configs (config_train_forex.yaml, forex_defaults.yaml)
-- Обновлён счётчик тестов: 262 → 557 test files
+- Обновлён счётчик тестов: 262 → 597 test files, 11,063 tests
