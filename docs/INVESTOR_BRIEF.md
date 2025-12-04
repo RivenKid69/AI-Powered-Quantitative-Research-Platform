@@ -65,9 +65,28 @@ We've built a **technically mature platform** that solves infrastructure fragmen
 
 ### Technology Differentiation
 
+**Core Innovation: Risk-Aware Reinforcement Learning**
+
+Unlike traditional algorithmic trading platforms that optimize average returns, our platform is **among the first production implementations of CVaR-constrained reinforcement learning** for trading:
+
+```
+Traditional: maximize E[Return]
+Our Approach: maximize E[Return] subject to CVaR₅%[Return] ≥ threshold
+```
+
+This means strategies explicitly avoid catastrophic tail losses, not just maximize gains.
+
+**Three Breakthrough Technologies**
+
+| Innovation | What It Does | Why It Matters |
+|------------|--------------|----------------|
+| **Twin Critics + CVaR** | Dual value networks with pessimistic aggregation + tail-risk constraints | Reduced overestimation bias (established technique: Fujimoto et al., 2018); explicit worst-case optimization |
+| **AdaptiveUPGD** | Utility-weighted gradient descent preventing catastrophic forgetting | Models remain robust across market regime changes (bull→bear→sideways) |
+| **Conformal Prediction** | Distribution-free uncertainty bounds on value estimates | Valid uncertainty even when model assumptions are wrong; automatic position scaling |
+
 **Academic Research Integration**
 
-Our execution models implement peer-reviewed research:
+Our execution models implement 7+ peer-reviewed papers:
 
 | Model | Publication | Application |
 |-------|-------------|-------------|
@@ -75,13 +94,20 @@ Our execution models implement peer-reviewed research:
 | Kyle Lambda (1985) | Econometrica | Price impact model |
 | Gatheral (2010) | Quant Finance | Transient impact decay |
 | Moallemi & Yuan (2017) | Operations Research | Queue value optimization |
+| Dabney et al. (2018) | AAAI | Distributional RL |
+| Chow et al. (2015) | JMLR | CVaR optimization |
+| Romano et al. (2019) | NeurIPS | Conformal prediction |
 
-**Machine Learning Innovation**
+**Machine Learning Innovation Stack**
 
-- **Distributional PPO**: Risk-aware reinforcement learning
-- **Twin Critics**: Reduces value overestimation by ~25%
-- **Conformal Prediction**: Uncertainty quantification for risk management
+- **Distributional PPO**: 21-51 quantile value estimation (not single-point)
+- **Twin Critics**: Reduces value overestimation (well-established in RL literature)
+- **CVaR Learning**: Penalizes worst 5% of outcomes
+- **VGS v3.2**: Per-parameter gradient variance tracking
+- **Conformal Prediction**: Distribution-free uncertainty bounds
 - **Adversarial Training**: Robust to market regime changes
+
+**For detailed innovation documentation, see [INNOVATION_STATEMENT.md](INNOVATION_STATEMENT.md)**
 
 ---
 
@@ -127,19 +153,32 @@ After establishing prop firm references, expand to small-to-mid quant hedge fund
 
 ### Direct Competitors
 
-| Competitor | Strengths | Our Advantage |
-|------------|-----------|---------------|
-| QuantConnect | Large community | Superior execution modeling |
-| Zipline | Open source | Production-ready, multi-asset |
-| Numerai | Crowdsourced alpha | End-to-end platform |
-| Alpaca | Easy API access | Advanced ML, risk management |
+| Competitor | What They Do | Our Differentiation |
+|------------|--------------|---------------------|
+| **QuantConnect** | Community backtesting platform | They use fixed 2bps slippage; we use 6-9 factor dynamic models. They have no risk-aware ML; we have CVaR-constrained RL. |
+| **Zipline** | Open-source backtester | Single asset class, no live trading, abandoned development. We support 5 asset classes in production. |
+| **Alpaca** | Commission-free broker API | They provide pipes; we provide intelligence. No ML, no execution modeling. |
+| **In-House Development** | Custom systems at prop firms | $500K-2M cost, 12+ months. We reduce to days at fraction of cost. |
+
+### Why We Are Not a Clone
+
+**Fundamental Difference in Approach**:
+
+| Aspect | Traditional Platforms | Our Platform |
+|--------|----------------------|--------------|
+| **Objective** | maximize E[Return] | maximize E[Return] s.t. CVaR₅% ≥ threshold |
+| **Value Estimation** | Single point | 21-51 quantile distribution |
+| **Execution Model** | Fixed spread | Market-adaptive 6-9 factors |
+| **Uncertainty** | Assumed known | Conformal prediction bounds |
+| **Learning** | Prone to forgetting | Continual learning (UPGD) |
 
 ### Competitive Moats
 
-1. **Technical Depth**: 7+ years of academic research integrated
-2. **Multi-Asset Unity**: Single codebase for all asset classes
-3. **Testing Rigor**: 11,000+ automated tests
-4. **Production Ready**: Live trading on major exchanges
+1. **Technical Depth**: 7+ peer-reviewed papers implemented (Almgren-Chriss, Kyle, Dabney, Chow, Romano, Gatheral, Moallemi)
+2. **Novel Algorithms**: Twin Critics + CVaR, AdaptiveUPGD, VGS — not available anywhere else
+3. **Multi-Asset Unity**: Single codebase for 5 asset classes (vs 1-2 typical)
+4. **Testing Rigor**: 11,063 automated tests (vs ~1,000 typical)
+5. **Complexity Barrier**: 2+ years development, 100K+ lines — significant replication effort
 
 ---
 

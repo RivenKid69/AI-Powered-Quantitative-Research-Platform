@@ -13,11 +13,12 @@
 | [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) | ⭐ **Step-by-step guide** - from zero to first backtest in 30 minutes |
 | [QUICK_START.md](QUICK_START.md) | Quick reference for common commands |
 
-### For Investors
+### For Investors & Startup Visa Applications
 | Document | Description |
 |----------|-------------|
-| [docs/INVESTOR_BRIEF.md](docs/INVESTOR_BRIEF.md) | ⭐ **Investment highlights** - market opportunity, metrics, roadmap |
-| [PRODUCT_OVERVIEW.md](PRODUCT_OVERVIEW.md) | Technical capabilities and differentiation |
+| [docs/PRODUCT_OVERVIEW.md](docs/PRODUCT_OVERVIEW.md) | ⭐ **One-pager** - key innovations, competitive differentiation |
+| [docs/INNOVATION_STATEMENT.md](docs/INNOVATION_STATEMENT.md) | ⭐ **Full innovation documentation** - technical depth, IP, academic references |
+| [docs/INVESTOR_BRIEF.md](docs/INVESTOR_BRIEF.md) | **Investment highlights** - market opportunity, metrics, roadmap |
 
 ### For Developers
 | Document | Description |
