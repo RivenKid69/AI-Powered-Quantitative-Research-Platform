@@ -1,6 +1,8 @@
 # Getting Started Guide
 
-Welcome! This guide will take you from zero to running your first profitable strategy in under 30 minutes.
+Welcome! This guide will take you from zero to running your first backtest in under 30 minutes.
+
+> **Important**: This platform is a software tool for quantitative research and automated trading. It does not provide investment advice or guarantee any specific results. Trading involves substantial risk of loss. See [Risk Disclaimers](#risk-disclaimers) at the end of this guide.
 
 ---
 
@@ -14,6 +16,7 @@ Welcome! This guide will take you from zero to running your first profitable str
 6. [Going Live](#going-live)
 7. [Next Steps](#next-steps)
 8. [Troubleshooting](#troubleshooting)
+9. [Risk Disclaimers](#risk-disclaimers)
 
 ---
 
@@ -117,7 +120,7 @@ python scripts/quickstart.py info crypto_momentum
 **Output:**
 ```
 Preset: crypto_momentum
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Description:
   Simple momentum strategy on major cryptocurrencies.
@@ -127,14 +130,11 @@ Assets: BTC/USDT, ETH/USDT
 Timeframe: 4 hours
 Data Period: 2023-01-01 to 2024-01-01
 
-Expected Performance:
-  - Annual Return: 30-50%
-  - Sharpe Ratio: 1.5-2.0
-  - Max Drawdown: 15-25%
-
 Requirements:
   - No API keys needed (uses historical data)
   - ~500MB disk space for data
+
+Note: Backtest results are hypothetical and do not guarantee future performance.
 ```
 
 #### 3. Run Backtest
@@ -143,7 +143,7 @@ Requirements:
 python scripts/quickstart.py run crypto_momentum
 ```
 
-**Output:**
+**Example output (hypothetical, for illustration purposes only):**
 ```
 Loading data... ████████████████████ 100%
 Running backtest...
@@ -152,7 +152,7 @@ Running backtest...
 Period: 2023-01-01 to 2024-01-01
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Performance Metrics:
+Performance Metrics (Hypothetical):
   Total Return:     +42.3%
   Annual Return:    +42.3%
   Sharpe Ratio:     1.85
@@ -169,6 +169,10 @@ Trade Statistics:
   Avg Duration:     18.5 hours
 
 Results saved to: results/crypto_momentum_2024-12-04/
+
+DISCLAIMER: These results are based on historical simulation.
+Past performance does not guarantee future results.
+Actual trading involves substantial risk of loss.
 ```
 
 ---
@@ -177,13 +181,15 @@ Results saved to: results/crypto_momentum_2024-12-04/
 
 ### Key Metrics Explained
 
-| Metric | What It Means | Good Value |
-|--------|---------------|------------|
-| **Total Return** | Overall profit/loss | > 0% |
-| **Sharpe Ratio** | Risk-adjusted return | > 1.5 |
-| **Max Drawdown** | Largest peak-to-trough drop | < 20% |
-| **Win Rate** | % of profitable trades | > 50% |
-| **Profit Factor** | Gross profit / Gross loss | > 1.5 |
+| Metric | What It Means | Typical Range* |
+|--------|---------------|----------------|
+| **Total Return** | Overall profit/loss | Varies by strategy |
+| **Sharpe Ratio** | Risk-adjusted return | 0.5-2.5 |
+| **Max Drawdown** | Largest peak-to-trough drop | -5% to -50% |
+| **Win Rate** | % of profitable trades | 40%-70% |
+| **Profit Factor** | Gross profit / Gross loss | 1.0-3.0 |
+
+*Typical ranges are for illustration only. Actual results will vary significantly based on market conditions, strategy parameters, and time period.
 
 ### Reading the Results Directory
 
@@ -197,21 +203,14 @@ results/crypto_momentum_2024-12-04/
 └── config.yaml           # Configuration used
 ```
 
-### Equity Curve Example
+### Interpreting Backtest Results
 
-```
-Portfolio Value ($)
-     │
-10000│━━━━┓
-     │    ┃
- 8000│    ┗━━━━┓
-     │         ┃
- 6000│         ┗━━━┓
-     │             ┗━━━━━━━━━━━━━━━━━━━━━━━━━
-     │
-     └────────────────────────────────────────
-        Jan   Mar   May   Jul   Sep   Nov
-```
+**Important Considerations:**
+
+1. **Backtests are hypothetical** - They use historical data and cannot predict future performance
+2. **Overfitting risk** - Strong backtest results may not translate to live trading
+3. **Transaction costs** - Ensure realistic fees and slippage are included
+4. **Market regime** - Strategies that worked in past conditions may fail in new environments
 
 ---
 
@@ -219,10 +218,12 @@ Portfolio Value ($)
 
 ### Why Train?
 
-Pre-built strategies use fixed rules. Training creates an AI model that:
-- Adapts to market conditions
+Pre-built strategies use fixed rules. Training creates an ML model that:
+- Adapts to changing market conditions
 - Learns optimal position sizing
-- Discovers non-obvious patterns
+- Discovers patterns in data
+
+> **Note**: ML models are tools, not guarantees. A trained model may underperform simple strategies depending on market conditions.
 
 ### Step 1: Prepare Training Data
 
@@ -242,7 +243,7 @@ python scripts/download_stock_data.py --symbols AAPL MSFT GOOGL --start 2020-01-
 python scripts/quickstart.py train crypto_momentum
 ```
 
-**Output:**
+**Example output (hypothetical):**
 ```
 Starting training...
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -262,9 +263,8 @@ Episode 200/1000  │████████░░░░░░░░░░░�
 Training complete!
 Model saved to: models/crypto_momentum_v1.pt
 
-Validation Results:
-  Sharpe Ratio: 1.92 (+0.47 vs baseline)
-  Max Drawdown: -10.2% (improved from -12.4%)
+Note: Training metrics are internal measurements.
+Out-of-sample validation is required before any live deployment.
 ```
 
 ### Step 3: Backtest Trained Model
@@ -286,6 +286,16 @@ python script_backtest.py --config configs/config_sim.yaml --model models/crypto
 
 ## Going Live
 
+### ⚠️ Critical Warning
+
+**Live trading involves real financial risk.** Before proceeding:
+
+1. **Paper trade extensively** - Test with simulated money for weeks or months
+2. **Understand the risks** - You can lose your entire investment
+3. **Start very small** - Use minimum position sizes initially
+4. **Never invest more than you can afford to lose**
+5. **This is not investment advice** - You are solely responsible for your trading decisions
+
 ### Prerequisites
 
 1. **Exchange Account**
@@ -297,6 +307,7 @@ python script_backtest.py --config configs/config_sim.yaml --model models/crypto
 2. **API Keys**
    - Generate API keys from your exchange
    - Store securely (never commit to git!)
+   - Use IP whitelisting where available
 
 ### Step 1: Configure API Keys
 
@@ -316,9 +327,9 @@ OANDA_API_KEY=your_key_here
 OANDA_ACCOUNT_ID=your_account_id
 ```
 
-### Step 2: Paper Trading (Recommended!)
+### Step 2: Paper Trading (Required First Step)
 
-Always test with paper trading first:
+**Always test with paper trading before using real money:**
 
 ```bash
 # Crypto (Binance Testnet)
@@ -328,9 +339,11 @@ python script_live.py --config configs/config_live.yaml --paper
 python script_live.py --config configs/config_live_alpaca.yaml --paper
 ```
 
+**Recommended paper trading period:** Minimum 4-8 weeks to observe strategy behavior across different market conditions.
+
 ### Step 3: Live Trading
 
-**Warning**: Real money at risk. Start with small positions!
+**Only proceed after extensive paper trading and thorough risk assessment.**
 
 ```bash
 # Crypto
@@ -348,6 +361,8 @@ python script_live.py --config configs/config_live_alpaca.yaml --live
 | **Position Limits** | Max position per symbol and total |
 | **Drawdown Guard** | Auto-stop if drawdown exceeds limit |
 | **Error Throttling** | Pause on repeated errors |
+
+**Configure risk limits in `configs/risk.yaml` before going live.**
 
 ---
 
@@ -495,14 +510,58 @@ Default Config (core_config.py)
 
 ---
 
-## Congratulations!
+## Risk Disclaimers
+
+### Risk of Loss
+
+**Trading in financial instruments carries a high level of risk and may not be suitable for all investors.** The high degree of leverage available in forex, futures, and crypto markets can work against you as well as for you. Before deciding to trade, you should carefully consider your investment objectives, level of experience, and risk appetite.
+
+**There is a possibility that you could sustain a loss of some or all of your initial investment** and therefore you should not invest money that you cannot afford to lose. You should be aware of all the risks associated with trading and seek advice from an independent financial advisor if you have any doubts.
+
+### Hypothetical Performance
+
+**All backtest results and performance figures in this documentation are hypothetical** and are presented for illustration purposes only. They do not represent actual trading results. Hypothetical performance results have many inherent limitations, including:
+
+1. **Hindsight bias** - Strategies are designed with the benefit of hindsight
+2. **No slippage guarantee** - Actual execution prices may differ significantly
+3. **No emotional factor** - Simulations don't account for psychological impacts on trading decisions
+4. **Market conditions change** - Past market conditions may not repeat
+
+### No Investment Advice
+
+**This platform and documentation do not constitute investment advice.** The content is provided for informational and educational purposes only and should not be construed as financial, legal, or tax advice. The information does not take into account your specific circumstances and should not be relied upon in making financial decisions.
+
+You should conduct your own research and consult with qualified professionals before making any investment decisions. The platform provider does not recommend that any specific investment, strategy, or asset is suitable for any specific person.
+
+### Regulatory Compliance
+
+This software is a technology tool and not a regulated financial service. Users are responsible for:
+
+1. **Compliance with local laws** - Ensure trading is legal in your jurisdiction
+2. **Tax obligations** - Report and pay taxes on trading profits
+3. **Exchange requirements** - Follow the terms of service of your chosen exchanges
+4. **Licensing requirements** - Obtain necessary licenses if required in your jurisdiction
+
+### Software Disclaimer
+
+The software is provided "as is" without warranty of any kind. The provider is not liable for any losses, damages, or costs arising from the use of this software. Users acknowledge that:
+
+1. Software may contain bugs or errors
+2. Market data may be delayed or inaccurate
+3. System failures can occur
+4. Past software performance does not guarantee future reliability
+
+---
+
+## Completion Checklist
 
 You've completed the getting started guide. You now know how to:
 
 - [x] Run backtests with pre-built strategies
-- [x] Understand performance metrics
-- [x] Train your own AI models
-- [x] Deploy to paper and live trading
+- [x] Understand performance metrics (and their limitations)
+- [x] Train ML models
+- [x] Set up paper trading
+- [x] Understand the risks involved
 
 ### What's Next?
 
@@ -516,3 +575,5 @@ You've completed the getting started guide. You now know how to:
 ---
 
 *Need help? Open an issue on GitHub or check [DOCS_INDEX.md](DOCS_INDEX.md) for more resources.*
+
+*Last Updated: December 2025*
