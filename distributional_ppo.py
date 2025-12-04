@@ -4729,6 +4729,8 @@ class DistributionalPPO(RecurrentPPO):
         if not self.normalize_returns:
             self._ret_mean_snapshot = float(self._ret_mean_value)
             self._ret_std_snapshot = float(self._ret_std_value)
+            self._ret_rms_effective_mean_tensor = torch.tensor(self._ret_mean_snapshot)
+            self._ret_rms_effective_std_tensor = torch.tensor(self._ret_std_snapshot)
             self._pending_rms = None
             self._pending_ret_mean = None
             self._pending_ret_std = None
@@ -4739,6 +4741,8 @@ class DistributionalPPO(RecurrentPPO):
             self._ret_std_snapshot = max(
                 float(self._ret_std_value), self._value_scale_std_floor
             )
+            self._ret_rms_effective_mean_tensor = torch.tensor(self._ret_mean_snapshot)
+            self._ret_rms_effective_std_tensor = torch.tensor(self._ret_std_snapshot)
             self._pending_rms = None
             self._pending_ret_mean = float(self._ret_mean_snapshot)
             self._pending_ret_std = float(self._ret_std_snapshot)
@@ -4749,6 +4753,8 @@ class DistributionalPPO(RecurrentPPO):
             self._ret_std_snapshot = max(
                 float(self._ret_std_value), self._value_scale_std_floor
             )
+            self._ret_rms_effective_mean_tensor = torch.tensor(self._ret_mean_snapshot)
+            self._ret_rms_effective_std_tensor = torch.tensor(self._ret_std_snapshot)
             self._pending_rms = None
             self._pending_ret_mean = float(self._ret_mean_snapshot)
             self._pending_ret_std = float(self._ret_std_snapshot)
@@ -4758,6 +4764,8 @@ class DistributionalPPO(RecurrentPPO):
         self._ret_std_snapshot = max(
             float(self._ret_std_value), self._value_scale_std_floor
         )
+        self._ret_rms_effective_mean_tensor = torch.tensor(self._ret_mean_snapshot)
+        self._ret_rms_effective_std_tensor = torch.tensor(self._ret_std_snapshot)
         self._pending_rms = RunningMeanStd(shape=())
         self._pending_ret_mean = float(self._ret_mean_snapshot)
         self._pending_ret_std = float(self._ret_std_snapshot)
@@ -5975,6 +5983,8 @@ class DistributionalPPO(RecurrentPPO):
                     self._ret_std_value = float(new_std)
                     self._ret_mean_snapshot = float(new_mean)
                     self._ret_std_snapshot = float(new_std)
+                    self._ret_rms_effective_mean_tensor = torch.tensor(self._ret_mean_snapshot)
+                    self._ret_rms_effective_std_tensor = torch.tensor(self._ret_std_snapshot)
 
                     denom = max(
                         self.ret_clip * new_std,
@@ -6006,6 +6016,8 @@ class DistributionalPPO(RecurrentPPO):
                 self._ret_std_snapshot = max(
                     float(self._ret_std_value), self._value_scale_std_floor
                 )
+                self._ret_rms_effective_mean_tensor = torch.tensor(self._ret_mean_snapshot)
+                self._ret_rms_effective_std_tensor = torch.tensor(self._ret_std_snapshot)
 
             self._pending_ret_mean = float(self._ret_mean_snapshot)
             self._pending_ret_std = float(self._ret_std_snapshot)
@@ -6226,6 +6238,8 @@ class DistributionalPPO(RecurrentPPO):
             self._value_norm_clip_max = float("inf")
             self._ret_mean_snapshot = 0.0
             self._ret_std_snapshot = 1.0
+            self._ret_rms_effective_mean_tensor = torch.tensor(0.0)
+            self._ret_rms_effective_std_tensor = torch.tensor(1.0)
             self.distributional_vf_clip_variance_factor = float(
                 distributional_vf_clip_variance_factor
             )
@@ -6682,6 +6696,9 @@ class DistributionalPPO(RecurrentPPO):
         self._ret_std_value = 1.0
         self._ret_mean_snapshot = 0.0
         self._ret_std_snapshot = 1.0
+        # Tensor versions for VF clipping (used in _twin_critics_vf_clipping_loss)
+        self._ret_rms_effective_mean_tensor = torch.tensor(0.0)
+        self._ret_rms_effective_std_tensor = torch.tensor(1.0)
         self._pending_rms: Optional[RunningMeanStd] = None
         self._pending_ret_mean: Optional[float] = None
         self._pending_ret_std: Optional[float] = None
