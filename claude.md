@@ -7439,6 +7439,13 @@ pytest tests/test_pbt*.py -v           # PBT
 - [docs/business/PRICING_DIFFERENTIATION_STRATEGY.md](docs/business/PRICING_DIFFERENTIATION_STRATEGY.md) -- Стратегия ценовой дифференциации по сегментам клиентов
 - [docs/business/SALES_CHANNEL_EVOLUTION_STRATEGY.md](docs/business/SALES_CHANNEL_EVOLUTION_STRATEGY.md) -- Стратегия эволюции каналов продаж (от founder-led к multi-channel)
 
+### Кейсы и социальное доказательство
+
+- [docs/business/PROJECTED_CASE_STUDIES.md](docs/business/PROJECTED_CASE_STUDIES.md) -- Проектируемые кейсы клиентов с research-backed метриками
+- [docs/business/CUSTOMER_VALUE_FRAMEWORK.md](docs/business/CUSTOMER_VALUE_FRAMEWORK.md) -- Фреймворк расчёта ROI и TCO для клиентов
+- [docs/business/BUILD_VS_BUY_ANALYSIS.md](docs/business/BUILD_VS_BUY_ANALYSIS.md) -- Анализ Build vs Buy с COCOMO II методологией
+- [docs/business/TESTIMONIAL_ACQUISITION_STRATEGY.md](docs/business/TESTIMONIAL_ACQUISITION_STRATEGY.md) -- Стратегия получения реальных отзывов и кейсов
+
 ### Отчёты об исправлениях
 
 **Все отчёты перенесены в архив:**
@@ -7507,8 +7514,31 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-12-05
-**Версия документации**: 11.13 (GTM Strategy & Pricing)
+**Версия документации**: 11.14 (Customer Evidence & Social Proof)
 **Статус**: ✅ Production Ready (597 test files, 11,063 tests | Futures Integration complete, Options Phase 1+2+2B complete)
+
+### Изменения в 11.14:
+- **Customer Evidence Documentation** -- Документация для закрытия gap в социальном доказательстве
+  - [PROJECTED_CASE_STUDIES.md](docs/business/PROJECTED_CASE_STUDIES.md) -- 4 research-backed проектируемых кейса
+    - Small Crypto Prop (€5M AUM): 85-90% time savings, 6x faster deployment
+    - Mid-Size Systematic Fund (€75M): 90% timeline reduction, €2.3M 5-year savings
+    - Bank Trading Desk (€2B): €10.3M 5-year savings, 62% cost reduction
+    - Independent Quant Researcher: 6-month acceleration to fundraising
+  - [CUSTOMER_VALUE_FRAMEWORK.md](docs/business/CUSTOMER_VALUE_FRAMEWORK.md) -- ROI/TCO калькуляторы
+    - 4 value pillars: Time, Cost, Performance, Risk
+    - TCO comparison: Build €1.67M vs Buy €120K (5-year)
+    - Segment-specific ROI templates (25x-88x typical ROI)
+  - [BUILD_VS_BUY_ANALYSIS.md](docs/business/BUILD_VS_BUY_ANALYSIS.md) -- Build vs Buy с COCOMO II
+    - Full cost breakdown: €2.2M build vs €305K buy (90% savings)
+    - Timeline comparison: 26 months vs 4 weeks (26x faster)
+    - Risk-adjusted TCO, opportunity cost analysis
+  - [TESTIMONIAL_ACQUISITION_STRATEGY.md](docs/business/TESTIMONIAL_ACQUISITION_STRATEGY.md) -- Playbook для testimonials
+    - Pilot-to-testimonial pipeline
+    - 5-tier evidence program (quotes → case studies → references)
+    - Logo acquisition strategy
+    - 12-month targets: 10+ testimonials, 4+ case studies, 5+ logos
+- **Research-backed:** COCOMO II, McKinsey, Deloitte, Nielsen, Demand Gen references
+- Added new "Кейсы и социальное доказательство" section to documentation index
 
 ### Изменения в 11.13:
 - **GTM Strategy Documentation** -- Полная документация по go-to-market стратегии
