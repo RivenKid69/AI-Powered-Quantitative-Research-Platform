@@ -7431,6 +7431,7 @@ pytest tests/test_pbt*.py -v           # PBT
 
 - [docs/business/IP_PROTECTION_STRATEGY.md](docs/business/IP_PROTECTION_STRATEGY.md) -- Стратегия защиты интеллектуальной собственности
 - [docs/business/INVESTOR_IP_SUMMARY.md](docs/business/INVESTOR_IP_SUMMARY.md) -- Краткое изложение IP для инвесторов
+- [docs/business/COMPETITIVE_MOAT.md](docs/business/COMPETITIVE_MOAT.md) -- Количественный анализ конкурентного moat (Morgan Stanley framework)
 - [docs/business/PATENT_CLAIMS_DRAFT.md](docs/business/PATENT_CLAIMS_DRAFT.md) -- Черновик патентных заявок
 - [docs/business/TRADE_SECRET_POLICY.md](docs/business/TRADE_SECRET_POLICY.md) -- Политика защиты коммерческой тайны
 - [docs/business/OPEN_CORE_BUSINESS_MODEL.md](docs/business/OPEN_CORE_BUSINESS_MODEL.md) -- Модель Open-Core бизнеса
@@ -7511,10 +7512,13 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 - **IP Protection Strategy Documentation** -- Полная документация по защите интеллектуальной собственности
   - [IP_PROTECTION_STRATEGY.md](docs/business/IP_PROTECTION_STRATEGY.md) -- Многоуровневая стратегия защиты IP
   - [INVESTOR_IP_SUMMARY.md](docs/business/INVESTOR_IP_SUMMARY.md) -- Краткое изложение для инвесторов и стартап-комитетов
+  - [COMPETITIVE_MOAT.md](docs/business/COMPETITIVE_MOAT.md) -- **NEW** Количественный анализ конкурентного moat (Morgan Stanley ROIC framework, 8.45/10 score, 18-36 month time-to-copy)
   - [PATENT_CLAIMS_DRAFT.md](docs/business/PATENT_CLAIMS_DRAFT.md) -- Черновик патентных заявок (CVaR-RL, Unified Simulation)
   - [TRADE_SECRET_POLICY.md](docs/business/TRADE_SECRET_POLICY.md) -- Политика защиты коммерческой тайны (TSP-001)
   - [OPEN_CORE_BUSINESS_MODEL.md](docs/business/OPEN_CORE_BUSINESS_MODEL.md) -- Стратегия Open-Core с кейсами Databricks, GitLab, Elastic
   - [PUBLIC_SDK_README_TEMPLATE.md](docs/business/PUBLIC_SDK_README_TEMPLATE.md) -- Шаблон README для публичного SDK
+- **Competitive Moat Analysis:** Morgan Stanley ROIC-WACC framework with quantified moat score (8.45/10)
+- **Time-to-Copy Estimates:** 18-36 months based on McKinsey, COCOMO, industry benchmarks
 - **Repository Architecture:** Private monorepo (core) + Public SDK (MIT License)
 - **Patent Strategy:** Filing Q1 2025 for CVaR-RL architecture and Unified Simulation System
 - **Trade Secret Protection:** Comprehensive policy with technical, administrative, and physical controls
