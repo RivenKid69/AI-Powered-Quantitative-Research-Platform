@@ -7427,6 +7427,15 @@ pytest tests/test_pbt*.py -v           # PBT
 - [docs/pipeline.md](docs/pipeline.md) -- Decision pipeline
 - [docs/bar_execution.md](docs/bar_execution.md) -- Bar execution
 
+### Бизнес и IP защита
+
+- [docs/business/IP_PROTECTION_STRATEGY.md](docs/business/IP_PROTECTION_STRATEGY.md) -- Стратегия защиты интеллектуальной собственности
+- [docs/business/INVESTOR_IP_SUMMARY.md](docs/business/INVESTOR_IP_SUMMARY.md) -- Краткое изложение IP для инвесторов
+- [docs/business/PATENT_CLAIMS_DRAFT.md](docs/business/PATENT_CLAIMS_DRAFT.md) -- Черновик патентных заявок
+- [docs/business/TRADE_SECRET_POLICY.md](docs/business/TRADE_SECRET_POLICY.md) -- Политика защиты коммерческой тайны
+- [docs/business/OPEN_CORE_BUSINESS_MODEL.md](docs/business/OPEN_CORE_BUSINESS_MODEL.md) -- Модель Open-Core бизнеса
+- [docs/business/PUBLIC_SDK_README_TEMPLATE.md](docs/business/PUBLIC_SDK_README_TEMPLATE.md) -- Шаблон README для публичного SDK
+
 ### Отчёты об исправлениях
 
 **Все отчёты перенесены в архив:**
@@ -7494,9 +7503,24 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 
 ---
 
-**Последнее обновление**: 2025-12-03
-**Версия документации**: 11.11 (Test Count Update)
+**Последнее обновление**: 2025-12-05
+**Версия документации**: 11.12 (IP Protection Strategy)
 **Статус**: ✅ Production Ready (597 test files, 11,063 tests | Futures Integration complete, Options Phase 1+2+2B complete)
+
+### Изменения в 11.12:
+- **IP Protection Strategy Documentation** -- Полная документация по защите интеллектуальной собственности
+  - [IP_PROTECTION_STRATEGY.md](docs/business/IP_PROTECTION_STRATEGY.md) -- Многоуровневая стратегия защиты IP
+  - [INVESTOR_IP_SUMMARY.md](docs/business/INVESTOR_IP_SUMMARY.md) -- Краткое изложение для инвесторов и стартап-комитетов
+  - [PATENT_CLAIMS_DRAFT.md](docs/business/PATENT_CLAIMS_DRAFT.md) -- Черновик патентных заявок (CVaR-RL, Unified Simulation)
+  - [TRADE_SECRET_POLICY.md](docs/business/TRADE_SECRET_POLICY.md) -- Политика защиты коммерческой тайны (TSP-001)
+  - [OPEN_CORE_BUSINESS_MODEL.md](docs/business/OPEN_CORE_BUSINESS_MODEL.md) -- Стратегия Open-Core с кейсами Databricks, GitLab, Elastic
+  - [PUBLIC_SDK_README_TEMPLATE.md](docs/business/PUBLIC_SDK_README_TEMPLATE.md) -- Шаблон README для публичного SDK
+- **Repository Architecture:** Private monorepo (core) + Public SDK (MIT License)
+- **Patent Strategy:** Filing Q1 2025 for CVaR-RL architecture and Unified Simulation System
+- **Trade Secret Protection:** Comprehensive policy with technical, administrative, and physical controls
+- **Open-Core Model:** Based on industry best practices (Databricks $43B, GitLab $11B, Elastic $10B+)
+- **Investor/Committee Language:** Ready-to-use text for visa applications and investor presentations
+- Added docs/business/ section to documentation index
 
 ### Изменения в 11.11:
 - **Обновлён счётчик тестов** -- точный подсчёт всех тестов в проекте
