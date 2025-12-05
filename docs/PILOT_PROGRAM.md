@@ -418,7 +418,16 @@ Best,
 
 ---
 
-*Document Version: 1.0*
+## Related Documents
+
+- [BEACHHEAD_MARKET_STRATEGY.md](BEACHHEAD_MARKET_STRATEGY.md) — Why we focus on EU crypto prop firms
+- [MVP_FOCUS.md](MVP_FOCUS.md) — MVP feature scope definition
+- [LEAN_VALIDATION_STRATEGY.md](LEAN_VALIDATION_STRATEGY.md) — Customer validation framework
+- [PRODUCT_OVERVIEW.md](PRODUCT_OVERVIEW.md) — One-pager for pitches
+
+---
+
+*Document Version: 1.1*
 *Last Updated: December 2024*
 *Owner: Founder / Head of Sales*
 

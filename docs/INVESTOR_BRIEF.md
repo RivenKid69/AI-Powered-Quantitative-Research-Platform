@@ -166,6 +166,50 @@ Our execution models implement 7+ peer-reviewed papers:
 
 ---
 
+## Beachhead Market Strategy
+
+### Why Focus Matters
+
+We deliberately constrain our initial market scope following Geoffrey Moore's "Crossing the Chasm" methodology. While our platform supports 5 asset classes, we focus validation efforts on a single, well-defined beachhead segment.
+
+### Defined Beachhead: European Crypto Prop Trading Firms
+
+| Attribute | Specification |
+|-----------|---------------|
+| **Geography** | Netherlands (Amsterdam), expanding to EU |
+| **Firm Size** | 5-20 traders |
+| **Asset Class** | Crypto (spot + perpetual futures) |
+| **Need** | Fast infrastructure for new strategies |
+| **Budget** | €2,000-5,000/month |
+
+### Why This Segment First
+
+| Factor | Advantage |
+|--------|-----------|
+| **Market Density** | Amsterdam: 22+ crypto prop firms in concentrated hub |
+| **Regulatory Clarity** | MiCA framework provides clear rules |
+| **Time-to-Value** | 24/7 crypto markets show results faster |
+| **Technical Fit** | Our L2+ parametric TCA optimized for crypto |
+| **Competition** | QuantConnect/Alpaca target retail, not institutional |
+
+### Expansion Roadmap (Bowling Alley Strategy)
+
+```
+Beachhead (Y1)              Adjacent Segments (Y2-3)
+├─ NL Crypto Prop ──────►   ├─ UK/DE Crypto Prop
+│   (5-20 traders)          ├─ EU Equity Prop
+│                           └─ Crypto Market Makers
+│
+└─ Success Metrics:         └─ Expansion Triggers:
+   • 5 paying customers        • 10+ customers
+   • NPS > 50                  • 3+ referrals
+   • €100K ARR                 • Repeatable sales
+```
+
+*For complete beachhead analysis, see [BEACHHEAD_MARKET_STRATEGY.md](BEACHHEAD_MARKET_STRATEGY.md)*
+
+---
+
 ## Go-to-Market Strategy
 
 ### Phase 1: European Pilot Program (Q1 2025)

@@ -274,7 +274,16 @@ We will consider pivoting if:
 
 ---
 
-*Document Version: 1.0*
+## Related Documents
+
+- [BEACHHEAD_MARKET_STRATEGY.md](BEACHHEAD_MARKET_STRATEGY.md) — Beachhead market selection analysis (Geoffrey Moore methodology)
+- [LEAN_VALIDATION_STRATEGY.md](LEAN_VALIDATION_STRATEGY.md) — Customer-centric validation approach
+- [PILOT_PROGRAM.md](PILOT_PROGRAM.md) — Structured pilot program design
+- [PRODUCT_OVERVIEW.md](PRODUCT_OVERVIEW.md) — One-pager for pitches
+
+---
+
+*Document Version: 1.1*
 *Last Updated: December 2024*
 *Owner: Product Team*
 

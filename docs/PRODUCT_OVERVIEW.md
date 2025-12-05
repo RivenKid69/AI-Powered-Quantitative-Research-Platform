@@ -204,6 +204,8 @@ Our technical depth is an **asset for fast iteration**, not a goal in itself.
 
 *For investor materials, see [INVESTOR_BRIEF.md](INVESTOR_BRIEF.md)*
 
+*For beachhead market strategy, see [BEACHHEAD_MARKET_STRATEGY.md](BEACHHEAD_MARKET_STRATEGY.md)*
+
 ---
 
 *Last Updated: December 2024*
