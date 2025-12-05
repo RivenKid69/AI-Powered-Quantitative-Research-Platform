@@ -7436,6 +7436,8 @@ pytest tests/test_pbt*.py -v           # PBT
 - [docs/business/TRADE_SECRET_POLICY.md](docs/business/TRADE_SECRET_POLICY.md) -- Политика защиты коммерческой тайны
 - [docs/business/OPEN_CORE_BUSINESS_MODEL.md](docs/business/OPEN_CORE_BUSINESS_MODEL.md) -- Модель Open-Core бизнеса
 - [docs/business/PUBLIC_SDK_README_TEMPLATE.md](docs/business/PUBLIC_SDK_README_TEMPLATE.md) -- Шаблон README для публичного SDK
+- [docs/business/PRICING_DIFFERENTIATION_STRATEGY.md](docs/business/PRICING_DIFFERENTIATION_STRATEGY.md) -- Стратегия ценовой дифференциации по сегментам клиентов
+- [docs/business/SALES_CHANNEL_EVOLUTION_STRATEGY.md](docs/business/SALES_CHANNEL_EVOLUTION_STRATEGY.md) -- Стратегия эволюции каналов продаж (от founder-led к multi-channel)
 
 ### Отчёты об исправлениях
 
@@ -7505,8 +7507,24 @@ BINANCE_PUBLIC_FEES_DISABLE_AUTO=1      # Отключить автообнов�
 ---
 
 **Последнее обновление**: 2025-12-05
-**Версия документации**: 11.12 (IP Protection Strategy)
+**Версия документации**: 11.13 (GTM Strategy & Pricing)
 **Статус**: ✅ Production Ready (597 test files, 11,063 tests | Futures Integration complete, Options Phase 1+2+2B complete)
+
+### Изменения в 11.13:
+- **GTM Strategy Documentation** -- Полная документация по go-to-market стратегии
+  - [PRICING_DIFFERENTIATION_STRATEGY.md](docs/business/PRICING_DIFFERENTIATION_STRATEGY.md) -- Стратегия ценовой дифференциации по сегментам
+    - 3 customer segments: Indie/Small Prop ($0-10M AUM), Mid-Size Fund ($10M-500M), Enterprise ($500M+)
+    - 4-tier pricing: Starter ($0-99), Pro ($500-2K), Team ($3K-10K), Enterprise ($100K+/yr)
+    - Multi-metric pricing: Seat License + Compute + Data + AUM-based
+    - Competitive benchmarks: Bloomberg ($24-30K), Refinitiv ($22K), QuantConnect ($20-40/mo)
+  - [SALES_CHANNEL_EVOLUTION_STRATEGY.md](docs/business/SALES_CHANNEL_EVOLUTION_STRATEGY.md) -- Эволюция каналов продаж
+    - Phased evolution: Y0 (100% founder) → Y1 (70/30) → Y2 (50/30/20)
+    - PLG funnel: 10K downloads → 200 free users → 60 paid customers
+    - Partnership pyramid: Affiliates (10%) → Referrals (15%) → Resellers (20%)
+    - Prime broker strategy: BNP, Goldman Sachs, Morgan Stanley partnerships
+    - Hiring sequence: Head of Sales → AE → SDR → CSM
+- **Research-backed:** 24+ industry references (McKinsey, Bessemer, Simon-Kucher, SBI Growth)
+- Added docs/business/ entries for new strategy documents
 
 ### Изменения в 11.12:
 - **IP Protection Strategy Documentation** -- Полная документация по защите интеллектуальной собственности
