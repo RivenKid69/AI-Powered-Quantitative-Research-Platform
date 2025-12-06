@@ -2,9 +2,10 @@
 
 ## QuantBot AI - From Founder-Led to Multi-Channel GTM
 
-**Document Version:** 1.0
+**Document Version:** 2.0
 **Date:** December 2025
 **Classification:** Internal Strategy Document
+**Change Log:** v2.0 - Added comprehensive Section 6 on Network & Trust-Based Client Acquisition (conferences, associations, academic partnerships, warm intro mechanics, reference customer program)
 
 ---
 
@@ -391,9 +392,308 @@ Per [BNP Paribas Prime Brokerage](https://thehedgefundjournal.com/bnpps-prime-br
 
 ---
 
-## 6. Multi-Touch Sales Motion
+## 6. Network & Trust-Based Client Acquisition
 
-### 6.1 Outbound Sequencing
+### 6.1 Why Network Access Matters in Financial Services
+
+Per [McKinsey Financial Services Practice](https://www.mckinsey.com/industries/financial-services/our-insights):
+
+> "In institutional finance, 70-80% of vendor decisions are influenced by peer recommendations and trusted advisor networks. Cold outreach converts at 1-3%, while warm introductions convert at 20-35%."
+
+**The Quantitative Finance Trust Equation:**
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                   TRUST = f(Network, Proof, Time)                    │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   Network Credibility ────────────┐                                  │
+│   • Who introduced you?           │                                  │
+│   • Shared connections?           │                                  │
+│   • Industry reputation?          ├──▶  TRUST SCORE  ──▶  DEAL      │
+│                                   │                                  │
+│   Proof Points ───────────────────┤                                  │
+│   • Live track record?            │                                  │
+│   • Reference customers?          │                                  │
+│   • Published research?           │                                  │
+│                                   │                                  │
+│   Time Investment ────────────────┘                                  │
+│   • Conference interactions?                                         │
+│   • Content consumption?                                             │
+│   • Technical deep-dives?                                            │
+│                                                                      │
+│   Cold outreach:   Trust Score = 1-2    →  1-3% conversion          │
+│   Warm intro:      Trust Score = 6-8    →  20-35% conversion        │
+│   Referral:        Trust Score = 9-10   →  40-60% conversion        │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 6.2 Conference Strategy: Building the Network
+
+**Tier 1: Must-Attend Events (Founder Present)**
+
+| Event | Location | Timing | Target Audience | Investment |
+|-------|----------|--------|-----------------|------------|
+| **QuantCon / QuantFest** | NYC/London | Sep-Oct | Quant PMs, Researchers | $5-10K |
+| **TradeTech Europe** | Paris/London | April | Buy-side technologists | $8-15K |
+| **NeurIPS** (Finance workshops) | Rotating | December | ML researchers, PhDs | $3-5K |
+| **ICAIF** (ACM AI in Finance) | NYC | November | Academic + Industry | $2-4K |
+| **Battle of the Quants** | NYC/London | Various | Quant fund principals | $3-5K |
+
+**Tier 2: Strategic Presence (Team Representation)**
+
+| Event | Focus | Presence Strategy |
+|-------|-------|-------------------|
+| **CFA Society events** | Local chapters | Speaking slots, sponsorship |
+| **AIMA conferences** | Alternative investment | Panel participation |
+| **FRM/CAIA gatherings** | Risk professionals | Technical presentations |
+| **University symposiums** | Academic partnerships | Research collaboration |
+
+**Conference Engagement Playbook:**
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                   CONFERENCE ENGAGEMENT FUNNEL                       │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   PRE-EVENT (2-4 weeks before)                                      │
+│   • Research attendee list (LinkedIn, event app)                    │
+│   • Identify 15-20 target contacts per event                        │
+│   • Send personalized outreach: "Looking forward to meeting at X"   │
+│   • Schedule 3-5 coffee meetings in advance                         │
+│                                                                      │
+│   DURING EVENT                                                       │
+│   • Speaking slot or panel if possible (authority building)         │
+│   • Demo station if available ($2-5K sponsorship)                   │
+│   • Collect business cards with context notes                       │
+│   • Same-day LinkedIn connections                                    │
+│                                                                      │
+│   POST-EVENT (within 72 hours)                                       │
+│   • Personalized follow-up emails referencing conversation          │
+│   • Send relevant content (research paper, case study)              │
+│   • Offer technical deep-dive call                                  │
+│   • Add to nurture sequence                                         │
+│                                                                      │
+│   CONVERSION TARGET: 10-15% of contacts → qualified pipeline        │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 6.3 Industry Association Engagement
+
+**Primary Associations for Quantitative Finance:**
+
+| Association | Focus | Engagement Strategy | Investment |
+|-------------|-------|---------------------|------------|
+| **CFA Institute** | Investment professionals (190K+ members) | Local chapter sponsorship, speaking | $5-15K/yr |
+| **AIMA** | Alternative investment (2,100+ members) | Associate membership, events | $10-25K/yr |
+| **PRMIA** | Risk management professionals | Technical committee participation | $5-10K/yr |
+| **QWAFAFEW** | Quant women in finance | Mentorship program, sponsorship | $2-5K/yr |
+| **CQF Institute** | Certificate in Quantitative Finance | Alumni network access | $5-10K/yr |
+
+**Engagement Levels:**
+
+| Level | Activities | Time Commitment | Expected Leads |
+|-------|------------|-----------------|----------------|
+| **Passive Member** | Newsletter, directory listing | 2 hrs/month | 1-2/quarter |
+| **Active Participant** | Attend events, comment on discussions | 8 hrs/month | 3-5/quarter |
+| **Contributor** | Speaking, writing, committee work | 20 hrs/month | 8-12/quarter |
+| **Leader/Sponsor** | Board roles, major sponsorship | 40 hrs/month | 15-25/quarter |
+
+**CFA Society Engagement Model (Local Chapters):**
+
+Per [CFA Institute](https://www.cfainstitute.org/en/membership/society):
+
+> "CFA societies host 4,000+ local events per year. Speaking at chapter events provides access to highly qualified investment professionals in a trusted setting."
+
+**Target CFA Societies (European Focus):**
+
+| Society | Members | Priority | Strategy |
+|---------|---------|----------|----------|
+| CFA UK | 12,000+ | High | Quarterly speaking slots |
+| CFA France | 3,500+ | High | French-language content |
+| CFA Germany | 3,000+ | Medium | Partnership with local universities |
+| CFA Netherlands | 1,500+ | Medium | Benelux regional approach |
+| CFA Switzerland | 2,500+ | High | Private banking focus |
+
+### 6.4 Academic Partnership Network
+
+**Target Universities with Quant Finance Programs:**
+
+| University | Program | Partnership Model | Expected Referrals |
+|------------|---------|-------------------|-------------------|
+| **Imperial College London** | MSc Computational Finance | Research collaboration | 3-5/year |
+| **Oxford Mathematical Finance** | MSc Financial Mathematics | Guest lectures | 2-3/year |
+| **ETH Zürich** | MSc Quantitative Finance | PhD sponsorship | 2-4/year |
+| **HEC Paris** | MSc Quantitative Finance | Case study development | 2-3/year |
+| **EPFL** | Master in Financial Engineering | Joint research | 1-2/year |
+| **Bocconi** | MSc Finance + Quant Methods | Italian market entry | 2-3/year |
+
+**Academic Partnership Value Chain:**
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                ACADEMIC PARTNERSHIP FLYWHEEL                         │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   ┌─────────────────┐         ┌─────────────────┐                   │
+│   │  PhD/Research   │────────▶│  Publications   │                   │
+│   │  Collaboration  │         │  + Credibility  │                   │
+│   └────────┬────────┘         └────────┬────────┘                   │
+│            │                           │                             │
+│            │                           ▼                             │
+│            │                  ┌─────────────────┐                   │
+│            │                  │  Speaking Slots │                   │
+│            │                  │  at Conferences │                   │
+│            │                  └────────┬────────┘                   │
+│            ▼                           │                             │
+│   ┌─────────────────┐                  │                             │
+│   │   Alumni Hire   │                  │                             │
+│   │   Pipeline      │                  ▼                             │
+│   └────────┬────────┘         ┌─────────────────┐                   │
+│            │                  │  Industry Trust │                   │
+│            │                  │  + Referrals    │                   │
+│            ▼                  └────────┬────────┘                   │
+│   ┌─────────────────┐                  │                             │
+│   │  Alumni Network │◀─────────────────┘                             │
+│   │  Access (CRO)   │                                                │
+│   └─────────────────┘                                                │
+│                                                                      │
+│   Investment: €50-100K/year for 2-3 active partnerships             │
+│   Expected return: 10-15 warm intros/year, 3-5 hires               │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### 6.5 Warm Introduction Mechanics
+
+**Introduction Request Template:**
+
+> "Hi [Connector],
+>
+> I noticed you're connected to [Target Name] at [Target Company]. We're working with similar firms on [specific use case] and achieving [specific result].
+>
+> Would you be open to making an introduction? I'd be happy to share a brief intro blurb you can forward:
+>
+> ---
+> '[Target Name], I wanted to introduce you to [Your Name] from QuantBot AI. They're helping systematic funds automate execution optimization with ML — [Reference Customer] has seen [X% improvement]. Given your focus on [their specific area], I thought it might be worth a conversation.'
+> ---
+>
+> Happy to reciprocate if there's anyone in my network who could be helpful to you."
+
+**Introduction Source Prioritization:**
+
+| Source | Trust Multiplier | Conversion Rate | Priority |
+|--------|------------------|-----------------|----------|
+| **Existing customers** | 10x | 45-60% | Critical |
+| **Board members/advisors** | 8x | 35-50% | Very High |
+| **Prime broker coverage** | 7x | 30-45% | High |
+| **Industry association contacts** | 5x | 20-35% | High |
+| **Conference connections** | 4x | 15-25% | Medium |
+| **LinkedIn mutual connections** | 2x | 8-15% | Medium |
+| **Cold outreach** | 1x | 1-3% | Low |
+
+### 6.6 Reference Customer Program
+
+**Customer Reference Ladder:**
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                   REFERENCE CUSTOMER LADDER                          │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│   Level 5: CHAMPION ────────────────────────────────────────────    │
+│   • Public case study with name + metrics                           │
+│   • Speaking at our events                                          │
+│   • Reference calls for enterprise deals                            │
+│   • Reward: 20% discount, advisory equity                           │
+│                                                                      │
+│   Level 4: ADVOCATE ────────────────────────────────────────────    │
+│   • Anonymous case study with metrics                               │
+│   • LinkedIn testimonial                                            │
+│   • 2-3 reference calls/quarter                                     │
+│   • Reward: 15% discount, early access                              │
+│                                                                      │
+│   Level 3: SUPPORTER ───────────────────────────────────────────    │
+│   • Logo usage allowed                                              │
+│   • 1-2 reference calls/quarter                                     │
+│   • Internal testimonial for sales use                              │
+│   • Reward: 10% discount                                            │
+│                                                                      │
+│   Level 2: SATISFIED ───────────────────────────────────────────    │
+│   • Willing to confirm relationship if asked                        │
+│   • NPS 8+                                                          │
+│   • Reward: Standard pricing                                        │
+│                                                                      │
+│   Level 1: USER ────────────────────────────────────────────────    │
+│   • Active usage, no advocacy                                       │
+│   • Focus: Move to Level 2+                                         │
+│                                                                      │
+│   TARGET: 30% of customers at Level 3+, 10% at Level 5              │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Reference Call Protocol:**
+
+| Stage | Timing | Preparation | Success Metric |
+|-------|--------|-------------|----------------|
+| Request | When prospect in evaluation | Match reference to prospect profile | Reference accepts |
+| Prep | 2 days before call | Briefing call with reference | Aligned messaging |
+| Execution | 30-min call | Moderator introduction, then step back | Positive feedback |
+| Follow-up | Same day | Thank reference, share outcome | Reference satisfied |
+
+### 6.7 Trust-Building Content Strategy
+
+**Content Types by Trust Stage:**
+
+| Trust Stage | Content Type | Examples | Gating |
+|-------------|--------------|----------|--------|
+| **Awareness** (Trust 1-3) | Educational | Blog posts, social media, podcasts | Ungated |
+| **Consideration** (Trust 4-6) | Technical depth | Whitepapers, webinars, demos | Light gated |
+| **Evaluation** (Trust 7-8) | Proof | Case studies, benchmarks, trials | Sales-gated |
+| **Decision** (Trust 9-10) | Validation | References, POC results, contracts | Direct |
+
+**Thought Leadership Strategy:**
+
+| Platform | Frequency | Content Focus | Trust Impact |
+|----------|-----------|---------------|--------------|
+| **LinkedIn (Personal)** | 3x/week | Industry insights, company updates | High |
+| **Medium/Company Blog** | 2x/week | Technical tutorials, research | Medium |
+| **Academic Papers** | 2-4/year | Novel research, benchmarks | Very High |
+| **Conference Talks** | 4-6/year | Technical deep-dives | Very High |
+| **Podcast Appearances** | 2x/month | Founder story, market views | Medium |
+| **Webinars** | 2x/month | Product education, use cases | Medium |
+
+**Academic Publishing Strategy:**
+
+Per [Journal of Financial Economics guidelines](https://www.sciencedirect.com/journal/journal-of-financial-economics):
+
+> "Peer-reviewed publication in top finance journals provides unparalleled credibility with institutional investors and academic-trained quant professionals."
+
+| Target Venue | Impact Factor | Content Strategy | Timeline |
+|--------------|---------------|------------------|----------|
+| **Journal of Financial Economics** | 10.98 | CVaR-RL theoretical foundations | 18-24 months |
+| **Review of Financial Studies** | 8.41 | Empirical validation | 12-18 months |
+| **Journal of Portfolio Management** | 2.35 | Practitioner-focused results | 6-12 months |
+| **Risk.net** | Industry | Technical articles | 2-4 months |
+| **arXiv (q-fin)** | Preprint | Early research dissemination | 1-2 months |
+
+### 6.8 Network Metrics & KPIs
+
+| Metric | Target (Y1) | Target (Y2) | Measurement |
+|--------|-------------|-------------|-------------|
+| **Network Size** | 500 quality contacts | 2,000 | CRM + LinkedIn |
+| **Conference Attendances** | 6 events | 12 events | Tracked |
+| **Speaking Slots** | 4 | 10 | Confirmed |
+| **Reference Customers** | 3 (Level 3+) | 10 | Ladder tracking |
+| **Warm Intro Conversion** | 25% | 30% | CRM attribution |
+| **Academic Partnerships** | 2 | 5 | Active collaborations |
+| **Association Memberships** | 3 | 6 | Active engagement |
+| **Published Research** | 2 papers | 4 papers | Citations tracked |
+
+---
+
+## 7. Multi-Touch Sales Motion
+
+### 7.1 Outbound Sequencing
 
 Per [Cognism](https://www.cognism.com/blog/the-pod-b2b-sales-team-of-the-future):
 
@@ -421,7 +721,7 @@ Per [Cognism](https://www.cognism.com/blog/the-pod-b2b-sales-team-of-the-future)
 | Mid-Market | LinkedIn + Email | 21 days | Medium |
 | Enterprise | Multi-threaded | 45 days | High (custom) |
 
-### 6.2 Enterprise Account-Based Motion
+### 7.2 Enterprise Account-Based Motion
 
 **Named Account Strategy:**
 
@@ -446,9 +746,9 @@ Per [Cognism](https://www.cognism.com/blog/the-pod-b2b-sales-team-of-the-future)
 
 ---
 
-## 7. Channel Metrics & Governance
+## 8. Channel Metrics & Governance
 
-### 7.1 Key Performance Indicators
+### 8.1 Key Performance Indicators
 
 | Channel | Primary KPI | Secondary KPI | Target |
 |---------|-------------|---------------|--------|
@@ -458,7 +758,7 @@ Per [Cognism](https://www.cognism.com/blog/the-pod-b2b-sales-team-of-the-future)
 | **Referral** | Qualified Referrals | Referral Close Rate | 50%+ close rate |
 | **Reseller** | Partner Revenue | Partner Activation | 3+ active partners |
 
-### 7.2 Attribution Model
+### 8.2 Attribution Model
 
 **Multi-Touch Attribution:**
 
@@ -477,7 +777,7 @@ Per [Cognism](https://www.cognism.com/blog/the-pod-b2b-sales-team-of-the-future)
 | PLG → Sales assist | 50/50 split |
 | Multiple partners | First to qualify wins |
 
-### 7.3 Partner Governance
+### 8.3 Partner Governance
 
 **Quarterly Business Reviews:**
 - Pipeline review
@@ -497,7 +797,7 @@ Per [Cognism](https://www.cognism.com/blog/the-pod-b2b-sales-team-of-the-future)
 
 ---
 
-## 8. Implementation Roadmap
+## 9. Implementation Roadmap
 
 ### Phase 1: Foundation (Months 1-3)
 
@@ -559,9 +859,9 @@ Per [Cognism](https://www.cognism.com/blog/the-pod-b2b-sales-team-of-the-future)
 
 ---
 
-## 9. Investment & Resource Plan
+## 10. Investment & Resource Plan
 
-### 9.1 Headcount Plan
+### 10.1 Headcount Plan
 
 | Role | M1-3 | M4-6 | M7-12 | Y2 |
 |------|------|------|-------|-----|
@@ -574,7 +874,7 @@ Per [Cognism](https://www.cognism.com/blog/the-pod-b2b-sales-team-of-the-future)
 | Marketing | - | 1 | 1 | 2 |
 | **Total GTM** | 1 | 4 | 7.5 | 14 |
 
-### 9.2 Budget Allocation
+### 10.2 Budget Allocation
 
 | Category | Y1 Budget | Y2 Budget | Notes |
 |----------|-----------|-----------|-------|
@@ -585,7 +885,7 @@ Per [Cognism](https://www.cognism.com/blog/the-pod-b2b-sales-team-of-the-future)
 | PLG Infrastructure | $75K | $100K | Billing, docs, community |
 | **Total GTM** | $875K | $2.1M | |
 
-### 9.3 Revenue Targets by Channel
+### 10.3 Revenue Targets by Channel
 
 | Channel | Y1 Revenue | Y2 Revenue | Y3 Revenue |
 |---------|------------|------------|------------|
@@ -598,9 +898,9 @@ Per [Cognism](https://www.cognism.com/blog/the-pod-b2b-sales-team-of-the-future)
 
 ---
 
-## 10. Risk Mitigation
+## 11. Risk Mitigation
 
-### 10.1 Common Pitfalls to Avoid
+### 11.1 Common Pitfalls to Avoid
 
 Per [Arise GTM](https://arisegtm.com/blog/go-to-market-challenges-for-scale-up-and-enterprise-b2b-saas-companies):
 
@@ -615,7 +915,7 @@ Per [Arise GTM](https://arisegtm.com/blog/go-to-market-challenges-for-scale-up-a
 | **Channel conflict** | Clear rules of engagement from day 1 |
 | **CAC payback > 12mo** | Per [Martal](https://martal.ca/smb-vs-enterprise-lb/): "Keep CAC payback under 12 months" |
 
-### 10.2 Decision Gates
+### 11.2 Decision Gates
 
 | Gate | Criteria | Action if Not Met |
 |------|----------|-------------------|
@@ -627,9 +927,9 @@ Per [Arise GTM](https://arisegtm.com/blog/go-to-market-challenges-for-scale-up-a
 
 ---
 
-## 11. Success Metrics Summary
+## 12. Success Metrics Summary
 
-### 11.1 Phase 1 Success (Months 1-6)
+### 12.1 Phase 1 Success (Months 1-6)
 
 | Metric | Target |
 |--------|--------|
@@ -639,7 +939,7 @@ Per [Arise GTM](https://arisegtm.com/blog/go-to-market-challenges-for-scale-up-a
 | AE ramped to 50% quota | Month 6 |
 | Pipeline coverage | 3x |
 
-### 11.2 Phase 2 Success (Months 7-12)
+### 12.2 Phase 2 Success (Months 7-12)
 
 | Metric | Target |
 |--------|--------|
@@ -649,7 +949,7 @@ Per [Arise GTM](https://arisegtm.com/blog/go-to-market-challenges-for-scale-up-a
 | Win rate | 25%+ |
 | Sales cycle | <90 days (mid-market) |
 
-### 11.3 Year 2 Success
+### 12.3 Year 2 Success
 
 | Metric | Target |
 |--------|--------|
@@ -661,7 +961,7 @@ Per [Arise GTM](https://arisegtm.com/blog/go-to-market-challenges-for-scale-up-a
 
 ---
 
-## 12. References
+## 13. References
 
 ### Frameworks & Research
 
@@ -687,6 +987,20 @@ Per [Arise GTM](https://arisegtm.com/blog/go-to-market-challenges-for-scale-up-a
 
 12. [BNP Paribas Prime Brokerage](https://thehedgefundjournal.com/bnpps-prime-brokerage-global-markets-and-fund-services/)
 13. [QuantBlueprint: Top Quant Firms](https://www.quantblueprint.com/post/top-quant-firms-list-comp-up-to-500k)
+
+### Network & Trust-Based Acquisition (Section 6)
+
+14. [McKinsey Financial Services Practice](https://www.mckinsey.com/industries/financial-services/our-insights)
+15. [CFA Institute: Society Network](https://www.cfainstitute.org/en/membership/society)
+16. [AIMA: Alternative Investment Management Association](https://www.aima.org/)
+17. [Journal of Financial Economics](https://www.sciencedirect.com/journal/journal-of-financial-economics)
+18. [QuantCon: Quantitative Finance Conference](https://quantcon.com/)
+19. [ICAIF: ACM Conference on AI in Finance](https://ai-finance.org/)
+20. [Imperial College MSc Computational Finance](https://www.imperial.ac.uk/study/pg/mathematics/computational-finance/)
+21. [Oxford Mathematical Finance](https://www.maths.ox.ac.uk/study-here/postgraduate-study/msc-mathematical-and-computational-finance)
+22. [ETH Zürich MSc Quantitative Finance](https://math.ethz.ch/sfs/education/msc-in-quantitative-finance.html)
+23. [PRMIA: Professional Risk Managers' International Association](https://www.prmia.org/)
+24. [CQF Institute: Certificate in Quantitative Finance](https://www.cqf.com/)
 
 ---
 
